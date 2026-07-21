@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling==1.31.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "quant-research-lab"
+version = "0.1.0"
+description = "Reproducible quantitative strategy research and factor governance"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[project.optional-dependencies]
+research = [
+  "ccxt==4.5.67",
+  "duckdb==1.5.4",
+  "numpy>=2.0,<3.0",
+  "pandas>=2.2,<4.0",
+  "pyarrow==25.0.0",
+  "pyyaml==6.0.3",
+  "quantstats==0.0.81",
+]
+test = [
+  "pytest==9.1.1",
+  "pytest-cov==7.1.0",
+]
+freqtrade = [
+  "freqtrade==2026.6",
+]
+
+[project.scripts]
+quant-lab = "quant_lab.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/quant_lab"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]

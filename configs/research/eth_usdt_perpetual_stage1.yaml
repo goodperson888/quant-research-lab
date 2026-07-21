@@ -1,0 +1,41 @@
+research_id: eth_usdt_perpetual_stage1
+status: configured
+mode: historical_research
+live_trading_enabled: false
+primary_market_profile: configs/market_profiles/crypto_perpetual.okx.eth.yaml
+comparison_market_profile: configs/market_profiles/crypto_perpetual.binance.eth.yaml
+effective_data_source:
+  primary_requested: okx
+  fallback_selected: binance_official_archive
+  reason: OKX and Binance realtime public API endpoints unavailable from current network
+asset: ETH
+quote_currency: USDT
+instrument: usdt_margined_perpetual
+timeframes:
+  download: [5m, 15m, 1h, 4h]
+  first_candidate_execution: 15m
+  regime_filters: [1h, 4h]
+  execution_refinement_or_sensitivity: 5m
+history:
+  start_utc_inclusive: "2026-04-21T00:00:00Z"
+  end_utc_exclusive: "2026-07-20T00:00:00Z"
+  complete_utc_days: 90
+  limitation: Initial screening only; insufficient for full bull/bear cycle evidence.
+cost_model:
+  maker_fee_per_side: 0.0002
+  taker_fee_per_side: 0.0005
+  baseline_fee_per_side: 0.0005
+  baseline_slippage_bps_per_side: 2.0
+  stress_slippage_bps_per_side: 5.0
+  doubled_fee_and_slippage_stress: true
+  funding_rate: required
+  zero_funding_fallback_allowed: false
+risk:
+  leverage: 1.0
+  liquidation_model_complete: false
+  leverage_tiers_complete: false
+  minimum_notional_and_precision_complete: false
+research_gates:
+  optimization_allowed: false
+  production_promotion_allowed: false
+  dry_run_only_after_candidate_validation: true

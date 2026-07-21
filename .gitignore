@@ -1,0 +1,48 @@
+.DS_Store
+.env
+.venv/
+.tools/
+.cache/
+.bootstrap-venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Large or generated market data
+data/raw/**
+data/interim/**
+data/processed/**
+data/external/**
+!data/**/.gitkeep
+!data/README.md
+
+# Local analytical catalogs are reproducible query/state layers
+data/catalog/*.duckdb
+data/catalog/*.duckdb.*
+data/catalog/*.wal
+data/catalog/*.tmp
+data/catalog/*.db
+data/catalog/*.sqlite*
+!data/catalog/.gitkeep
+!data/catalog/README.md
+
+# Generated runs and reports
+experiments/runs/**
+!experiments/runs/.gitkeep
+reports/daily/**
+reports/weekly/**
+reports/backtests/**
+reports/risk/**
+!reports/**/.gitkeep
+
+# Runtime secrets/state
+runtime/freqtrade/user_data/config.json
+runtime/freqtrade/user_data/logs/**
+runtime/freqtrade/user_data/tradev3.sqlite*
+runtime/freqtrade/user_data/backtest_results/
+runtime/freqtrade/user_data/data/
+
+# Registry is local state; export snapshots before committing
+factor_library/registry.sqlite3

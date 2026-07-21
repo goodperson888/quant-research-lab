@@ -1,0 +1,13 @@
+{
+  "projects": [
+    {
+      "name": "freqtrade",
+      "version": "TO_BE_PINNED",
+      "source": "official release or source archive",
+      "license": "GPL-3.0",
+      "purpose": "backtesting, hyperopt, dry-run and execution",
+      "path": "vendor/freqtrade",
+      "checksum": null
+    }
+  ]
+}

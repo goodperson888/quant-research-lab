@@ -1,0 +1,53 @@
+{
+  "factor_id": "trend.ema_slope.20",
+  "name": "EMA 20 slope",
+  "family": "moving_average_trend",
+  "category": "trend",
+  "scope": "universal",
+  "version": 1,
+  "status": "candidate",
+  "formula_path": "factor_library/candidates/ema_slope_20.py",
+  "description": "Normalized slope of the 20-period exponential moving average.",
+  "data_requirements": ["open", "high", "low", "close", "volume"],
+  "required_data": ["ohlcv"],
+  "lookback": 20,
+  "available_at": "bar_close",
+  "direction": "higher_is_bullish",
+  "normalization": "rolling_zscore",
+  "markets": [],
+  "timeframes": [],
+  "applicability": {
+    "asset_classes": ["crypto"],
+    "instrument_types": ["spot", "perpetual"],
+    "venues": [],
+    "timeframes": ["15m", "1h", "4h"]
+  },
+  "not_applicable": [
+    {
+      "market_profile": "example_profile_id",
+      "reason": "Insufficient point-in-time volume semantics"
+    }
+  ],
+  "validation": {
+    "in_sample": null,
+    "out_of_sample": null,
+    "walk_forward": null,
+    "cost_stress": null,
+    "correlation": null
+  },
+  "validation_by_market": {
+    "crypto_spot.example": {
+      "status": "candidate",
+      "asset_class": "crypto",
+      "instrument_type": "spot",
+      "venue": "TO_BE_DEFINED",
+      "timeframe": "1h",
+      "cost_model_version": null,
+      "experiment_run_ids": [],
+      "out_of_sample": null,
+      "walk_forward": null,
+      "cost_stress": null,
+      "notes": "Validation state is independent for every market profile."
+    }
+  }
+}

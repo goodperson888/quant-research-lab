@@ -1,0 +1,32 @@
+profile_id: fx.example
+enabled: false
+asset_class: foreign_exchange
+instrument_type: spot_or_forward_or_cfd_TO_BE_DEFINED
+venue: broker_or_data_vendor_TO_BE_DEFINED
+timezone: UTC
+session: 24x5_with_weekend_close
+symbols: []
+timeframes: []
+required_datasets:
+  - bid_ask_ohlc_or_quotes
+  - broker_spreads
+  - swap_or_overnight_rates
+  - forward_points_optional
+  - tick_volume_optional_proxy_only
+cost_model:
+  commission: null
+  spread: null
+  slippage: null
+  overnight_swap: null
+adjustments:
+  tick_volume_semantics: broker_activity_proxy_not_global_volume
+  daylight_saving_and_session_rules: required
+roll_rules:
+  forward_or_cfd_roll: TO_BE_DEFINED
+corporate_action_rules: not_applicable
+market_specific_risks:
+  - decentralized_quotes
+  - broker_specific_pricing
+  - weekend_gaps
+  - central_bank_and_macro_events
+  - instrument_counterparty_terms

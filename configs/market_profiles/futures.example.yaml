@@ -1,0 +1,36 @@
+profile_id: futures.example
+enabled: false
+asset_class: futures
+instrument_type: exchange_traded_futures
+venue: TO_BE_DEFINED
+timezone: TO_BE_DEFINED
+session: exchange_calendar_with_night_session_if_applicable
+symbols: []
+timeframes: []
+required_datasets:
+  - contract_ohlcv
+  - contract_metadata
+  - expiry_and_delivery_calendar
+  - open_interest
+  - settlement_prices
+  - margin_and_price_limits
+cost_model:
+  commission_per_contract: null
+  exchange_fees: null
+  slippage_ticks: null
+  margin_model: TO_BE_DEFINED
+adjustments:
+  continuous_series_method: research_only
+  price_adjustment: TO_BE_DEFINED
+roll_rules:
+  trigger: TO_BE_DEFINED
+  execution_assumption: TO_BE_DEFINED
+  roll_cost: null
+corporate_action_rules: not_applicable
+market_specific_risks:
+  - continuous_series_not_directly_tradable
+  - expiry_and_delivery
+  - contract_multiplier
+  - margin_and_price_limits
+  - night_session_and_calendar
+  - term_structure_basis_and_roll_yield

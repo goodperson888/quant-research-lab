@@ -1,0 +1,34 @@
+profile_id: stocks.example
+enabled: false
+asset_class: equities
+instrument_type: common_stock
+venue: TO_BE_DEFINED
+timezone: TO_BE_DEFINED
+session: exchange_calendar
+symbols: []
+timeframes: []
+required_datasets:
+  - ohlcv
+  - corporate_actions
+  - delisted_symbols
+  - point_in_time_fundamentals_optional
+  - borrow_and_shortability_optional
+cost_model:
+  commission: null
+  spread_bps: null
+  slippage_bps: null
+  borrow_cost: null
+adjustments:
+  price_adjustment: TO_BE_DEFINED
+  point_in_time_fundamentals: required_if_used
+roll_rules: not_applicable
+corporate_action_rules:
+  dividends: required
+  splits: required
+  mergers_and_spinoffs: required_if_relevant
+market_specific_risks:
+  - survivorship_bias
+  - delisting_and_suspension
+  - price_limits
+  - borrow_availability
+  - announcement_availability_time

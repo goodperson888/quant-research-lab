@@ -1,0 +1,36 @@
+profile_id: options.example
+enabled: false
+asset_class: options
+instrument_type: exchange_traded_options_TO_BE_DEFINED
+venue: TO_BE_DEFINED
+timezone: TO_BE_DEFINED
+session: exchange_calendar
+symbols: []
+timeframes: []
+required_datasets:
+  - option_chain
+  - underlying_prices
+  - contract_metadata
+  - rates_and_dividends
+  - implied_volatility
+  - greeks_optional
+cost_model:
+  commission_per_contract: null
+  spread_model: null
+  slippage_model: null
+  exercise_and_assignment_fees: null
+adjustments:
+  volatility_surface_convention: TO_BE_DEFINED
+  corporate_action_adjusted_contracts: required_if_applicable
+roll_rules:
+  expiry_selection: TO_BE_DEFINED
+  roll_trigger: TO_BE_DEFINED
+corporate_action_rules:
+  underlying_actions: required_if_applicable
+market_specific_risks:
+  - volatility_surface_and_skew
+  - term_structure
+  - greeks_and_convexity
+  - exercise_assignment_and_pin_risk
+  - dealer_gamma_is_data_and_model_dependent
+implementation_status: reserved_only

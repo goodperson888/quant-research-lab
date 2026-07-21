@@ -1,0 +1,33 @@
+profile_id: crypto_perpetual.example
+enabled: false
+asset_class: crypto
+instrument_type: perpetual_futures
+venue: TO_BE_DEFINED
+timezone: UTC
+session: 24x7
+symbols: []
+timeframes: []
+required_datasets:
+  - ohlcv
+  - funding_rates
+  - mark_prices
+  - index_prices
+  - open_interest
+  - leverage_tiers
+  - liquidation_data_optional
+cost_model:
+  maker_fee: null
+  taker_fee: null
+  slippage_bps: null
+  funding_rate: required
+adjustments:
+  mark_to_market_price: mark_price
+  settlement_timestamps: TO_BE_DEFINED
+roll_rules: not_applicable
+corporate_action_rules: not_applicable
+market_specific_risks:
+  - funding_and_basis
+  - mark_index_dislocation
+  - liquidation_and_leverage_tiers
+  - exchange_outage
+  - venue_specific_margin_rules

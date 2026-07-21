@@ -1,0 +1,68 @@
+profile_id: crypto_perpetual.binance.eth
+enabled: true
+role: cross_exchange_robustness_and_data_fallback
+asset_class: crypto
+instrument_type: usdt_margined_perpetual
+venue: binance
+timezone: UTC
+session: 24x7
+public_data_only: true
+credentials_required: false
+symbols:
+  - unified: "ETH/USDT:USDT"
+    native: "ETHUSDT"
+timeframes:
+  download: [5m, 15m, 1h, 4h]
+  default_execution: 15m
+  market_regime_filters: [1h, 4h]
+  execution_sensitivity: 5m
+history:
+  purpose: engineering_validation_and_candidate_screening_only
+  start_utc_inclusive: "2026-04-21T00:00:00Z"
+  end_utc_exclusive: "2026-07-20T00:00:00Z"
+  complete_utc_days: 90
+  long_cycle_coverage_sufficient: false
+data_source:
+  framework: freqtrade_2026.6_ccxt_4.5.67
+  public_api: "https://fapi.binance.com"
+  official_archive: "https://data.binance.vision/data/futures/um"
+  api_access_status: timeout_from_current_network
+  archive_access_status: available_with_intermittent_dns
+required_datasets:
+  - futures_ohlcv
+  - funding_rates
+  - mark_prices
+  - index_prices
+  - open_interest
+  - leverage_tiers
+cost_model:
+  assumption: conservative_vip0_approximation_to_be_replaced_with_account_terms
+  maker_fee_per_side: 0.0002
+  taker_fee_per_side: 0.0005
+  baseline_fee_per_side: 0.0005
+  baseline_slippage_bps_per_side: 2.0
+  stress_slippage_bps_per_side: 5.0
+  doubled_fee_and_slippage_stress: true
+  funding_rate: required_never_silently_zero
+risk_defaults:
+  leverage: 1.0
+  live_trading_enabled: false
+  automatic_leverage_increase: false
+adjustments:
+  mark_to_market_price: mark_price
+  all_storage_timestamps: UTC
+roll_rules: not_applicable
+corporate_action_rules: not_applicable
+unmodeled_or_pending_constraints:
+  - liquidation_engine
+  - leverage_tiers
+  - minimum_order_notional
+  - amount_and_price_precision
+  - mark_index_dislocation
+  - exchange_outage
+market_specific_risks:
+  - funding_and_basis
+  - mark_index_dislocation
+  - liquidation_and_leverage_tiers
+  - exchange_outage
+  - venue_specific_margin_rules

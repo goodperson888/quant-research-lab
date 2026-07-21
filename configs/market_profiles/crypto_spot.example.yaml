@@ -1,0 +1,29 @@
+profile_id: crypto_spot.example
+enabled: false
+asset_class: crypto
+instrument_type: spot
+venue: TO_BE_DEFINED
+timezone: UTC
+session: 24x7
+symbols: []
+timeframes: []
+required_datasets:
+  - ohlcv
+  - trades_optional
+  - orderbook_snapshots_optional
+cost_model:
+  maker_fee: null
+  taker_fee: null
+  slippage_bps: null
+  funding_rate: not_applicable
+adjustments:
+  price_adjustment: none
+  stablecoin_quote_risk: required
+roll_rules: not_applicable
+corporate_action_rules: not_applicable
+market_specific_risks:
+  - fragmented_venues
+  - wash_trading_and_fake_volume
+  - stablecoin_liquidity
+  - exchange_outage_and_delisting
+  - chain_and_deposit_withdrawal_delays

@@ -1,0 +1,102 @@
+strategy_id: "TO_BE_ASSIGNED"
+title: "策略名称"
+intake_date: "YYYY-MM-DD"
+
+source:
+  type: "natural_language_or_pine_or_public_or_book_or_video"
+  author: null
+  title: null
+  url_or_reference: null
+  license_or_usage_note: null
+  captured_at: null
+
+original_description: |
+  在这里原样保存用户描述或来源摘要，不因后续形式化而覆盖。
+
+market_profile: "configs/market_profiles/TO_BE_SELECTED.yaml"
+
+market:
+  exchange: "TO_BE_DEFINED"
+  market_type: "spot_or_futures"
+  symbols: []
+  quote_currency: "USDT"
+  timeframes: []
+  direction: "long_or_short_or_both"
+
+data_availability:
+  confirmed: false
+  available_datasets: []
+  missing_datasets: []
+  earliest_reliable_timestamp: null
+  point_in_time_semantics_checked: false
+  data_manifest_paths: []
+
+market_adaptation_check:
+  confirmed: false
+  baseline_source_market: null
+  target_market: null
+  required_changes: []
+  venue_specific_rules_checked: false
+  cost_model_checked: false
+  validation_status_isolated_from_other_markets: true
+
+cost_model:
+  maker_fee: null
+  taker_fee: null
+  slippage_bps: null
+  funding_enabled: false
+  execution_constraints: []
+
+ambiguities:
+  - question: "哪些规则仍有歧义？"
+    adopted_interpretation: null
+    alternatives: []
+
+formalized_rules:
+  data_available_at: null
+  entry: []
+  exit: []
+  stop_loss: null
+  take_profit: null
+  position_sizing: null
+  invalidation: null
+  same_bar_conflict_rule: "conservative"
+
+baseline:
+  version: "v0-original"
+  frozen: false
+  frozen_at: null
+  code_path: null
+  experiment_run_id: null
+
+research_hypothesis:
+  statement: null
+  single_change: null
+  rationale: null
+  ablation_required: false
+  search_budget: null
+  stopping_rule: null
+
+acceptance_gates:
+  out_of_sample: null
+  walk_forward: null
+  max_drawdown: null
+  min_trades: null
+  cost_stress: null
+  parameter_sensitivity: null
+  dry_run_required: true
+
+status: "inbox"
+allowed_statuses:
+  - inbox
+  - formalized
+  - baseline
+  - candidate
+  - validated
+  - dry_run
+  - production
+  - degraded
+  - retired
+  - rejected
+
+notes: []

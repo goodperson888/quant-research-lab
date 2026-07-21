@@ -1,0 +1,42 @@
+{
+  "binance_ethusdt_futures_5m": {
+    "rows": 25920,
+    "first_timestamp": "2026-04-21T00:00:00+00:00",
+    "last_timestamp": "2026-07-19T23:55:00+00:00"
+  },
+  "binance_ethusdt_futures_15m": {
+    "rows": 8640,
+    "first_timestamp": "2026-04-21T00:00:00+00:00",
+    "last_timestamp": "2026-07-19T23:45:00+00:00"
+  },
+  "binance_ethusdt_futures_1h": {
+    "rows": 2160,
+    "first_timestamp": "2026-04-21T00:00:00+00:00",
+    "last_timestamp": "2026-07-19T23:00:00+00:00"
+  },
+  "binance_ethusdt_futures_4h": {
+    "rows": 540,
+    "first_timestamp": "2026-04-21T00:00:00+00:00",
+    "last_timestamp": "2026-07-19T20:00:00+00:00"
+  },
+  "binance_ethusdt_mark_15m": {
+    "rows": 8544,
+    "first_timestamp": "2026-04-21T00:00:00+00:00",
+    "last_timestamp": "2026-07-19T23:45:00+00:00"
+  },
+  "binance_ethusdt_index_15m": {
+    "rows": 8544,
+    "first_timestamp": "2026-04-21T00:00:00+00:00",
+    "last_timestamp": "2026-07-19T23:45:00+00:00"
+  },
+  "binance_ethusdt_funding": {
+    "rows": 213,
+    "first_timestamp": "2026-04-21T00:00:00+00:00",
+    "last_timestamp": "2026-06-30T16:00:00+00:00"
+  },
+  "binance_ethusdt_open_interest_5m": {
+    "rows": 25918,
+    "first_timestamp": "2026-04-21T00:05:00+00:00",
+    "last_timestamp": "2026-07-19T23:55:00+00:00"
+  }
+}

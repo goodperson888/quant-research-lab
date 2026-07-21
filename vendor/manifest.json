@@ -1,0 +1,62 @@
+{
+  "manifest_version": 1,
+  "updated_at": "2026-07-21",
+  "python_package_index": "https://pypi.tuna.tsinghua.edu.cn/simple",
+  "components": [
+    {
+      "name": "uv",
+      "version": "0.11.29",
+      "source": "https://pypi.org/project/uv/0.11.29/",
+      "artifact": "uv-0.11.29-py3-none-macosx_11_0_arm64.whl",
+      "license": "Apache-2.0 OR MIT",
+      "purpose": "project-local Python, virtual environment and dependency locking",
+      "install_path": ".tools/bin/uv",
+      "sha256": "257c6df4393116114f296f7a02f51db9a2117f68c3ae93bbe218fa79e6521df3"
+    },
+    {
+      "name": "python",
+      "version": "3.12.13",
+      "source": "uv managed CPython / python-build-standalone",
+      "license": "PSF-2.0",
+      "purpose": "isolated project runtime",
+      "install_path": ".tools/python",
+      "sha256": null
+    },
+    {
+      "name": "freqtrade",
+      "version": "2026.6",
+      "source": "https://pypi.org/project/freqtrade/2026.6/",
+      "license": "GPL-3.0",
+      "purpose": "historical data tools, backtesting and later dry-run",
+      "install_path": ".venv",
+      "sha256": null
+    },
+    {
+      "name": "quantstats",
+      "version": "0.0.81",
+      "source": "https://pypi.org/project/QuantStats/0.0.81/",
+      "license": "Apache-2.0",
+      "purpose": "performance metrics and HTML reports",
+      "install_path": ".venv",
+      "sha256": null
+    },
+    {
+      "name": "research-data-stack",
+      "version": "ccxt 4.5.67; duckdb 1.5.4; numpy 2.5.1; pandas 3.0.3; pyarrow 25.0.0; pyyaml 6.0.3",
+      "source": "PyPI: numpy, pandas, pyarrow, duckdb, pyyaml, ccxt",
+      "license": "ccxt MIT; duckdb MIT; numpy BSD-3-Clause; pandas BSD-3-Clause; pyarrow Apache-2.0; PyYAML MIT",
+      "purpose": "tabular, columnar, SQL and exchange-market research",
+      "install_path": ".venv",
+      "sha256": null
+    },
+    {
+      "name": "test-stack",
+      "version": "pytest 9.1.1; pytest-cov 7.1.0",
+      "source": "PyPI",
+      "license": "MIT",
+      "purpose": "automated tests and coverage",
+      "install_path": ".venv",
+      "sha256": null
+    }
+  ]
+}

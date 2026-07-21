@@ -1,0 +1,34 @@
+{
+  "project_name": "quant-research-lab",
+  "mode": "research",
+  "live_trading_enabled": false,
+  "exchange": "TO_BE_DEFINED",
+  "market_type": "spot_or_futures",
+  "quote_currency": "USDT",
+  "symbols": [],
+  "timeframes": ["15m", "1h", "4h"],
+  "cost_model": {
+    "maker_fee": null,
+    "taker_fee": null,
+    "slippage_bps": null,
+    "funding_enabled": false
+  },
+  "validation": {
+    "method": "walk_forward",
+    "train_days": 365,
+    "validation_days": 90,
+    "locked_test_days": 90,
+    "random_seed": 20260720
+  },
+  "risk_gates": {
+    "max_drawdown": null,
+    "daily_loss_limit": null,
+    "max_leverage": null,
+    "min_out_of_sample_trades": null
+  },
+  "automation": {
+    "daily_monitoring": false,
+    "weekly_research": false,
+    "automatic_live_promotion": false
+  }
+}
