@@ -24,3 +24,33 @@ These rules apply to every automated agent working in this project.
 20. A factor or strategy validated in one market profile is not validated in another. Validation and production status must remain separate by asset class, instrument type, venue or broker, timeframe, and cost model.
 21. Never describe FX tick volume as global real traded volume. Never treat a futures continuous series as a directly tradable contract. Stock research must handle corporate actions, delistings, and survivorship bias. Perpetual-futures research must handle funding, mark/index prices, liquidation mechanics, and venue-specific leverage rules.
 22. Do not introduce PostgreSQL, TimescaleDB, ClickHouse, InfluxDB, Redis, or other data services in the first phase without a demonstrated scale requirement and explicit user approval.
+
+## Instruction priority and enforcement
+
+Apply instructions in this order:
+
+1. System, developer, runtime permission, and platform safety requirements.
+2. The user's explicit request and exact authorization scope.
+3. The closest applicable `AGENTS.md`, including the rules in this file.
+4. The required project documents selected by the routing matrix below.
+5. An applicable project or installed Skill.
+6. General agent defaults and implementation preferences.
+
+Lower-priority guidance cannot weaken a higher-priority safety or approval boundary. A user authorization only unlocks an action when the relevant rule explicitly allows that form of authorization; it does not create arbitrary live-trading, secret-handling, filesystem, or shell authority.
+
+Do not rely on prompts alone for critical controls. Baseline immutability, approval gates, job/tool allowlists, artifact path safety, append-only audit records, locked-test isolation, and live-trading prohibition must also be represented in domain rules, schemas, repositories, wrappers, or automated tests as appropriate.
+
+## Mandatory document routing
+
+Before taking an action in one of these intents, read the listed documents in full and satisfy their preconditions. The machine-readable source is `configs/agent_policies/document-routing.yaml`; update it and this table together.
+
+| Intent | Required documents |
+|---|---|
+| Strategy intake or formalization | `docs/07-个人量化策略研究工作法.md`, `docs/10-市场适配与因子适用性.md`, `docs/15-产品需求规格-v1.md`, `docs/18-Agent与Skill执行架构.md` |
+| Market-data download or normalization | `docs/01-数据规范.md`, `docs/09-数据存储架构.md`, `docs/10-市场适配与因子适用性.md`, `docs/14-ETH永续第一阶段数据记录.md`, `docs/18-Agent与Skill执行架构.md` |
+| Baseline backtest | `docs/00-标准研究流程.md`, `docs/02-回测与验收规范.md`, `docs/07-个人量化策略研究工作法.md`, `docs/10-市场适配与因子适用性.md`, `docs/15-产品需求规格-v1.md`, `docs/18-Agent与Skill执行架构.md` |
+| Parameter optimization/search | `docs/02-回测与验收规范.md`, `docs/04-压力测试清单.md`, `docs/07-个人量化策略研究工作法.md`, `docs/15-产品需求规格-v1.md`, `docs/16-产品化目标架构-v1.md`, `docs/18-Agent与Skill执行架构.md` |
+| Stress testing | `docs/02-回测与验收规范.md`, `docs/04-压力测试清单.md`, `docs/07-个人量化策略研究工作法.md`, `docs/18-Agent与Skill执行架构.md` |
+| Dry-run preparation or start | `docs/02-回测与验收规范.md`, `docs/05-自动化运行规范.md`, `docs/06-安全与实盘门禁.md`, `docs/07-个人量化策略研究工作法.md`, `docs/15-产品需求规格-v1.md`, `docs/18-Agent与Skill执行架构.md` |
+
+If an intent is ambiguous, route to the stricter applicable set. Record the selected intent, documents read, preconditions, approval decision, tools used, and required outputs in the AgentRun or audit trail. Missing preconditions stop execution; they are not warnings to bypass.

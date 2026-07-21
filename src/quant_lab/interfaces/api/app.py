@@ -19,6 +19,7 @@ from quant_lab.domain.errors import (
     ProviderNotConfiguredError,
 )
 from quant_lab.domain.models import AgentProviderKind, ExecutionTargetKind
+from quant_lab.domain.models import Constraint, Objective, ParameterSpace
 from quant_lab.infrastructure.llm import UnconfiguredLLMProvider
 from quant_lab.infrastructure.project_readers import DataSummaryReader, ProjectStatusReader
 from quant_lab.infrastructure.sqlite_product_repository import SQLiteProductRepository
@@ -27,10 +28,12 @@ from quant_lab.paths import app_database_path, project_root
 from .schemas import (
     AuditEventResponse,
     CreateIntakeRequest,
+    CreateExperimentPlanRequest,
     CreateJobRequest,
     CreateMessageRequest,
     CreateSessionRequest,
     FreezeBaselineRequest,
+    ExperimentPlanResponse,
     JobResponse,
     MessageResponse,
     SessionDetailResponse,
@@ -197,6 +200,48 @@ def create_app(
     )
     def list_jobs() -> Any:
         return service.list_jobs()
+
+    @application.get(
+        "/api/experiment-plans",
+        response_model=list[ExperimentPlanResponse],
+        tags=["experiments"],
+    )
+    def list_experiment_plans() -> Any:
+        return service.list_experiment_plans()
+
+    @application.post(
+        "/api/experiment-plans",
+        response_model=ExperimentPlanResponse,
+        status_code=status.HTTP_201_CREATED,
+        tags=["experiments"],
+    )
+    def create_experiment_plan(body: CreateExperimentPlanRequest) -> Any:
+        return service.create_experiment_plan(
+            baseline_version_id=body.baseline_version_id,
+            hypothesis=body.hypothesis,
+            parameter_space=tuple(
+                ParameterSpace(**item.model_dump()) for item in body.parameter_space
+            ),
+            objectives=tuple(Objective(**item.model_dump()) for item in body.objectives),
+            constraints=tuple(
+                Constraint(**item.model_dump()) for item in body.constraints
+            ),
+            data_splits=body.data_splits,
+            cost_model=body.cost_model,
+            max_trials=body.max_trials,
+            time_budget_seconds=body.time_budget_seconds,
+            stopping_conditions=body.stopping_conditions,
+        )
+
+    @application.post(
+        "/api/experiment-plans/{plan_id}/approve",
+        response_model=ExperimentPlanResponse,
+        tags=["experiments"],
+    )
+    def approve_experiment_plan(plan_id: str, body: FreezeBaselineRequest) -> Any:
+        return service.approve_experiment_plan(
+            plan_id=plan_id, confirmed_by_user=body.confirmed_by_user
+        )
 
     @application.post(
         "/api/jobs",

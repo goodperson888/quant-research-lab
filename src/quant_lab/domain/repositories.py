@@ -2,7 +2,19 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Protocol, Sequence
 
-from .models import AuditEvent, Job, Message, ResearchSession, StrategyDraft, StrategyVersion
+from .models import (
+    AgentRun,
+    Artifact,
+    AuditEvent,
+    ExperimentPlan,
+    Job,
+    Message,
+    ResearchSession,
+    StrategyDraft,
+    StrategyVersion,
+    ToolCall,
+    Trial,
+)
 
 
 class ProductRepository(Protocol):
@@ -46,3 +58,35 @@ class ProductRepository(Protocol):
     def append_event(self, event: AuditEvent) -> AuditEvent: ...
 
     def list_events(self, *, limit: int = 100) -> Sequence[AuditEvent]: ...
+
+    def create_experiment_plan(self, plan: ExperimentPlan) -> ExperimentPlan: ...
+
+    def get_experiment_plan(self, plan_id: str) -> ExperimentPlan: ...
+
+    def list_experiment_plans(self) -> Sequence[ExperimentPlan]: ...
+
+    def approve_experiment_plan(
+        self,
+        plan: ExperimentPlan,
+        *,
+        approval_id: str,
+        created_at: str,
+    ) -> ExperimentPlan: ...
+
+    def create_trial(self, trial: Trial) -> Trial: ...
+
+    def list_trials(self, plan_id: str) -> Sequence[Trial]: ...
+
+    def create_agent_run(self, agent_run: AgentRun) -> AgentRun: ...
+
+    def get_agent_run(self, agent_run_id: str) -> AgentRun: ...
+
+    def list_agent_runs(self) -> Sequence[AgentRun]: ...
+
+    def create_tool_call(self, tool_call: ToolCall) -> ToolCall: ...
+
+    def list_tool_calls(self, agent_run_id: str) -> Sequence[ToolCall]: ...
+
+    def create_artifact(self, artifact: Artifact) -> Artifact: ...
+
+    def list_artifacts(self, agent_run_id: str) -> Sequence[Artifact]: ...

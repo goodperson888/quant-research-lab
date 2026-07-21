@@ -9,7 +9,7 @@ from quant_lab.domain.errors import (
     ExperimentPlanValidationError,
     InvalidJobError,
 )
-from quant_lab.domain.models import ExperimentPlan, Objective, ParameterSpace
+from quant_lab.domain.models import Constraint, ExperimentPlan, Objective, ParameterSpace
 from quant_lab.infrastructure.sqlite_product_repository import SQLiteProductRepository
 from quant_lab.interfaces.api.app import create_app
 
@@ -59,7 +59,7 @@ def test_experiment_plan_requires_budget_splits_cost_and_objective_before_approv
         hypothesis="EMA length has a stable validation plateau.",
         parameter_space=(ParameterSpace(name="ema", kind="integer", lower=10, upper=30),),
         objectives=(Objective(metric="validation_sharpe", direction="maximize"),),
-        constraints=(),
+        constraints=(Constraint(metric="max_drawdown", operator="lte", value=0.2),),
         data_splits={
             "train": "2026-04-21/2026-06-10",
             "validation": "2026-06-10/2026-07-01",
@@ -118,17 +118,69 @@ def test_api_smoke_and_agent_first_status(tmp_path: Path) -> None:
     )
     assert frozen.status_code == 201
     assert frozen.json()["immutable"] is True
+    baseline_id = frozen.json()["id"]
     repeated = client.post(
         f"/api/strategy-drafts/{draft_id}/freeze-baseline",
         json={"confirmed_by_user": True},
     )
     assert repeated.status_code == 409
 
+    plan = client.post(
+        "/api/experiment-plans",
+        json={
+            "baseline_version_id": baseline_id,
+            "hypothesis": "EMA has a stable validation plateau.",
+            "parameter_space": [
+                {"name": "ema", "kind": "integer", "lower": 18, "upper": 24}
+            ],
+            "objectives": [
+                {"metric": "validation_sharpe", "direction": "maximize"}
+            ],
+            "constraints": [
+                {"metric": "max_drawdown", "operator": "lte", "value": 0.2}
+            ],
+            "data_splits": {
+                "train": "a/b",
+                "validation": "b/c",
+                "locked_test": "c/d",
+            },
+            "cost_model": {"fee_per_side": 0.0005},
+            "max_trials": 10,
+            "time_budget_seconds": 600,
+            "stopping_conditions": ["stop after budget"],
+        },
+    )
+    assert plan.status_code == 201
+    plan_id = plan.json()["id"]
+    blocked_search = client.post(
+        "/api/jobs",
+        json={
+            "job_type": "parameter_search",
+            "payload": {"experiment_plan_id": plan_id},
+        },
+    )
+    assert blocked_search.status_code == 400
+    approved = client.post(
+        f"/api/experiment-plans/{plan_id}/approve",
+        json={"confirmed_by_user": True},
+    )
+    assert approved.status_code == 200
+    queued_search = client.post(
+        "/api/jobs",
+        json={
+            "job_type": "parameter_search",
+            "payload": {"experiment_plan_id": plan_id},
+        },
+    )
+    assert queued_search.status_code == 201
+    assert queued_search.json()["status"] == "queued"
+
     events = client.get("/api/audit/events").json()
     assert {event["event_type"] for event in events} >= {
         "research_session.created",
         "strategy_intake.created",
         "strategy_baseline.frozen",
+        "experiment_plan.approved",
     }
 
 

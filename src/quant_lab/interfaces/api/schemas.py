@@ -67,7 +67,7 @@ class StrategyVersionResponse(StrictModel):
 
 
 class CreateJobRequest(StrictModel):
-    job_type: Literal["backtest", "data_quality", "report"]
+    job_type: Literal["backtest", "data_quality", "parameter_search", "report"]
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -88,6 +88,55 @@ class AuditEventResponse(StrictModel):
     aggregate_id: str
     actor_type: str
     payload: dict[str, Any]
+    created_at: str
+
+
+class ParameterSpaceRequest(StrictModel):
+    name: str = Field(min_length=1, max_length=120)
+    kind: Literal["integer", "float", "categorical"]
+    values: tuple[Any, ...] = ()
+    lower: float | None = None
+    upper: float | None = None
+
+
+class ObjectiveRequest(StrictModel):
+    metric: str = Field(min_length=1, max_length=120)
+    direction: Literal["minimize", "maximize"]
+
+
+class ConstraintRequest(StrictModel):
+    metric: str = Field(min_length=1, max_length=120)
+    operator: Literal["lt", "lte", "gt", "gte", "eq"]
+    value: float
+
+
+class CreateExperimentPlanRequest(StrictModel):
+    baseline_version_id: str = Field(min_length=1)
+    hypothesis: str = Field(min_length=1, max_length=2_000)
+    parameter_space: list[ParameterSpaceRequest]
+    objectives: list[ObjectiveRequest]
+    constraints: list[ConstraintRequest] = Field(default_factory=list)
+    data_splits: dict[str, str]
+    cost_model: dict[str, Any]
+    max_trials: int | None = Field(default=None, gt=0)
+    time_budget_seconds: int | None = Field(default=None, gt=0)
+    stopping_conditions: list[str]
+
+
+class ExperimentPlanResponse(StrictModel):
+    id: str
+    baseline_version_id: str
+    hypothesis: str
+    parameter_space: list[ParameterSpaceRequest]
+    objectives: list[ObjectiveRequest]
+    constraints: list[ConstraintRequest]
+    data_splits: dict[str, str]
+    cost_model: dict[str, Any]
+    max_trials: int | None
+    time_budget_seconds: int | None
+    stopping_conditions: list[str]
+    status: str
+    approved_by: str | None
     created_at: str
 
 

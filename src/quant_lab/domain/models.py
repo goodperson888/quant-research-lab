@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from pathlib import PurePosixPath
 from typing import Any, Literal, Mapping
 
 
@@ -32,7 +33,24 @@ class ExecutionTargetKind(StrEnum):
     LOCAL_RUNTIME = "local_runtime"
     HOSTED_SANDBOX = "hosted_sandbox"
 
-ALLOWED_JOB_TYPES = frozenset({"backtest", "data_quality", "report"})
+ALLOWED_JOB_TYPES = frozenset(
+    {"backtest", "data_quality", "parameter_search", "report"}
+)
+
+
+def validate_artifact_key(artifact_key: str) -> str:
+    """Validate a portable project-relative artifact key."""
+
+    if not artifact_key or artifact_key != artifact_key.strip():
+        raise ValueError("artifact_key must be a non-empty trimmed project-relative key")
+    if "\\" in artifact_key or "://" in artifact_key:
+        raise ValueError("artifact_key must use a project-relative POSIX path")
+    path = PurePosixPath(artifact_key)
+    if path.is_absolute() or any(part in {".", ".."} for part in path.parts):
+        raise ValueError("artifact_key must not be absolute or traverse outside the project")
+    if path.parts[0].startswith("~") or path.parts[0].endswith(":"):
+        raise ValueError("artifact_key must not contain a workstation path prefix")
+    return artifact_key
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,9 +140,12 @@ class Report:
     id: str
     job_id: str
     report_type: str
-    path: str
+    artifact_key: str
     summary: Mapping[str, Any]
     created_at: str
+
+    def __post_init__(self) -> None:
+        validate_artifact_key(self.artifact_key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,8 +153,18 @@ class AgentRun:
     id: str
     session_id: str
     agent_name: str
+    agent_provider: AgentProviderKind = AgentProviderKind.EXTERNAL_LOCAL_AGENT
+    execution_target: ExecutionTargetKind = ExecutionTargetKind.LOCAL_RUNTIME
     mode: AgentRunMode = "guided"
-    status: Literal["queued", "running", "waiting_approval", "paused", "completed", "failed", "cancelled"] = "queued"
+    status: Literal[
+        "queued",
+        "running",
+        "waiting_approval",
+        "paused",
+        "completed",
+        "failed",
+        "cancelled",
+    ] = "queued"
     plan_summary: str | None = None
     created_at: str = ""
 
@@ -150,11 +181,15 @@ class AgentStep:
 @dataclass(frozen=True, slots=True)
 class ToolCall:
     id: str
-    agent_step_id: str
+    agent_run_id: str
     tool_name: str
     sanitized_input: Mapping[str, Any]
     sanitized_output: Mapping[str, Any] | None
-    status: Literal["requested", "approved", "running", "completed", "failed", "rejected"]
+    status: Literal[
+        "requested", "approved", "running", "completed", "failed", "rejected"
+    ]
+    agent_step_id: str | None = None
+    created_at: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,8 +197,12 @@ class Artifact:
     id: str
     agent_run_id: str
     artifact_type: Literal["strategy", "diff", "experiment", "report", "manifest", "log"]
-    project_relative_path: str
+    artifact_key: str
     checksum: str | None = None
+    created_at: str = ""
+
+    def __post_init__(self) -> None:
+        validate_artifact_key(self.artifact_key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +212,15 @@ class ParameterSpace:
     values: tuple[Any, ...] = ()
     lower: float | None = None
     upper: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.kind == "categorical" and not self.values:
+            raise ValueError("categorical parameter space requires values")
+        if self.kind in {"integer", "float"}:
+            if self.lower is None or self.upper is None:
+                raise ValueError("numeric parameter space requires lower and upper")
+            if self.lower > self.upper:
+                raise ValueError("parameter space lower must be <= upper")
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +251,7 @@ class ExperimentPlan:
     stopping_conditions: tuple[str, ...]
     status: Literal["draft", "approved", "rejected"] = "draft"
     approved_by: str | None = None
+    created_at: str = ""
 
     def approve(self, *, actor: Literal["user"] = "user") -> "ExperimentPlan":
         from .errors import ExperimentPlanValidationError
@@ -216,6 +265,8 @@ class ExperimentPlan:
             missing.append("parameter_space")
         if not self.objectives:
             missing.append("objectives")
+        if not self.constraints:
+            missing.append("constraints")
         if not self.cost_model:
             missing.append("cost_model")
         required_splits = {"train", "validation", "locked_test"}
@@ -244,7 +295,12 @@ class Trial:
     data_version: str
     status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
     metrics: Mapping[str, float] = field(default_factory=dict)
-    log_reference: str | None = None
+    log_artifact_key: str | None = None
+    created_at: str = ""
+
+    def __post_init__(self) -> None:
+        if self.log_artifact_key is not None:
+            validate_artifact_key(self.log_artifact_key)
 
 
 @dataclass(frozen=True, slots=True)

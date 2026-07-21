@@ -2,21 +2,32 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from quant_lab.domain.errors import ConflictError, NotFoundError
+from quant_lab.domain.errors import ApprovalRequiredError, ConflictError, NotFoundError
 from quant_lab.domain.models import (
+    AgentProviderKind,
+    AgentRun,
+    Artifact,
     AuditEvent,
+    Constraint,
+    ExecutionTargetKind,
+    ExperimentPlan,
     Job,
     Message,
+    Objective,
+    ParameterSpace,
     ResearchSession,
     StrategyDraft,
     StrategyVersion,
+    ToolCall,
+    Trial,
 )
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class SQLiteProductRepository:
@@ -167,6 +178,71 @@ class SQLiteProductRepository:
                 BEGIN
                     SELECT RAISE(ABORT, 'audit events are append-only');
                 END;
+
+                CREATE TABLE IF NOT EXISTS experiment_plans (
+                    id TEXT PRIMARY KEY,
+                    baseline_version_id TEXT NOT NULL,
+                    hypothesis TEXT NOT NULL,
+                    parameter_space_json TEXT NOT NULL,
+                    objectives_json TEXT NOT NULL,
+                    constraints_json TEXT NOT NULL,
+                    data_splits_json TEXT NOT NULL,
+                    cost_model_json TEXT NOT NULL,
+                    max_trials INTEGER,
+                    time_budget_seconds INTEGER,
+                    stopping_conditions_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    approved_by TEXT,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS trials (
+                    id TEXT PRIMARY KEY,
+                    experiment_plan_id TEXT NOT NULL,
+                    parameters_json TEXT NOT NULL,
+                    data_version TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    metrics_json TEXT NOT NULL,
+                    log_artifact_key TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (experiment_plan_id) REFERENCES experiment_plans(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS agent_runs (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    agent_name TEXT NOT NULL,
+                    agent_provider TEXT NOT NULL,
+                    execution_target TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    plan_summary TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (session_id) REFERENCES research_sessions(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS tool_calls (
+                    id TEXT PRIMARY KEY,
+                    agent_run_id TEXT NOT NULL,
+                    agent_step_id TEXT,
+                    tool_name TEXT NOT NULL,
+                    sanitized_input_json TEXT NOT NULL,
+                    sanitized_output_json TEXT,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (agent_run_id) REFERENCES agent_runs(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS artifacts (
+                    id TEXT PRIMARY KEY,
+                    agent_run_id TEXT NOT NULL,
+                    artifact_type TEXT NOT NULL,
+                    artifact_key TEXT NOT NULL,
+                    checksum TEXT,
+                    created_at TEXT NOT NULL,
+                    UNIQUE (agent_run_id, artifact_key),
+                    FOREIGN KEY (agent_run_id) REFERENCES agent_runs(id)
+                );
                 """
             )
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -448,6 +524,241 @@ class SQLiteProductRepository:
             for row in rows
         ]
 
+    def create_experiment_plan(self, plan: ExperimentPlan) -> ExperimentPlan:
+        with self._connect() as connection:
+            baseline = connection.execute(
+                """
+                SELECT id FROM strategy_versions
+                WHERE id = ? AND status = 'baseline' AND immutable = 1
+                """,
+                (plan.baseline_version_id,),
+            ).fetchone()
+            if baseline is None:
+                raise NotFoundError(
+                    "experiment plan requires an existing immutable baseline"
+                )
+            connection.execute(
+                """
+                INSERT INTO experiment_plans (
+                    id, baseline_version_id, hypothesis, parameter_space_json,
+                    objectives_json, constraints_json, data_splits_json,
+                    cost_model_json, max_trials, time_budget_seconds,
+                    stopping_conditions_json, status, approved_by, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    plan.id,
+                    plan.baseline_version_id,
+                    plan.hypothesis,
+                    json.dumps([asdict(item) for item in plan.parameter_space]),
+                    json.dumps([asdict(item) for item in plan.objectives]),
+                    json.dumps([asdict(item) for item in plan.constraints]),
+                    json.dumps(plan.data_splits, sort_keys=True),
+                    json.dumps(plan.cost_model, sort_keys=True),
+                    plan.max_trials,
+                    plan.time_budget_seconds,
+                    json.dumps(plan.stopping_conditions),
+                    plan.status,
+                    plan.approved_by,
+                    plan.created_at,
+                ),
+            )
+        return plan
+
+    def get_experiment_plan(self, plan_id: str) -> ExperimentPlan:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM experiment_plans WHERE id = ?", (plan_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"experiment plan not found: {plan_id}")
+        return self._experiment_plan(row)
+
+    def list_experiment_plans(self) -> Sequence[ExperimentPlan]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM experiment_plans ORDER BY created_at DESC"
+            ).fetchall()
+        return [self._experiment_plan(row) for row in rows]
+
+    def approve_experiment_plan(
+        self,
+        plan: ExperimentPlan,
+        *,
+        approval_id: str,
+        created_at: str,
+    ) -> ExperimentPlan:
+        if plan.status != "approved" or plan.approved_by != "user":
+            raise ApprovalRequiredError("experiment plan approval must come from the user")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute(
+                "SELECT status FROM experiment_plans WHERE id = ?", (plan.id,)
+            ).fetchone()
+            if current is None:
+                raise NotFoundError(f"experiment plan not found: {plan.id}")
+            if current["status"] != "draft":
+                raise ConflictError("experiment plan has already left draft state")
+            connection.execute(
+                """
+                UPDATE experiment_plans
+                SET status = 'approved', approved_by = 'user'
+                WHERE id = ?
+                """,
+                (plan.id,),
+            )
+            connection.execute(
+                """
+                INSERT INTO approvals (
+                    id, subject_type, subject_id, decision, actor, created_at
+                ) VALUES (?, 'experiment_plan', ?, 'approved', 'user', ?)
+                """,
+                (approval_id, plan.id, created_at),
+            )
+        return plan
+
+    def create_trial(self, trial: Trial) -> Trial:
+        with self._connect() as connection:
+            plan = connection.execute(
+                "SELECT status FROM experiment_plans WHERE id = ?",
+                (trial.experiment_plan_id,),
+            ).fetchone()
+            if plan is None:
+                raise NotFoundError(
+                    f"experiment plan not found: {trial.experiment_plan_id}"
+                )
+            if plan["status"] != "approved":
+                raise ApprovalRequiredError(
+                    "trial creation requires an approved experiment plan"
+                )
+            connection.execute(
+                """
+                INSERT INTO trials (
+                    id, experiment_plan_id, parameters_json, data_version,
+                    status, metrics_json, log_artifact_key, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    trial.id,
+                    trial.experiment_plan_id,
+                    json.dumps(trial.parameters, sort_keys=True),
+                    trial.data_version,
+                    trial.status,
+                    json.dumps(trial.metrics, sort_keys=True),
+                    trial.log_artifact_key,
+                    trial.created_at,
+                ),
+            )
+        return trial
+
+    def list_trials(self, plan_id: str) -> Sequence[Trial]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM trials WHERE experiment_plan_id = ? ORDER BY created_at",
+                (plan_id,),
+            ).fetchall()
+        return [self._trial(row) for row in rows]
+
+    def create_agent_run(self, agent_run: AgentRun) -> AgentRun:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO agent_runs (
+                    id, session_id, agent_name, agent_provider, execution_target,
+                    mode, status, plan_summary, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    agent_run.id,
+                    agent_run.session_id,
+                    agent_run.agent_name,
+                    agent_run.agent_provider,
+                    agent_run.execution_target,
+                    agent_run.mode,
+                    agent_run.status,
+                    agent_run.plan_summary,
+                    agent_run.created_at,
+                ),
+            )
+        return agent_run
+
+    def get_agent_run(self, agent_run_id: str) -> AgentRun:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM agent_runs WHERE id = ?", (agent_run_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"agent run not found: {agent_run_id}")
+        return self._agent_run(row)
+
+    def list_agent_runs(self) -> Sequence[AgentRun]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM agent_runs ORDER BY created_at DESC"
+            ).fetchall()
+        return [self._agent_run(row) for row in rows]
+
+    def create_tool_call(self, tool_call: ToolCall) -> ToolCall:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO tool_calls (
+                    id, agent_run_id, agent_step_id, tool_name,
+                    sanitized_input_json, sanitized_output_json, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    tool_call.id,
+                    tool_call.agent_run_id,
+                    tool_call.agent_step_id,
+                    tool_call.tool_name,
+                    json.dumps(tool_call.sanitized_input, sort_keys=True),
+                    (
+                        json.dumps(tool_call.sanitized_output, sort_keys=True)
+                        if tool_call.sanitized_output is not None
+                        else None
+                    ),
+                    tool_call.status,
+                    tool_call.created_at,
+                ),
+            )
+        return tool_call
+
+    def list_tool_calls(self, agent_run_id: str) -> Sequence[ToolCall]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM tool_calls WHERE agent_run_id = ? ORDER BY created_at",
+                (agent_run_id,),
+            ).fetchall()
+        return [self._tool_call(row) for row in rows]
+
+    def create_artifact(self, artifact: Artifact) -> Artifact:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO artifacts (
+                    id, agent_run_id, artifact_type, artifact_key, checksum, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    artifact.id,
+                    artifact.agent_run_id,
+                    artifact.artifact_type,
+                    artifact.artifact_key,
+                    artifact.checksum,
+                    artifact.created_at,
+                ),
+            )
+        return artifact
+
+    def list_artifacts(self, agent_run_id: str) -> Sequence[Artifact]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM artifacts WHERE agent_run_id = ? ORDER BY created_at",
+                (agent_run_id,),
+            ).fetchall()
+        return [self._artifact(row) for row in rows]
+
     @staticmethod
     def _session(row: sqlite3.Row) -> ResearchSession:
         return ResearchSession(
@@ -492,4 +803,91 @@ class SQLiteProductRepository:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             error=row["error"],
+        )
+
+    @staticmethod
+    def _experiment_plan(row: sqlite3.Row) -> ExperimentPlan:
+        return ExperimentPlan(
+            id=row["id"],
+            baseline_version_id=row["baseline_version_id"],
+            hypothesis=row["hypothesis"],
+            parameter_space=tuple(
+                ParameterSpace(
+                    name=item["name"],
+                    kind=item["kind"],
+                    values=tuple(item.get("values", ())),
+                    lower=item.get("lower"),
+                    upper=item.get("upper"),
+                )
+                for item in json.loads(row["parameter_space_json"])
+            ),
+            objectives=tuple(
+                Objective(**item) for item in json.loads(row["objectives_json"])
+            ),
+            constraints=tuple(
+                Constraint(**item) for item in json.loads(row["constraints_json"])
+            ),
+            data_splits=json.loads(row["data_splits_json"]),
+            cost_model=json.loads(row["cost_model_json"]),
+            max_trials=row["max_trials"],
+            time_budget_seconds=row["time_budget_seconds"],
+            stopping_conditions=tuple(json.loads(row["stopping_conditions_json"])),
+            status=row["status"],
+            approved_by=row["approved_by"],
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _trial(row: sqlite3.Row) -> Trial:
+        return Trial(
+            id=row["id"],
+            experiment_plan_id=row["experiment_plan_id"],
+            parameters=json.loads(row["parameters_json"]),
+            data_version=row["data_version"],
+            status=row["status"],
+            metrics=json.loads(row["metrics_json"]),
+            log_artifact_key=row["log_artifact_key"],
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _agent_run(row: sqlite3.Row) -> AgentRun:
+        return AgentRun(
+            id=row["id"],
+            session_id=row["session_id"],
+            agent_name=row["agent_name"],
+            agent_provider=AgentProviderKind(row["agent_provider"]),
+            execution_target=ExecutionTargetKind(row["execution_target"]),
+            mode=row["mode"],
+            status=row["status"],
+            plan_summary=row["plan_summary"],
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _tool_call(row: sqlite3.Row) -> ToolCall:
+        return ToolCall(
+            id=row["id"],
+            agent_run_id=row["agent_run_id"],
+            agent_step_id=row["agent_step_id"],
+            tool_name=row["tool_name"],
+            sanitized_input=json.loads(row["sanitized_input_json"]),
+            sanitized_output=(
+                json.loads(row["sanitized_output_json"])
+                if row["sanitized_output_json"] is not None
+                else None
+            ),
+            status=row["status"],
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _artifact(row: sqlite3.Row) -> Artifact:
+        return Artifact(
+            id=row["id"],
+            agent_run_id=row["agent_run_id"],
+            artifact_type=row["artifact_type"],
+            artifact_key=row["artifact_key"],
+            checksum=row["checksum"],
+            created_at=row["created_at"],
         )

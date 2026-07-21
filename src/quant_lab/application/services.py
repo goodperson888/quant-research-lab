@@ -7,14 +7,26 @@ from uuid import uuid4
 from quant_lab.domain.errors import ApprovalRequiredError, InvalidJobError
 from quant_lab.domain.models import (
     ALLOWED_JOB_TYPES,
+    AgentProviderKind,
+    AgentRun,
+    Artifact,
     AuditEvent,
+    Constraint,
+    ExecutionTargetKind,
+    ExperimentPlan,
     Job,
     Message,
+    Objective,
+    ParameterSpace,
     ResearchSession,
     StrategyDraft,
     StrategyVersion,
+    ToolCall,
+    Trial,
 )
 from quant_lab.domain.repositories import ProductRepository
+
+from .tool_ports import ALLOWED_RESEARCH_TOOLS
 
 
 FORBIDDEN_JOB_PAYLOAD_KEYS = frozenset(
@@ -185,6 +197,17 @@ class ResearchApplicationService:
             raise InvalidJobError(f"job type must be one of: {allowed}")
         if _contains_forbidden_key(payload):
             raise InvalidJobError("job payload contains a forbidden execution or secret key")
+        if job_type == "parameter_search":
+            plan_id = payload.get("experiment_plan_id")
+            if not isinstance(plan_id, str) or not plan_id:
+                raise ApprovalRequiredError(
+                    "parameter search requires an approved experiment_plan_id"
+                )
+            plan = self.repository.get_experiment_plan(plan_id)
+            if plan.status != "approved" or plan.approved_by != "user":
+                raise ApprovalRequiredError(
+                    "parameter search requires explicit user approval of the experiment plan"
+                )
         now = utc_now()
         job = Job(
             id=new_id("job"),
@@ -215,3 +238,207 @@ class ResearchApplicationService:
 
     def list_audit_events(self, *, limit: int = 100) -> Sequence[AuditEvent]:
         return self.repository.list_events(limit=limit)
+
+    def create_experiment_plan(
+        self,
+        *,
+        baseline_version_id: str,
+        hypothesis: str,
+        parameter_space: Sequence[ParameterSpace],
+        objectives: Sequence[Objective],
+        constraints: Sequence[Constraint],
+        data_splits: Mapping[str, str],
+        cost_model: Mapping[str, Any],
+        max_trials: int | None,
+        time_budget_seconds: int | None,
+        stopping_conditions: Sequence[str],
+    ) -> ExperimentPlan:
+        plan = ExperimentPlan(
+            id=new_id("plan"),
+            baseline_version_id=baseline_version_id,
+            hypothesis=hypothesis.strip(),
+            parameter_space=tuple(parameter_space),
+            objectives=tuple(objectives),
+            constraints=tuple(constraints),
+            data_splits=dict(data_splits),
+            cost_model=dict(cost_model),
+            max_trials=max_trials,
+            time_budget_seconds=time_budget_seconds,
+            stopping_conditions=tuple(stopping_conditions),
+            status="draft",
+            approved_by=None,
+            created_at=utc_now(),
+        )
+        created = self.repository.create_experiment_plan(plan)
+        self._audit(
+            event_type="experiment_plan.created",
+            aggregate_type="experiment_plan",
+            aggregate_id=created.id,
+            payload={
+                "baseline_version_id": created.baseline_version_id,
+                "max_trials": created.max_trials,
+                "time_budget_seconds": created.time_budget_seconds,
+            },
+        )
+        return created
+
+    def list_experiment_plans(self) -> Sequence[ExperimentPlan]:
+        return self.repository.list_experiment_plans()
+
+    def approve_experiment_plan(
+        self, *, plan_id: str, confirmed_by_user: bool
+    ) -> ExperimentPlan:
+        if not confirmed_by_user:
+            raise ApprovalRequiredError(
+                "experiment plan approval requires explicit user confirmation"
+            )
+        current = self.repository.get_experiment_plan(plan_id)
+        approved = current.approve(actor="user")
+        saved = self.repository.approve_experiment_plan(
+            approved,
+            approval_id=new_id("approval"),
+            created_at=utc_now(),
+        )
+        self._audit(
+            event_type="experiment_plan.approved",
+            aggregate_type="experiment_plan",
+            aggregate_id=saved.id,
+            payload={"approved_by": "user", "status": saved.status},
+        )
+        return saved
+
+    def create_agent_run(
+        self,
+        *,
+        session_id: str,
+        agent_name: str,
+        mode: str = "guided",
+        agent_provider: AgentProviderKind = AgentProviderKind.EXTERNAL_LOCAL_AGENT,
+        execution_target: ExecutionTargetKind = ExecutionTargetKind.LOCAL_RUNTIME,
+        plan_summary: str | None = None,
+    ) -> AgentRun:
+        self.repository.get_session(session_id)
+        agent_run = AgentRun(
+            id=new_id("agent_run"),
+            session_id=session_id,
+            agent_name=agent_name,
+            agent_provider=agent_provider,
+            execution_target=execution_target,
+            mode=mode,  # type: ignore[arg-type]
+            status="queued",
+            plan_summary=plan_summary,
+            created_at=utc_now(),
+        )
+        created = self.repository.create_agent_run(agent_run)
+        self._audit(
+            event_type="agent_run.created",
+            aggregate_type="agent_run",
+            aggregate_id=created.id,
+            payload={
+                "agent_provider": created.agent_provider,
+                "execution_target": created.execution_target,
+                "mode": created.mode,
+            },
+            actor_type="external_agent",
+        )
+        return created
+
+    def record_tool_call(
+        self,
+        *,
+        agent_run_id: str,
+        tool_name: str,
+        sanitized_input: Mapping[str, Any],
+        sanitized_output: Mapping[str, Any] | None,
+        status: str,
+        agent_step_id: str | None = None,
+    ) -> ToolCall:
+        self.repository.get_agent_run(agent_run_id)
+        if tool_name not in ALLOWED_RESEARCH_TOOLS:
+            raise InvalidJobError(f"research tool is not allowlisted: {tool_name}")
+        if _contains_forbidden_key(sanitized_input) or _contains_forbidden_key(
+            sanitized_output
+        ):
+            raise InvalidJobError("tool call contains a forbidden execution or secret key")
+        tool_call = ToolCall(
+            id=new_id("tool_call"),
+            agent_run_id=agent_run_id,
+            agent_step_id=agent_step_id,
+            tool_name=tool_name,
+            sanitized_input=dict(sanitized_input),
+            sanitized_output=(
+                dict(sanitized_output) if sanitized_output is not None else None
+            ),
+            status=status,  # type: ignore[arg-type]
+            created_at=utc_now(),
+        )
+        created = self.repository.create_tool_call(tool_call)
+        self._audit(
+            event_type="tool_call.recorded",
+            aggregate_type="agent_run",
+            aggregate_id=agent_run_id,
+            payload={"tool_call_id": created.id, "tool_name": tool_name, "status": status},
+            actor_type="external_agent",
+        )
+        return created
+
+    def record_artifact(
+        self,
+        *,
+        agent_run_id: str,
+        artifact_type: str,
+        artifact_key: str,
+        checksum: str | None = None,
+    ) -> Artifact:
+        self.repository.get_agent_run(agent_run_id)
+        artifact = Artifact(
+            id=new_id("artifact"),
+            agent_run_id=agent_run_id,
+            artifact_type=artifact_type,  # type: ignore[arg-type]
+            artifact_key=artifact_key,
+            checksum=checksum,
+            created_at=utc_now(),
+        )
+        created = self.repository.create_artifact(artifact)
+        self._audit(
+            event_type="artifact.created",
+            aggregate_type="agent_run",
+            aggregate_id=agent_run_id,
+            payload={
+                "artifact_id": created.id,
+                "artifact_type": created.artifact_type,
+                "artifact_key": created.artifact_key,
+            },
+            actor_type="external_agent",
+        )
+        return created
+
+    def record_trial(
+        self,
+        *,
+        experiment_plan_id: str,
+        parameters: Mapping[str, Any],
+        data_version: str,
+        status: str = "queued",
+        metrics: Mapping[str, float] | None = None,
+        log_artifact_key: str | None = None,
+    ) -> Trial:
+        trial = Trial(
+            id=new_id("trial"),
+            experiment_plan_id=experiment_plan_id,
+            parameters=dict(parameters),
+            data_version=data_version,
+            status=status,  # type: ignore[arg-type]
+            metrics=dict(metrics or {}),
+            log_artifact_key=log_artifact_key,
+            created_at=utc_now(),
+        )
+        created = self.repository.create_trial(trial)
+        self._audit(
+            event_type="trial.created",
+            aggregate_type="experiment_plan",
+            aggregate_id=experiment_plan_id,
+            payload={"trial_id": created.id, "status": created.status},
+            actor_type="system",
+        )
+        return created

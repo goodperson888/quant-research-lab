@@ -14,6 +14,7 @@
 - [产品需求规格 v1](docs/15-产品需求规格-v1.md)：查看已冻结的 Agent-first 产品需求和验收；
 - [产品化目标架构 v1](docs/16-产品化目标架构-v1.md)：查看 Web、External Agent、API、Worker 和审计控制平面；
 - [架构重构实施计划](docs/17-架构重构实施计划.md)：查看阶段0纵切和后续功能渐进路线。
+- [Agent 与 Skill 执行架构](docs/18-Agent与Skill执行架构.md)：查看 Agent、Skill、文档路由、工具白名单和状态机如何共同约束执行。
 
 ## 产品化阶段 0
 
@@ -28,6 +29,8 @@
 ```
 
 API 默认仅监听 `127.0.0.1:8000`，Web 默认监听 `127.0.0.1:3000`。根页面进入 `/studio`。Worker 当前只报告能力，没有注册回测处理器，不会伪造 Job 成功。
+
+项目级 Agent 编排 Skill 位于 `.agents/skills/quant-strategy-research/`。所有研究动作先按 `configs/agent_policies/document-routing.yaml` 选择 intent、读取必需文档、检查前置条件和审批门禁；安全不只依赖提示词，后端状态机、Repository、ArtifactStore、Job 白名单和测试共同执行约束。
 
 ## 个人轻量策略研究模式
 

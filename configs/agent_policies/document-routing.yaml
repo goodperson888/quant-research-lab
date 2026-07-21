@@ -1,0 +1,199 @@
+version: 1
+policy_id: quant_lab_document_routing_v1
+default_agent_run_mode: guided
+instruction_precedence:
+  - system_developer_runtime_permissions
+  - explicit_user_scope
+  - closest_agents_md
+  - routed_project_documents
+  - applicable_skill
+  - general_agent_defaults
+enforcement:
+  prompt_only_controls_forbidden: true
+  required_code_controls:
+    - baseline_immutability
+    - explicit_approval_gates
+    - domain_tool_and_job_allowlists
+    - project_relative_artifact_keys
+    - append_only_audit_events
+    - locked_test_isolation
+    - no_live_trade_endpoint
+
+intents:
+  - intent: strategy_intake
+    required_docs:
+      - docs/07-个人量化策略研究工作法.md
+      - docs/10-市场适配与因子适用性.md
+      - docs/15-产品需求规格-v1.md
+      - docs/18-Agent与Skill执行架构.md
+    required_preconditions:
+      - original_source_and_date_available
+      - market_profile_selected_or_explicitly_pending
+      - ambiguities_recorded
+    allowed_tools:
+      - intake_strategy
+      - formalize_strategy
+      - list_ambiguities
+      - propose_strategy_version
+    required_outputs:
+      - research_session
+      - immutable_original_source
+      - strategy_draft
+      - ambiguity_list
+      - audit_events
+    approval_gate:
+      action: freeze_baseline
+      required: explicit_user_confirmation
+
+  - intent: data_download
+    required_docs:
+      - docs/01-数据规范.md
+      - docs/09-数据存储架构.md
+      - docs/10-市场适配与因子适用性.md
+      - docs/14-ETH永续第一阶段数据记录.md
+      - docs/18-Agent与Skill执行架构.md
+    required_preconditions:
+      - explicit_market_profile
+      - utc_inclusive_start_and_exclusive_end
+      - public_data_or_separately_authorized_credentials
+      - immutable_raw_destination
+    allowed_tools:
+      - download_market_data
+      - validate_market_data
+      - build_data_manifest
+      - build_catalog_views
+    required_outputs:
+      - immutable_raw_data
+      - parquet_dataset
+      - data_manifest
+      - quality_report
+      - audit_events
+    approval_gate:
+      action: network_download
+      required: runtime_permission_when_requested
+
+  - intent: baseline_backtest
+    required_docs:
+      - docs/00-标准研究流程.md
+      - docs/02-回测与验收规范.md
+      - docs/07-个人量化策略研究工作法.md
+      - docs/10-市场适配与因子适用性.md
+      - docs/15-产品需求规格-v1.md
+      - docs/18-Agent与Skill执行架构.md
+    required_preconditions:
+      - baseline_frozen
+      - market_profile_matches_validation_scope
+      - data_manifest_selected
+      - cost_model_complete
+      - funding_not_silently_zero_for_perpetuals
+      - time_splits_recorded
+    allowed_tools:
+      - create_job
+      - run_backtest
+      - get_job
+      - generate_report
+    required_outputs:
+      - experiment_run_manifest
+      - job_logs
+      - trades_or_failure_reason
+      - baseline_report
+      - audit_events
+    approval_gate:
+      action: freeze_or_change_baseline
+      required: explicit_user_confirmation
+
+  - intent: parameter_optimization
+    required_docs:
+      - docs/02-回测与验收规范.md
+      - docs/04-压力测试清单.md
+      - docs/07-个人量化策略研究工作法.md
+      - docs/15-产品需求规格-v1.md
+      - docs/16-产品化目标架构-v1.md
+      - docs/18-Agent与Skill执行架构.md
+    required_preconditions:
+      - baseline_frozen
+      - single_falsifiable_hypothesis
+      - parameter_space_defined
+      - objective_and_constraints_defined
+      - train_validation_locked_test_defined
+      - cost_model_complete
+      - max_trials_or_time_budget_defined
+      - stopping_conditions_defined
+    allowed_tools:
+      - create_experiment_plan
+      - approve_experiment_plan
+      - run_parameter_search
+      - get_job
+      - compare_runs
+      - propose_strategy_version
+    required_outputs:
+      - approved_experiment_plan
+      - trial_records
+      - parameter_stability_analysis
+      - out_of_sample_comparison
+      - proposal_or_rejection
+      - audit_events
+    approval_gate:
+      action: run_parameter_search
+      required: explicit_user_approval_of_experiment_plan
+
+  - intent: stress_test
+    required_docs:
+      - docs/02-回测与验收规范.md
+      - docs/04-压力测试清单.md
+      - docs/07-个人量化策略研究工作法.md
+      - docs/18-Agent与Skill执行架构.md
+    required_preconditions:
+      - candidate_or_baseline_version_selected
+      - stress_scenarios_declared
+      - cost_and_execution_assumptions_declared
+      - immutable_run_manifest_destination
+    allowed_tools:
+      - create_job
+      - run_backtest
+      - compare_runs
+      - generate_report
+    required_outputs:
+      - stress_run_manifests
+      - sensitivity_results
+      - failure_conditions
+      - report
+      - audit_events
+    approval_gate:
+      action: change_strategy_status
+      required: explicit_user_confirmation
+
+  - intent: dry_run
+    required_docs:
+      - docs/02-回测与验收规范.md
+      - docs/05-自动化运行规范.md
+      - docs/06-安全与实盘门禁.md
+      - docs/07-个人量化策略研究工作法.md
+      - docs/15-产品需求规格-v1.md
+      - docs/18-Agent与Skill执行架构.md
+    required_preconditions:
+      - validated_strategy_version
+      - dry_run_only_configuration
+      - live_trading_disabled
+      - leverage_and_capital_limits_recorded
+      - monitoring_and_stop_conditions_defined
+    allowed_tools:
+      - create_job
+      - get_job
+      - generate_report
+      - prepare_dry_run
+    required_outputs:
+      - dry_run_configuration_summary
+      - monitoring_log
+      - incident_and_stop_record
+      - audit_events
+    approval_gate:
+      action: start_external_exchange_dry_run
+      required: explicit_user_confirmation
+
+forbidden_tools:
+  - arbitrary_shell
+  - arbitrary_absolute_path
+  - live_trade
+  - credential_read_or_write
+  - automatic_production_promotion
