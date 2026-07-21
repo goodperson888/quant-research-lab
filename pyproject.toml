@@ -7,7 +7,11 @@ name = "quant-research-lab"
 version = "0.1.0"
 description = "Reproducible quantitative strategy research and factor governance"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+  "fastapi==0.139.2",
+  "pydantic==2.13.4",
+  "uvicorn==0.51.0",
+]
 
 [project.optional-dependencies]
 research = [
@@ -20,6 +24,7 @@ research = [
   "quantstats==0.0.81",
 ]
 test = [
+  "httpx==0.28.1",
   "pytest==9.1.1",
   "pytest-cov==7.1.0",
 ]

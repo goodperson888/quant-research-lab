@@ -13,3 +13,7 @@ def project_root() -> Path:
 
 def registry_path() -> Path:
     return project_root() / "factor_library" / "registry.sqlite3"
+
+
+def app_database_path() -> Path:
+    return project_root() / "runtime" / "app" / "quant_lab.sqlite3"

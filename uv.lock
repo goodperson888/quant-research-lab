@@ -1241,6 +1241,11 @@ wheels = [
 name = "quant-research-lab"
 version = "0.1.0"
 source = { editable = "." }
+dependencies = [
+    { name = "fastapi" },
+    { name = "pydantic" },
+    { name = "uvicorn" },
+]
 
 [package.optional-dependencies]
 freqtrade = [
@@ -1256,6 +1261,7 @@ research = [
     { name = "quantstats" },
 ]
 test = [
+    { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-cov" },
 ]
@@ -1264,14 +1270,18 @@ test = [
 requires-dist = [
     { name = "ccxt", marker = "extra == 'research'", specifier = "==4.5.67" },
     { name = "duckdb", marker = "extra == 'research'", specifier = "==1.5.4" },
+    { name = "fastapi", specifier = "==0.139.2" },
     { name = "freqtrade", marker = "extra == 'freqtrade'", specifier = "==2026.6" },
+    { name = "httpx", marker = "extra == 'test'", specifier = "==0.28.1" },
     { name = "numpy", marker = "extra == 'research'", specifier = ">=2.0,<3.0" },
     { name = "pandas", marker = "extra == 'research'", specifier = ">=2.2,<4.0" },
     { name = "pyarrow", marker = "extra == 'research'", specifier = "==25.0.0" },
+    { name = "pydantic", specifier = "==2.13.4" },
     { name = "pytest", marker = "extra == 'test'", specifier = "==9.1.1" },
     { name = "pytest-cov", marker = "extra == 'test'", specifier = "==7.1.0" },
     { name = "pyyaml", marker = "extra == 'research'", specifier = "==6.0.3" },
     { name = "quantstats", marker = "extra == 'research'", specifier = "==0.0.81" },
+    { name = "uvicorn", specifier = "==0.51.0" },
 ]
 provides-extras = ["research", "test", "freqtrade"]
 

@@ -10,6 +10,24 @@ __pycache__/
 .coverage
 htmlcov/
 
+# Local product runtime
+runtime/app/*.sqlite3
+runtime/app/*.sqlite3-*
+runtime/app/*.db
+runtime/app/*.db-*
+runtime/app/logs/
+
+# Next.js / Node local state
+apps/web/node_modules/
+apps/web/.next/
+apps/web/out/
+apps/web/.env*
+!apps/web/.env.example
+apps/web/*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
 # Large or generated market data
 data/raw/**
 data/interim/**

@@ -11,6 +11,23 @@
 - [数据存储架构](docs/09-数据存储架构.md)：理解 Parquet、DuckDB 和 SQLite 分工；
 - [市场适配与因子适用性](docs/10-市场适配与因子适用性.md)：理解按市场独立验证；
 - [完整文档地图](docs/README.md)：按流程、数据、治理和安装查找文档。
+- [产品需求规格 v1](docs/15-产品需求规格-v1.md)：查看已冻结的 Agent-first 产品需求和验收；
+- [产品化目标架构 v1](docs/16-产品化目标架构-v1.md)：查看 Web、External Agent、API、Worker 和审计控制平面；
+- [架构重构实施计划](docs/17-架构重构实施计划.md)：查看阶段0纵切和后续功能渐进路线。
+
+## 产品化阶段 0
+
+产品首页正在演进为“AI 策略研究工作台”。当前采用 Agent-first hybrid architecture：Codex 等 External Local Agent 继续作为可见研究执行者，Web 负责控制、审批、审计和结果展示；二者共享 FastAPI/CLI 领域接口与 append-only 审计记录。当前固定为 `external_local_agent + local_runtime`，Embedded Provider、Hosted Sandbox、Local Connector 和真实 LLM 调用均未实现。
+
+阶段0开发入口：
+
+```bash
+./scripts/dev-api.sh
+./scripts/dev-web.sh
+./scripts/dev-worker.sh
+```
+
+API 默认仅监听 `127.0.0.1:8000`，Web 默认监听 `127.0.0.1:3000`。根页面进入 `/studio`。Worker 当前只报告能力，没有注册回测处理器，不会伪造 Job 成功。
 
 ## 个人轻量策略研究模式
 

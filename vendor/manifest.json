@@ -57,6 +57,25 @@
       "purpose": "automated tests and coverage",
       "install_path": ".venv",
       "sha256": null
+    },
+    {
+      "name": "product-api-stack",
+      "version": "fastapi 0.139.2; pydantic 2.13.4; uvicorn 0.51.0",
+      "source": "PyPI: fastapi, pydantic, uvicorn",
+      "license": "FastAPI MIT; Pydantic MIT; Uvicorn BSD-3-Clause",
+      "purpose": "local OpenAPI, request validation and localhost development server",
+      "install_path": ".venv",
+      "sha256": null
+    },
+    {
+      "name": "web-product-stack",
+      "version": "next 16.2.10; react 19.2.7; @tanstack/react-query 5.101.3; zod 4.4.3; tailwindcss 4.3.3",
+      "source": "https://registry.npmjs.org/",
+      "license": "Next.js MIT; React MIT; TanStack Query MIT; Zod MIT; Tailwind CSS MIT",
+      "purpose": "local AI strategy studio control, audit and read-only research views",
+      "install_path": "apps/web/node_modules",
+      "lockfile": "apps/web/package-lock.json",
+      "sha256": null
     }
   ]
 }
