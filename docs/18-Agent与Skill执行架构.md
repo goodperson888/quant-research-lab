@@ -245,3 +245,13 @@ Provider adapter 只转换厂商协议，不解释或放宽 ResearchToolGateway 
 浏览器持久存储、Git、项目配置、SQLite 和日志；本地未来只允许 OS Keychain、环境变量
 和进程内存。当前 API 只有 manifest/status 只读端点，不提供 Key 接口或真实模型调用。
 商业与分发边界见 [本地商业交付与模型兼容策略](23-本地商业交付与模型兼容策略.md)。
+
+## 14. ResearchBudget、Regime mode 与 Worker budget
+
+Agent 在批准新 hypothesis、创建 search/locked-test Job 前必须读取会话预算。超限只能记录
+blocked，不得通过新对话或换 Provider 绕过。Regime diagnostic 可在 viability 前运行但
+不得晋升；formal validation 必须引用同 subject 的 passed viability。
+
+Freqtrade correctness 仅映射到 `run_correctness_diagnostic` 白名单工具，Worker 最终执行
+固定命令并记录 Artifact。Worker 的时间/RSS/并发/batch 政策同样由代码执行，不依赖 Agent
+承诺。详见 [阶段2研究门禁与资源预算](24-阶段2研究门禁与资源预算.md)。

@@ -20,6 +20,7 @@
 - [存储治理与保留策略](docs/21-存储治理与保留策略.md)：查看权威、可重建、可归档数据和 Trial 保留规则；
 - [ETH 永续一年数据扩展记录](docs/22-ETH永续一年数据扩展记录.md)：查看当前年度数据、缺口、metadata 和代理结果。
 - [本地商业交付与模型兼容策略](docs/23-本地商业交付与模型兼容策略.md)：查看本地交付、许可证到期、模型门禁、密钥和 Freqtrade 商业边界。
+- [阶段2研究门禁与资源预算](docs/24-阶段2研究门禁与资源预算.md)：查看 Regime 双模式、正确性诊断、会话与 Worker 硬预算。
 
 ## 产品化阶段 0
 
@@ -59,6 +60,10 @@ external engine，不随商业包捆绑。模型必须满足
 Pipeline Profile 配置于 `configs/pipelines/`，顺序为 correctness → fast screen → viability →
 cheap sensitivity → regime/Pine → full validation/locked/full stress → dry-run。只比 baseline
 少亏的结果只作为 diagnostic improvement，不是完整可交易 strategy candidate。
+
+Regime 在 viability 前只能使用 `regime_diagnostic`，正式 `regime_validation` 必须引用同一
+subject 的 passed viability。每个 ResearchSession 和 one-shot Worker 都受机器可读预算
+限制；Freqtrade lookahead/recursive 只作为可选外部引擎的 correctness 证据。
 
 ## 数据存储方案
 
@@ -121,8 +126,9 @@ automation/         定时任务模板
 - 可重建 DuckDB 视图和 Freqtrade 本地 Parquet 数据。
 - 只读 storage policy/report、ex-ante regime detector 和 Native/Freqtrade 引擎边界。
 
-第一阶段依赖固定为 Python 3.12、研究数据栈、QuantStats、pytest 和基础
-Freqtrade。Hyperopt/FreqAI/vectorbt 暂不安装。
+第一阶段核心依赖固定为 Python 3.12、研究数据栈、QuantStats 和 pytest；开发环境另有
+固定版 Freqtrade 可选 extra，用于数据兼容和外部引擎诊断，不是商业核心必需依赖。
+Hyperopt/FreqAI/vectorbt 暂不安装。
 
 当前权威年度数据窗口为 `2025-07-20T00:00:00Z`（含）至
 `2026-07-20T00:00:00Z`（不含）：

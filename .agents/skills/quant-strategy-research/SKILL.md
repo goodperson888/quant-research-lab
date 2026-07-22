@@ -25,6 +25,7 @@ description: Orchestrate safe, auditable, fail-fast quantitative strategy resear
 4. Treat viability as a standalone-strategy gate, separate from correctness, incremental improvement, robustness, locked-test and dry-run gates.
 5. Never call a strategy candidate merely because it loses less than baseline. Record it as `diagnostic_improvement`, reject the standalone strategy when appropriate, and preserve a reusable component only with separate evidence.
 6. Require a passed viability result before full stress. Cheap cost sensitivity requires fast-screen evidence and is a kill test, not full validation.
+7. Declare regime work as `regime_diagnostic` or `regime_validation`. Allow diagnostics before viability only as screening evidence; require the same subject's passed viability gate for formal validation.
 
 Read [references/pipeline-gates.md](references/pipeline-gates.md) whenever evaluating a gate, creating a StrategyOutcome or ComponentCandidate, running regime validation, reconciling Pine, or creating a stress Job.
 
@@ -58,13 +59,27 @@ Do not tune parameters conversationally or one-by-one without a budget. Require 
 
 Only then create a `parameter_search` Job. The deterministic Worker, not the Agent, runs Trials. Analyze stable regions and validation results before using the locked test.
 
+Also load the ResearchSession budget before approving a new hypothesis or creating a search Job. Stop and preserve `research_budget.blocked` evidence when max hypotheses, total Trials, compute minutes or locked-test uses are exhausted. A plan-level budget never replaces the session-level budget.
+
 ## Keep regime and Pine claims bounded
 
 - Use only ex-ante observable regime labels. Never label history from future returns.
+- Use `regime_diagnostic` before viability and keep it at diagnostic/screening/insufficient-history. Use `regime_validation` only with the same subject's passed viability GateEvaluation.
 - Treat 90-day regime results as `screening` or `insufficient_history`, never long-term validation.
 - For natural-language/Python sources, move full Pine/TradingView reconciliation after fast screen and viability.
 - For Pine sources, perform early semantic, repainting, multi-timeframe and a few golden-trade checks; move the complete Pine diagnostic after viability.
 - Require explicit approval records with an exact `subject_id`; a free-floating “approved” flag is insufficient.
+
+## Run correctness diagnostics safely
+
+- Use Freqtrade `lookahead-analysis` or `recursive-analysis` only through `scripts/freqtrade.sh` and the allowlisted correctness Job.
+- Treat Freqtrade as a customer-installed optional external engine. If unavailable, record unsupported/blocked evidence and continue to support the Native Engine.
+- Never run a rejected strategy, locked-test range, `trade`, arbitrary command or arbitrary path.
+- Record stdout/stderr in a project-relative Artifact and label it correctness-only, not strategy performance.
+
+## Respect Worker resources
+
+Load `configs/workers/local.yaml`. Keep the one-shot concurrency at one, report elapsed time and peak RSS, batch Trial metrics using the configured Parquet row target, and fail with preserved evidence when time or memory limits are exceeded.
 
 ## Use safe artifact references
 

@@ -1,5 +1,5 @@
-version: 2
-policy_id: quant_lab_document_routing_v2
+version: 3
+policy_id: quant_lab_document_routing_v3
 default_agent_run_mode: guided
 instruction_precedence:
   - system_developer_runtime_permissions
@@ -23,6 +23,10 @@ enforcement:
     - full_stress_requires_viability
     - ex_ante_regime_labels
     - exact_approval_subject_id
+    - explicit_regime_mode
+    - formal_regime_requires_viability
+    - session_research_budget
+    - worker_resource_budget
 
 intents:
   - intent: strategy_intake
@@ -98,6 +102,7 @@ intents:
     allowed_tools:
       - create_job
       - run_backtest
+      - run_correctness_diagnostic
       - get_job
       - generate_report
     required_outputs:
@@ -105,6 +110,7 @@ intents:
       - job_logs
       - trades_or_failure_reason
       - baseline_report
+      - correctness_diagnostic_artifact_or_explicit_unsupported
       - audit_events
     approval_gate:
       action: freeze_or_change_baseline
@@ -193,18 +199,23 @@ intents:
       - market_profile_selected
       - gate_inputs_and_evidence_declared
       - no_locked_test_use_before_viability
+      - regime_mode_declared
+      - passed_same_subject_viability_when_mode_is_regime_validation
+      - research_session_budget_available
     allowed_tools:
       - list_pipeline_profiles
       - evaluate_gate
       - create_strategy_outcome
       - create_component_candidate
       - record_regime_validation
+      - run_correctness_diagnostic
       - generate_report
     required_outputs:
       - gate_evaluation
       - stop_or_continue_decision
       - strategy_outcome_or_component_branch
       - audit_events
+      - budget_usage_or_blocked_evidence
     approval_gate:
       action: locked_test_full_stress_or_state_change
       required: explicit_subject_id_and_user_confirmation

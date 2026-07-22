@@ -31,6 +31,10 @@ These rules apply to every automated agent working in this project.
 27. Regime labels must be observable ex ante. Ninety-day regime evidence is only `screening` or `insufficient_history`, never long-term validation.
 28. Move full Pine/TradingView reconciliation after fast screen and viability. Pine-origin strategies still require early semantic, repainting, multi-timeframe, and golden-trade checks.
 29. Approval records and UI actions must identify an exact `subject_id`; a free-floating “agree/approve” flag is insufficient for backend state changes.
+30. Regime work must declare `regime_diagnostic` or `regime_validation`. Diagnostic work may run before viability but can only produce screening/diagnostic evidence; formal validation requires the same subject's passed viability gate.
+31. Freqtrade lookahead/recursive diagnostics are correctness evidence only. They must use the safe wrapper, must not use locked-test data or rejected strategies, and cannot be described as strategy performance evidence.
+32. Every ResearchSession is bounded by the configured hypothesis, Trial, compute-minute and locked-test-use budget. Exceeding a budget must create blocked evidence; an Agent cannot override it in a prompt.
+33. The one-shot Worker must enforce and report its configured time, memory, concurrency and Parquet batch limits. Resource failure preserves the Job, manifest/Trial evidence already produced and failure reason.
 
 ## Instruction priority and enforcement
 

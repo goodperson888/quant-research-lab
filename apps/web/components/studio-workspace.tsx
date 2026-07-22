@@ -14,6 +14,8 @@ import {
   PipelineProfile,
   ProjectStatus,
   RegimeValidation,
+  ResearchBudget,
+  ResearchBudgetPolicy,
   Session,
   StrategyOutcome,
   StrategyDraft,
@@ -83,6 +85,16 @@ export function StudioWorkspace() {
   const regimes = useQuery({
     queryKey: ["regime-validations"],
     queryFn: () => apiFetch<RegimeValidation[]>("/api/regime-validations"),
+  });
+  const budgetPolicy = useQuery({
+    queryKey: ["research-budget-policy"],
+    queryFn: () => apiFetch<ResearchBudgetPolicy>("/api/research-budget/default"),
+  });
+  const sessionBudget = useQuery({
+    queryKey: ["research-budget", session?.id],
+    queryFn: () =>
+      apiFetch<ResearchBudget>(`/api/research/sessions/${session?.id}/budget`),
+    enabled: Boolean(session?.id),
   });
   const selectedProfile = profiles.data?.find((profile) => profile.id === pipelineProfileId);
   const latestViability = gates.data?.find((gate) => gate.gate_name === "viability");
@@ -191,6 +203,32 @@ export function StudioWorkspace() {
             <div className="rounded-lg border border-dashed border-white/15 p-3 text-xs leading-5 text-slate-400">
               尚无 AgentRun。默认模式为 <span className="text-slate-200">guided</span>；读取和安全研究任务可自动，冻结与参数搜索必须审批。
             </div>
+          </Panel>
+          <Panel title="Research Budget">
+            {sessionBudget.data ? (
+              <div className="space-y-2 text-xs">
+                <Meta
+                  label="Hypotheses"
+                  value={`${sessionBudget.data.remaining_hypotheses} / ${sessionBudget.data.max_hypotheses} remaining`}
+                />
+                <Meta
+                  label="Trials"
+                  value={`${sessionBudget.data.remaining_trials} / ${sessionBudget.data.max_trials_total} remaining`}
+                />
+                <Meta
+                  label="Compute"
+                  value={`${sessionBudget.data.remaining_compute_minutes} min remaining`}
+                />
+                <Meta
+                  label="Locked test"
+                  value={`${sessionBudget.data.remaining_locked_test_uses} uses remaining`}
+                />
+              </div>
+            ) : (
+              <Empty>
+                默认预算：{budgetPolicy.data?.max_hypotheses ?? "—"} hypotheses / {budgetPolicy.data?.max_trials_total ?? "—"} trials；创建会话后显示已用与剩余。
+              </Empty>
+            )}
           </Panel>
           <Panel title="Audit Timeline">
             <div className="max-h-72 space-y-3 overflow-auto pr-1">
@@ -361,12 +399,13 @@ export function StudioWorkspace() {
             {regimes.data?.length ? (
               <div className="space-y-2 text-xs">
                 <Meta label="Evidence" value={regimes.data[0].evidence_status} />
+                <Meta label="Mode" value={regimes.data[0].mode} />
                 <Meta label="Unknown" value={regimes.data[0].unknown_regimes.join(", ") || "none"} />
               </div>
             ) : (
               <Empty>
-                尚未运行 regime validation；90日证据最多标记 screening/insufficient_history，
-                当前一年数据也只可形成 extended-validation evidence，不等于 validated。
+                Viability 前只允许 regime_diagnostic，结论只能是 diagnostic/screening；
+                正式 regime_validation 必须引用同一 subject 的 passed viability。
               </Empty>
             )}
             <div className="mt-3 border-t border-white/[0.06] pt-3 text-xs leading-5 text-slate-400">

@@ -70,6 +70,17 @@ export type AgentManifest = {
   adapter_priority?: string[];
 };
 
+export type WorkerResourcePolicy = {
+  available: boolean;
+  reason?: string;
+  policy_id?: string;
+  max_rss_mb?: number;
+  max_concurrent_trials?: number;
+  max_job_minutes?: number;
+  parquet_batch_rows?: number;
+  kill_on_memory_limit?: boolean;
+};
+
 export type Session = {
   id: string;
   title: string;
@@ -180,6 +191,7 @@ export type RegimeValidation = {
   id: string;
   subject_type: string;
   subject_id: string;
+  mode: "regime_diagnostic" | "regime_validation";
   market_profile: string;
   detector_version: string;
   ex_ante_observable: boolean;
@@ -192,7 +204,36 @@ export type RegimeValidation = {
   transition_policy: Record<string, unknown>;
   history_days: number;
   evidence_status: "screening" | "insufficient_history" | "extended_validation";
+  viability_gate_result_id: string | null;
   created_at: string;
+};
+
+export type ResearchBudget = {
+  session_id: string;
+  max_hypotheses: number;
+  max_trials_total: number;
+  max_compute_minutes: number;
+  max_locked_test_uses: number;
+  require_user_approval_for_new_hypothesis: boolean;
+  used_hypotheses: number;
+  reserved_trials: number;
+  reserved_compute_minutes: number;
+  used_locked_test_uses: number;
+  remaining_hypotheses: number;
+  remaining_trials: number;
+  remaining_compute_minutes: number;
+  remaining_locked_test_uses: number;
+};
+
+export type ResearchBudgetPolicy = {
+  available: boolean;
+  reason?: string;
+  policy_id?: string;
+  max_hypotheses?: number;
+  max_trials_total?: number;
+  max_compute_minutes?: number;
+  max_locked_test_uses?: number;
+  require_user_approval_for_new_hypothesis?: boolean;
 };
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {

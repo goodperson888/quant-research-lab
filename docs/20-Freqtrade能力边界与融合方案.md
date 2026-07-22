@@ -26,6 +26,7 @@ external engine。商业包不捆绑、复制或修改 Freqtrade，`src/quant_la
 | 用途 | 当前权威引擎 | 说明 |
 |---|---|---|
 | correctness/smoke | Native research engine | 保守的项目自有语义，易做单元测试和交易级解释 |
+| lookahead/recursive correctness | 可选 Freqtrade external engine | viability 前允许，只产生正确性 Artifact，不使用 rejected 策略或 locked test |
 | fast screen/cheap sensitivity | Native research engine | 快速 kill test，支持自定义 funding 缺口政策和归因 |
 | 当前已保存的 baseline/candidate/stress 证据 | Native research engine | 不得追溯性地改写为“Freqtrade 回测结果” |
 | 第二引擎对账 | Freqtrade adapter | 核对策略接口、精度、费用、订单与交易序列 |
@@ -68,6 +69,10 @@ external engine。商业包不捆绑、复制或修改 Freqtrade，`src/quant_la
 - 尚未建立历史杠杆阶梯和强平模型；
 - 尚未启用 Hyperopt、FreqAI 或 dry-run；
 - `scripts/freqtrade.sh trade` 仍必须返回退出码 3。
+
+阶段2已经接入 `correctness_diagnostic` Job 的固定命令边界、Artifact/Audit 导入和 fixture
+smoke。它只允许 `lookahead-analysis`、`recursive-analysis`，客户未安装外部引擎时明确
+失败并保留证据。本项目尚未对真实可行策略运行这两项诊断。
 
 ## 6. 商业分发与许可证复核
 

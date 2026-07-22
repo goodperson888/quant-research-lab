@@ -2,7 +2,13 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-import { AgentManifest, AgentStatus, apiFetch, ProjectStatus } from "@/lib/api";
+import {
+  AgentManifest,
+  AgentStatus,
+  apiFetch,
+  ProjectStatus,
+  WorkerResourcePolicy,
+} from "@/lib/api";
 
 export function SettingsStatus() {
   const project = useQuery({
@@ -17,9 +23,13 @@ export function SettingsStatus() {
     queryKey: ["agent-manifest"],
     queryFn: () => apiFetch<AgentManifest>("/api/agent/manifest"),
   });
-  if (project.isPending || agent.isPending || manifest.isPending)
+  const workerPolicy = useQuery({
+    queryKey: ["worker-resource-policy"],
+    queryFn: () => apiFetch<WorkerResourcePolicy>("/api/worker/resource-policy"),
+  });
+  if (project.isPending || agent.isPending || manifest.isPending || workerPolicy.isPending)
     return <div className="text-sm text-slate-500">读取本地设置…</div>;
-  if (project.isError || agent.isError || manifest.isError)
+  if (project.isError || agent.isError || manifest.isError || workerPolicy.isError)
     return <div className="text-sm text-rose-300">API未连接，无法读取真实状态。</div>;
   return (
     <div className="grid gap-4 lg:grid-cols-2">
@@ -63,6 +73,31 @@ export function SettingsStatus() {
         <Row label="Live trading" value="disabled / endpoint absent" />
         <Row label="生产晋升" value="API unavailable" />
         <Row label="任意Shell" value="API unavailable" />
+      </Section>
+      <Section title="Worker 资源预算">
+        {workerPolicy.data.available ? (
+          <>
+            <Row label="Policy" value={workerPolicy.data.policy_id ?? "unknown"} />
+            <Row label="Max RSS" value={`${workerPolicy.data.max_rss_mb} MiB`} />
+            <Row label="Max job" value={`${workerPolicy.data.max_job_minutes} min`} />
+            <Row
+              label="Concurrent trials"
+              value={String(workerPolicy.data.max_concurrent_trials)}
+            />
+            <Row
+              label="Parquet batch"
+              value={`${workerPolicy.data.parquet_batch_rows} rows`}
+            />
+            <Row
+              label="Memory limit"
+              value={workerPolicy.data.kill_on_memory_limit ? "hard fail + preserve evidence" : "report only"}
+            />
+          </>
+        ) : (
+          <p className="text-sm text-amber-200/80">
+            Worker 资源策略不可用：{workerPolicy.data.reason ?? "unknown"}
+          </p>
+        )}
       </Section>
       <Section title="未来模式（未实现）">
         <Row label="embedded_cloud_provider" value="planned / unsupported" />
