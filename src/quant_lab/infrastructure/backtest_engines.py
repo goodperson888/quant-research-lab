@@ -31,10 +31,11 @@ class NativeBacktestEngineAdapter:
 
 
 class FreqtradeBacktestEngineAdapter:
-    """Boundary for a future reviewed Freqtrade executor.
+    """Boundary for an optional, customer-installed external Freqtrade executor.
 
-    The adapter deliberately has no subprocess implementation. Tests or a future Worker
-    may inject a deterministic executor that accepts a validated Job.
+    Core product code does not import or bundle Freqtrade. The adapter deliberately has
+    no subprocess implementation. Tests or a future reviewed Worker connector may inject
+    a deterministic executor that accepts a validated Job through a standard protocol.
     """
 
     def __init__(
@@ -50,6 +51,8 @@ class FreqtradeBacktestEngineAdapter:
             supports_dry_run=True,
             requires_exchange_metadata=True,
             notes=(
+                "Optional external engine; the Native Engine remains the default core.",
+                "Customer installs Freqtrade separately; it is not bundled with the commercial package.",
                 "No live trade capability is exposed through this adapter.",
                 "Exchange metadata and explicit funding/mark/index treatment are required.",
                 "Hyperopt is not enabled for conversational or unbudgeted tuning.",

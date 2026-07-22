@@ -32,7 +32,11 @@ from quant_lab.infrastructure.backtest_engines import (
     FreqtradeBacktestEngineAdapter,
     NativeBacktestEngineAdapter,
 )
-from quant_lab.infrastructure.project_readers import DataSummaryReader, ProjectStatusReader
+from quant_lab.infrastructure.project_readers import (
+    AgentManifestReader,
+    DataSummaryReader,
+    ProjectStatusReader,
+)
 from quant_lab.application.storage import StorageReporter
 from quant_lab.infrastructure.sqlite_product_repository import SQLiteProductRepository
 from quant_lab.paths import app_database_path, project_root
@@ -87,6 +91,7 @@ def create_app(
     )
     provider = UnconfiguredLLMProvider()
     project_reader = ProjectStatusReader(resolved_root)
+    agent_manifest_reader = AgentManifestReader(resolved_root)
     data_reader = DataSummaryReader(resolved_root)
     storage_reporter = StorageReporter(resolved_root)
     engine_registry = BacktestEngineRegistry(
@@ -348,6 +353,7 @@ def create_app(
                 "note": "Codex/CLI/API actions share the append-only audit timeline.",
             },
             "embedded_provider": asdict(provider.status()),
+            "model_policy": agent_manifest_reader.summary(),
             "controls": {
                 "pause_cancel_reserved": True,
                 "approval_required_for": [
@@ -357,6 +363,11 @@ def create_app(
                 ],
             },
         }
+
+    @application.get("/api/agent/manifest", tags=["agent-control-plane"])
+    def agent_manifest() -> dict[str, Any]:
+        """Expose the fixed model capability contract without provider secrets."""
+        return agent_manifest_reader.read()
 
     @application.get(
         "/api/audit/events",

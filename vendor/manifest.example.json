@@ -5,8 +5,10 @@
       "version": "TO_BE_PINNED",
       "source": "official release or source archive",
       "license": "GPL-3.0",
-      "purpose": "backtesting, hyperopt, dry-run and execution",
-      "path": "vendor/freqtrade",
+      "purpose": "optional external engine installed separately by the customer",
+      "path": "external_installation_not_bundled",
+      "integration": "independent process, restricted CLI and standard file protocol",
+      "commercial_review": "license counsel review required before paid distribution",
       "checksum": null
     }
   ]

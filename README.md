@@ -19,6 +19,7 @@
 - [Freqtrade 能力边界与融合方案](docs/20-Freqtrade能力边界与融合方案.md)：区分 Native 与 Freqtrade 引擎职责；
 - [存储治理与保留策略](docs/21-存储治理与保留策略.md)：查看权威、可重建、可归档数据和 Trial 保留规则；
 - [ETH 永续一年数据扩展记录](docs/22-ETH永续一年数据扩展记录.md)：查看当前年度数据、缺口、metadata 和代理结果。
+- [本地商业交付与模型兼容策略](docs/23-本地商业交付与模型兼容策略.md)：查看本地交付、许可证到期、模型门禁、密钥和 Freqtrade 商业边界。
 
 ## 产品化阶段 0
 
@@ -35,6 +36,11 @@
 API 默认仅监听 `127.0.0.1:8000`，Web 默认监听 `127.0.0.1:3000`。根页面进入 `/studio`。
 `dev-worker.sh` 是 one-shot：无 `--job-id` 只打印 status 并退出，不是正在运行的常驻队列。
 指定 `--job-id job_xxx` 时才执行一个白名单 Job。
+
+商业首版计划以客户本地安装包或受管容器交付 Web Studio，不交付 Git 仓库。Native
+Engine 是默认核心；Freqtrade 是客户自行安装、通过独立进程/标准文件协议连接的可选
+external engine，不随商业包捆绑。模型必须满足
+`capability_gated_modern_models_only` 契约，当前 Provider 仍未配置且不提供 Key 录入。
 
 项目级 Agent 编排 Skill 位于 `.agents/skills/quant-strategy-research/`。所有研究动作先按 `configs/agent_policies/document-routing.yaml` 选择 intent、读取必需文档、检查前置条件和审批门禁；安全不只依赖提示词，后端状态机、Repository、ArtifactStore、Job 白名单和测试共同执行约束。
 

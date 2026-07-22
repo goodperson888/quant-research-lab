@@ -40,6 +40,34 @@ export type AgentStatus = {
     provider: string | null;
     message: string;
   };
+  model_policy: AgentManifestSummary;
+};
+
+export type AgentManifestSummary = {
+  available: boolean;
+  reason?: string;
+  policy_id?: string;
+  minimum_context_tokens?: number;
+  weak_model_fallback_allowed?: boolean;
+  provider_configured: boolean;
+};
+
+export type AgentManifest = {
+  available: boolean;
+  reason?: string;
+  provider_configured: boolean;
+  policy_id?: string;
+  status?: string;
+  minimum_capabilities?: {
+    native_tool_calling: boolean;
+    json_schema_structured_output: boolean;
+    multi_turn_tool_results: boolean;
+    minimum_context_tokens: number;
+    instruction_hierarchy: boolean;
+    languages: string[];
+  };
+  forbidden_compatibility_modes?: string[];
+  adapter_priority?: string[];
 };
 
 export type Session = {

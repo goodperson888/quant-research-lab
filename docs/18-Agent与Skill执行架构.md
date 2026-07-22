@@ -233,3 +233,15 @@ External Agent 可以通过 CLI/API/未来 MCP 工作；Embedded Agent 由 Worke
 ## 12. Phase 0/本轮边界
 
 本轮实现文档路由、项目 Skill、端口、领域验证、SQLite 最小持久化和测试。不实现完整 MCP Server、LLM 调用、参数优化器、Local Connector、Hosted Sandbox、多用户或远程事件总线。
+
+## 13. 模型能力与密钥契约
+
+External Agent 与未来 Embedded/BYOK Provider 共用业务协议，但 Embedded/BYOK 模型还
+必须满足 `configs/agents/agent-manifest.json`。门禁要求原生 tool calling、JSON Schema、
+多轮 tool results、至少 32K context、指令层级和中英文；禁止 chat-only、提示词模拟工具、
+free-text JSON 修补和静默弱模型降级。
+
+Provider adapter 只转换厂商协议，不解释或放宽 ResearchToolGateway 权限。Key 禁止写入
+浏览器持久存储、Git、项目配置、SQLite 和日志；本地未来只允许 OS Keychain、环境变量
+和进程内存。当前 API 只有 manifest/status 只读端点，不提供 Key 接口或真实模型调用。
+商业与分发边界见 [本地商业交付与模型兼容策略](23-本地商业交付与模型兼容策略.md)。

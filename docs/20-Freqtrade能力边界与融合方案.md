@@ -4,7 +4,7 @@
 
 ## 1. 当前实际能力
 
-项目内固定 Freqtrade `2026.6`、CCXT `4.5.67`。实机审计确认：
+开发环境通过可选 extra 固定 Freqtrade `2026.6`、CCXT `4.5.67`。实机审计确认：
 
 - CLI 提供 `backtesting`、`backtesting-analysis`、`hyperopt`、`download-data`、
   `list-data`、`lookahead-analysis`、`recursive-analysis` 和 `trade`等命令；
@@ -18,6 +18,11 @@
 
 ## 2. 引擎权威边界
 
+Native Engine 是默认商业核心，未安装 Freqtrade 时核心研究流程仍可运行。Freqtrade
+不是商业包必需依赖，而是客户自行安装、以独立进程/受限 CLI/标准文件协议连接的可选
+external engine。商业包不捆绑、复制或修改 Freqtrade，`src/quant_lab` 核心业务代码
+不得直接 import Freqtrade。
+
 | 用途 | 当前权威引擎 | 说明 |
 |---|---|---|
 | correctness/smoke | Native research engine | 保守的项目自有语义，易做单元测试和交易级解释 |
@@ -29,7 +34,8 @@
 
 `BacktestEnginePort` 是通用边界，`NativeBacktestEngineAdapter` 包装现有
 审阅过的 Job Handler；`FreqtradeBacktestEngineAdapter` 当前只提供能力声明和
-可注入的确定性 executor，不暴露任意 Shell 或 `trade`。
+可注入的确定性 executor，不直接 import Freqtrade，不暴露任意 Shell 或 `trade`。
+未安装 external engine 时应报告 unavailable，而不是使 Native Engine 失效。
 
 ## 3. 功能重叠与取舍
 
@@ -62,3 +68,10 @@
 - 尚未建立历史杠杆阶梯和强平模型；
 - 尚未启用 Hyperopt、FreqAI 或 dry-run；
 - `scripts/freqtrade.sh trade` 仍必须返回退出码 3。
+
+## 6. 商业分发与许可证复核
+
+Freqtrade 当前标注为 GPL-3.0。该许可证对最终制品、安装器、进程边界、协议和客户自行
+安装流程的影响必须在正式收费前交由开源许可证律师复核。项目文档只记录工程事实和待
+审查风险，不作法律结论。商业交付决策详见
+[本地商业交付与模型兼容策略](23-本地商业交付与模型兼容策略.md)。

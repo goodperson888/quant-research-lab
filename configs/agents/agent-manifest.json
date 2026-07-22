@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "policy_id": "capability_gated_modern_models_only",
+  "status": "contract_only_no_provider_configured",
+  "minimum_capabilities": {
+    "native_tool_calling": true,
+    "json_schema_structured_output": true,
+    "multi_turn_tool_results": true,
+    "minimum_context_tokens": 32768,
+    "instruction_hierarchy": true,
+    "languages": [
+      "zh-CN",
+      "en"
+    ]
+  },
+  "forbidden_compatibility_modes": [
+    "chat_only",
+    "prompt_simulated_tools",
+    "free_text_json_repair",
+    "silent_weak_model_fallback"
+  ],
+  "adapter_priority": [
+    "openai_compatible",
+    "anthropic_on_demand",
+    "gemini_on_demand"
+  ],
+  "provider_adapter_boundary": {
+    "normalizes_vendor_protocol_only": true,
+    "research_tool_gateway_unchanged": true,
+    "approval_gates_unchanged": true,
+    "baseline_immutability_unchanged": true,
+    "live_trading_prohibition_unchanged": true
+  },
+  "secret_policy": {
+    "forbidden_locations": [
+      "browser_persistent_storage",
+      "git",
+      "project_config",
+      "sqlite",
+      "logs"
+    ],
+    "local_allowed_locations": [
+      "os_keychain",
+      "environment_variable",
+      "process_memory"
+    ],
+    "future_hosted_allowed_locations": [
+      "encrypted_secret_manager"
+    ]
+  }
+}

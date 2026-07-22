@@ -27,8 +27,10 @@
       "version": "2026.6",
       "source": "https://pypi.org/project/freqtrade/2026.6/",
       "license": "GPL-3.0",
-      "purpose": "historical data tools, backtesting and later dry-run",
-      "install_path": ".venv",
+      "purpose": "optional customer-installed external engine for development smoke, second-engine reconciliation and future reviewed dry-run preparation",
+      "install_path": ".venv (development optional extra only; not bundled in commercial package)",
+      "distribution_boundary": "commercial package does not bundle, copy or modify Freqtrade; core code does not import it and communicates through a reviewed external process/file protocol",
+      "review_required": "open-source license counsel review before paid distribution; no legal conclusion is made by this manifest",
       "sha256": null
     },
     {
