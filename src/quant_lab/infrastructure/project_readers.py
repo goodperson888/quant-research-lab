@@ -50,11 +50,30 @@ class DataSummaryReader:
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
         self.summary_path = self.root / "data" / "catalog" / "catalog_summary.json"
-        self.manifest_path = (
+        annual_v2 = (
+            self.root
+            / "data"
+            / "manifests"
+            / "binance_ethusdt_perpetual_20250720_20260720_v2.json"
+        )
+        annual_v1 = (
+            self.root
+            / "data"
+            / "manifests"
+            / "binance_ethusdt_perpetual_20250720_20260720.json"
+        )
+        stage1 = (
             self.root
             / "data"
             / "manifests"
             / "binance_ethusdt_perpetual_20260421_20260720.json"
+        )
+        self.manifest_path = (
+            annual_v2
+            if annual_v2.is_file()
+            else annual_v1
+            if annual_v1.is_file()
+            else stage1
         )
 
     def read(self) -> dict[str, Any]:
@@ -79,11 +98,12 @@ class DataSummaryReader:
             "source": manifest["source"],
             "range": manifest["range"],
             "symbol": manifest["symbol"],
+            "data_version": manifest["data_version"],
             "cost_model": manifest["cost_model"],
             "datasets": summary,
             "quality_gaps": gaps,
             "research_limit": (
-                "90 complete UTC days support engineering validation and initial "
-                "screening only; they do not demonstrate long-term profitability."
+                "One complete UTC year improves regime coverage but still does not "
+                "demonstrate long-term profitability or a repeatable full market cycle."
             ),
         }

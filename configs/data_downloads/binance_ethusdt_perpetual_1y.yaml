@@ -1,0 +1,60 @@
+schema_version: 1
+download_id: binance_ethusdt_perpetual_20250720_20260720
+market_profile: configs/market_profiles/crypto_perpetual.binance.eth.yaml
+source:
+  venue: binance
+  official_archive: https://data.binance.vision/data/futures/um
+  public_api_metadata: https://fapi.binance.com/fapi/v1/exchangeInfo
+  credentials_required: false
+range:
+  start_utc_inclusive: "2025-07-20T00:00:00Z"
+  end_utc_exclusive: "2026-07-20T00:00:00Z"
+symbol:
+  unified: ETH/USDT:USDT
+  native: ETHUSDT
+timeframes: [5m, 15m, 1h, 4h]
+datasets:
+  - futures_ohlcv
+  - funding_rate
+  - mark_price
+  - index_price
+  - open_interest_metrics
+data_version: binance-vision-ethusdt-perpetual-20250720_20260720-v1
+manifest_artifact_key: data/manifests/binance_ethusdt_perpetual_20250720_20260720_v2.json
+quality_report_artifact_key: reports/data_quality/binance_ethusdt_perpetual_20250720_20260720_v2.md
+storage:
+  raw_immutable: true
+  processed_versioned: true
+  atomic_writes: true
+  parquet_compression: zstd
+  automatic_deletion: false
+routing:
+  intent: data_download
+  required_docs:
+    - docs/01-数据规范.md
+    - docs/09-数据存储架构.md
+    - docs/10-市场适配与因子适用性.md
+    - docs/14-ETH永续第一阶段数据记录.md
+    - docs/18-Agent与Skill执行架构.md
+    - docs/21-存储治理与保留策略.md
+    - docs/22-ETH永续一年数据扩展记录.md
+  preconditions:
+    explicit_market_profile: true
+    utc_inclusive_start_and_exclusive_end: true
+    public_data_or_separately_authorized_credentials: true
+    immutable_raw_destination: true
+  approval:
+    public_network_download_authorized_by_user: true
+  tools:
+    - download_market_data
+    - validate_market_data
+    - build_data_manifest
+    - build_catalog_views
+  required_outputs:
+    - immutable_raw_data
+    - parquet_dataset
+    - data_manifest
+    - quality_report
+limitations:
+  - "One year improves coverage but does not prove long-term profitability."
+  - "Unavailable funding, mark, index or OI intervals must remain explicit and never become zero."

@@ -1,0 +1,83 @@
+{
+  "manifest_version": 1,
+  "metadata_version": "official-public-metadata-20260722T115453Z",
+  "market_profiles": [
+    "crypto_perpetual.binance.eth",
+    "crypto_perpetual.okx.eth"
+  ],
+  "created_at": "2026-07-22T11:54:53.219967+00:00",
+  "records": [
+    {
+      "source_id": "binance_usdt_futures_exchange_info",
+      "source_url": "https://fapi.binance.com/fapi/v1/exchangeInfo",
+      "fetched_at": "2026-07-22T11:54:53.219967+00:00",
+      "http_status": 200,
+      "credentials_used": false,
+      "proxy_used": true,
+      "raw_artifact_key": "data/external/market_metadata/binance_usdt_futures_exchange_info/20260722T115453Z.json",
+      "bytes": 1707866,
+      "sha256": "66a9708b064bfc3c6301c5fed6069c7642fabbfd900057ab9eaa1920f8bad78c",
+      "summary": {
+        "symbol": "ETHUSDT",
+        "pair": "ETHUSDT",
+        "contract_type": "PERPETUAL",
+        "status": "TRADING",
+        "base_asset": "ETH",
+        "quote_asset": "USDT",
+        "margin_asset": "USDT",
+        "price_precision": 2,
+        "quantity_precision": 3,
+        "price_filter": {
+          "filterType": "PRICE_FILTER",
+          "minPrice": "39.86",
+          "tickSize": "0.01",
+          "maxPrice": "306177"
+        },
+        "lot_size": {
+          "maxQty": "10000",
+          "filterType": "LOT_SIZE",
+          "stepSize": "0.001",
+          "minQty": "0.001"
+        },
+        "market_lot_size": {
+          "maxQty": "2000",
+          "minQty": "0.001",
+          "filterType": "MARKET_LOT_SIZE",
+          "stepSize": "0.001"
+        },
+        "min_notional": {
+          "filterType": "MIN_NOTIONAL",
+          "notional": "20"
+        }
+      }
+    },
+    {
+      "source_id": "okx_eth_usdt_swap_instrument",
+      "source_url": "https://www.okx.com/api/v5/public/instruments?instType=SWAP&instId=ETH-USDT-SWAP",
+      "fetched_at": "2026-07-22T11:54:53.219967+00:00",
+      "http_status": 200,
+      "credentials_used": false,
+      "proxy_used": true,
+      "raw_artifact_key": "data/external/market_metadata/okx_eth_usdt_swap_instrument/20260722T115453Z.json",
+      "bytes": 1529,
+      "sha256": "a30f33e63c556943bc025e81bfedc4bb2aed64bb31e4a6ae8125250eb5a11dad",
+      "summary": {
+        "instId": "ETH-USDT-SWAP",
+        "instType": "SWAP",
+        "state": "live",
+        "ctType": "linear",
+        "ctVal": "0.1",
+        "ctValCcy": "ETH",
+        "settleCcy": "USDT",
+        "tickSz": "0.01",
+        "lotSz": "0.01",
+        "minSz": "0.01",
+        "lever": "100"
+      }
+    }
+  ],
+  "limitations": [
+    "This is a point-in-time metadata cache, not historical leverage-tier data.",
+    "No API key or account-specific fee tier was used."
+  ]
+}

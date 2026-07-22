@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -119,10 +120,17 @@ def build_item(
     )
 
 
-def build_plan(root: Path, symbol: str, start: datetime, end: datetime) -> list[DownloadItem]:
+def build_plan(
+    root: Path,
+    symbol: str,
+    start: datetime,
+    end: datetime,
+    *,
+    timeframes: tuple[str, ...] = tuple(TIMEFRAME_MINUTES),
+) -> list[DownloadItem]:
     plan: list[DownloadItem] = []
     for archive_kind, period in archive_periods(start, end):
-        for timeframe in TIMEFRAME_MINUTES:
+        for timeframe in timeframes:
             plan.append(build_item(root, symbol, "klines", archive_kind, period, timeframe))
         for dataset in ("markPriceKlines", "indexPriceKlines"):
             plan.append(build_item(root, symbol, dataset, archive_kind, period, "15m"))
@@ -237,7 +245,6 @@ def download_item(item: DownloadItem, *, timeout: int, attempts: int) -> dict[st
                     "archive_kind": item.archive_kind,
                     "period": item.period,
                     "url": item.url,
-                    "raw_path": str(item.raw_path),
                     "status": "checksum_mismatch",
                     "sha256": digest,
                     "official_checksum": official_checksum,
@@ -316,6 +323,7 @@ def write_partitioned_parquet(
     symbol: str,
     dataset: str,
     timeframe: str | None,
+    data_version: str,
 ) -> list[dict[str, Any]]:
     outputs: list[dict[str, Any]] = []
     grouped = frame.groupby([frame["timestamp"].dt.year, frame["timestamp"].dt.month])
@@ -329,6 +337,7 @@ def write_partitioned_parquet(
             / f"symbol={symbol}"
             / f"dataset={output_dataset_name(dataset)}"
             / f"timeframe={timeframe or 'native'}"
+            / f"version={data_version}"
             / f"year={year:04d}"
             / f"month={month:02d}"
         )
@@ -338,7 +347,14 @@ def write_partitioned_parquet(
         path = directory / f"part-{first}-{last}.parquet"
         temporary = path.with_suffix(".parquet.part")
         partition.to_parquet(temporary, index=False, compression="zstd")
-        temporary.replace(path)
+        if path.exists():
+            if sha256_file(temporary) != sha256_file(path):
+                raise FileExistsError(
+                    f"processed partition already exists with different content: {path}"
+                )
+            temporary.unlink()
+        else:
+            temporary.replace(path)
         outputs.append(
             {
                 "path": str(path),
@@ -389,6 +405,10 @@ def quality_summary(
                 "sample_missing_timestamps": [value.isoformat() for value in missing[:20]],
             }
         )
+        if dataset == "metrics":
+            summary["off_grid_timestamps"] = int(
+                (timestamps.dropna().dt.floor(f"{minutes}min") != timestamps.dropna()).sum()
+            )
     if dataset == "klines" and len(frame):
         numeric = frame[["open", "high", "low", "close"]].apply(
             pd.to_numeric, errors="coerce"
@@ -413,6 +433,7 @@ def process_group(
     timeframe: str | None,
     start: datetime,
     end: datetime,
+    data_version: str,
 ) -> dict[str, Any]:
     usable = [
         record
@@ -454,6 +475,7 @@ def process_group(
         symbol=symbol,
         dataset=dataset,
         timeframe=timeframe,
+        data_version=data_version,
     )
     return {
         "dataset": output_dataset_name(dataset),
@@ -472,7 +494,18 @@ def write_manifest(
     end: datetime,
     records: list[dict[str, Any]],
     processed: list[dict[str, Any]],
+    dataset_id: str,
+    data_version: str,
+    manifest_name: str,
+    timeframes: tuple[str, ...],
+    proxy_used: bool,
 ) -> Path:
+    okx_gap = (
+        "Official OKX public metadata is reachable through the user-provided local "
+        "proxy; this scoped annual extension did not download OKX history."
+        if proxy_used
+        else "OKX public API was not reachable without a proxy; no OKX history was downloaded."
+    )
     portable_records = []
     for record in records:
         portable = dict(record)
@@ -491,8 +524,8 @@ def write_manifest(
         portable_processed.append(portable)
     manifest = {
         "manifest_version": 1,
-        "dataset_id": "binance_ethusdt_perpetual_stage1_20260421_20260720",
-        "data_version": "binance-vision-ethusdt-perpetual-20260421-20260720-v1",
+        "dataset_id": dataset_id,
+        "data_version": data_version,
         "created_at": utc_now(),
         "market_profile": profile["profile_id"],
         "source": {
@@ -500,7 +533,8 @@ def write_manifest(
             "effective_source": "binance_official_archive",
             "base_url": BASE_URL,
             "credentials_used": False,
-            "okx_gap": "Public API unavailable from current network; no OKX market data downloaded.",
+            "proxy_used": proxy_used,
+            "okx_gap": okx_gap,
         },
         "range": {
             "start_utc_inclusive": start.isoformat(),
@@ -508,7 +542,7 @@ def write_manifest(
             "complete_utc_days": (end - start).days,
         },
         "symbol": {"unified": "ETH/USDT:USDT", "native": "ETHUSDT"},
-        "timeframes": ["5m", "15m", "1h", "4h"],
+        "timeframes": list(timeframes),
         "cost_model": profile["cost_model"],
         "processing": {
             "script": "scripts/download_binance_vision.py",
@@ -528,33 +562,44 @@ def write_manifest(
         "raw_archives": portable_records,
         "processed_datasets": portable_processed,
         "data_gaps": [
-            "OKX public API inaccessible from current network.",
+            okx_gap,
             "Leverage tiers and liquidation engine are not included in Binance Vision archives.",
             "Funding, mark, index and open-interest availability is reported per processed dataset and never assumed to be zero.",
         ],
         "research_limitations": [
-            "Ninety complete UTC days are for pipeline validation and initial candidate screening only.",
-            "This window does not cover a full bull/bear cycle and cannot establish long-term profitability.",
+            "Historical coverage is research evidence only and cannot establish future profitability.",
+            "A one-year window improves regime coverage but still does not prove a complete or repeatable market cycle.",
             "No future lower-timeframe aggregate may be used at the current decision timestamp.",
         ],
     }
-    path = root / "data" / "manifests" / "binance_ethusdt_perpetual_20260421_20260720.json"
+    path = root / "data" / "manifests" / manifest_name
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        raise FileExistsError(f"manifest is immutable and already exists: {path}")
     temporary = path.with_suffix(".json.part")
     temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temporary.replace(path)
     return path
 
 
-def write_report(root: Path, processed: list[dict[str, Any]], manifest_path: Path) -> Path:
+def write_report(
+    root: Path,
+    processed: list[dict[str, Any]],
+    manifest_path: Path,
+    *,
+    start: datetime,
+    end: datetime,
+    report_name: str,
+    proxy_used: bool,
+) -> Path:
     lines = [
-        "# ETHUSDT 永续 90 日数据质量摘要",
+        "# ETHUSDT 永续数据质量摘要",
         "",
         f"- Manifest: `{manifest_path.relative_to(root)}`",
-        "- 精确窗口：2026-04-21T00:00:00Z（含）至 2026-07-20T00:00:00Z（不含）",
-        "- 请求主源：OKX；当前网络不可达。",
-        "- 实际可用源：Binance 官方历史归档，无密钥。",
-        "- 用途：工程验证、原样基准和候选初筛；不证明长期盈利。",
+        f"- 精确窗口：{start.isoformat()}（含）至 {end.isoformat()}（不含）",
+        f"- 代理使用：{proxy_used}（仅公开官方数据）。",
+        "- 实际行情源：Binance 官方历史归档，无密钥。",
+        "- 用途：工程验证、原样基准、候选初筛和市场状态覆盖；不证明长期盈利。",
         "",
         "| 数据集 | 周期 | 状态 | 行数 | 理论行数 | 缺口 | 重复 | OHLC异常 |",
         "|---|---:|---|---:|---:|---:|---:|---:|",
@@ -578,13 +623,20 @@ def write_report(root: Path, processed: list[dict[str, Any]], manifest_path: Pat
             "",
             "## 明确缺口",
             "",
-            "- OKX 当前网络不可达，未取得 OKX 对照数据。",
+            (
+                "- OKX 公共 metadata 可通过用户指定的本机代理访问；"
+                "本轮范围仅扩展 Binance 一年历史，未下载 OKX 一年数据。"
+                if proxy_used
+                else "- OKX 直连不可达，未取得 OKX 对照数据。"
+            ),
             "- 杠杆阶梯、强平引擎、最小金额和精度规则尚未进入历史回测模型。",
             "- 任何不可用的 funding/mark/index/OI 数据均在 manifest 中标为 unavailable，不按零处理。",
         ]
     )
-    path = root / "reports" / "data_quality" / "ethusdt_perpetual_stage1.md"
+    path = root / "reports" / "data_quality" / report_name
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        raise FileExistsError(f"quality report already exists: {path}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 
@@ -595,6 +647,20 @@ def main() -> int:
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--attempts", type=int, default=5)
+    parser.add_argument("--start-utc")
+    parser.add_argument("--end-utc")
+    parser.add_argument("--dataset-id")
+    parser.add_argument("--data-version")
+    parser.add_argument("--manifest-name")
+    parser.add_argument("--report-name")
+    parser.add_argument(
+        "--timeframes",
+        nargs="+",
+        choices=sorted(TIMEFRAME_MINUTES),
+        default=list(TIMEFRAME_MINUTES),
+    )
+    parser.add_argument("--proxy-used", action="store_true")
+    parser.add_argument("--plan-only", action="store_true")
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
@@ -605,10 +671,46 @@ def main() -> int:
     if not profile.get("enabled"):
         raise SystemExit("Selected market profile is not enabled.")
 
-    start = parse_utc(profile["history"]["start_utc_inclusive"])
-    end = parse_utc(profile["history"]["end_utc_exclusive"])
+    start = parse_utc(args.start_utc or profile["history"]["start_utc_inclusive"])
+    end = parse_utc(args.end_utc or profile["history"]["end_utc_exclusive"])
+    if end <= start:
+        raise SystemExit("end must be after start")
+    range_slug = start.strftime("%Y%m%d") + "_" + end.strftime("%Y%m%d")
+    dataset_id = args.dataset_id or f"binance_ethusdt_perpetual_{range_slug}"
+    data_version = args.data_version or f"binance-vision-ethusdt-perpetual-{range_slug}-v1"
+    manifest_name = args.manifest_name or f"{dataset_id}.json"
+    report_name = args.report_name or f"{dataset_id}.md"
+    timeframes = tuple(args.timeframes)
     symbol = profile["symbols"][0]["native"]
-    plan = build_plan(root, symbol, start, end)
+    plan = build_plan(root, symbol, start, end, timeframes=timeframes)
+    if args.plan_only:
+        cached = [item for item in plan if item.raw_path.is_file()]
+        print(
+            json.dumps(
+                {
+                    "market_profile": profile["profile_id"],
+                    "symbol": symbol,
+                    "range": {
+                        "start_utc_inclusive": start.isoformat(),
+                        "end_utc_exclusive": end.isoformat(),
+                        "complete_utc_days": (end - start).days,
+                    },
+                    "timeframes": list(timeframes),
+                    "planned_archive_requests": len(plan),
+                    "cached_immutable_archives": len(cached),
+                    "missing_archive_requests": len(plan) - len(cached),
+                    "cached_bytes": sum(item.raw_path.stat().st_size for item in cached),
+                    "disk_free_bytes": shutil.disk_usage(root).free,
+                    "dataset_id": dataset_id,
+                    "data_version": data_version,
+                    "manifest_artifact_key": f"data/manifests/{manifest_name}",
+                    "automatic_deletion": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
     records: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
@@ -637,7 +739,7 @@ def main() -> int:
     )
 
     processed: list[dict[str, Any]] = []
-    for timeframe in TIMEFRAME_MINUTES:
+    for timeframe in timeframes:
         processed.append(
             process_group(
                 records,
@@ -647,6 +749,7 @@ def main() -> int:
                 timeframe=timeframe,
                 start=start,
                 end=end,
+                data_version=data_version,
             )
         )
     for dataset in ("markPriceKlines", "indexPriceKlines"):
@@ -659,6 +762,7 @@ def main() -> int:
                 timeframe="15m",
                 start=start,
                 end=end,
+                data_version=data_version,
             )
         )
     for dataset in ("fundingRate", "metrics"):
@@ -671,6 +775,7 @@ def main() -> int:
                 timeframe=None,
                 start=start,
                 end=end,
+                data_version=data_version,
             )
         )
 
@@ -681,8 +786,21 @@ def main() -> int:
         end=end,
         records=records,
         processed=processed,
+        dataset_id=dataset_id,
+        data_version=data_version,
+        manifest_name=manifest_name,
+        timeframes=timeframes,
+        proxy_used=args.proxy_used,
     )
-    report_path = write_report(root, processed, manifest_path)
+    report_path = write_report(
+        root,
+        processed,
+        manifest_path,
+        start=start,
+        end=end,
+        report_name=report_name,
+        proxy_used=args.proxy_used,
+    )
     print(f"manifest={manifest_path}")
     print(f"report={report_path}")
     return 0
