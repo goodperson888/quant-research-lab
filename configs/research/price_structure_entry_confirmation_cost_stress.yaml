@@ -1,0 +1,54 @@
+schema_version: 1
+intent: stress_test
+candidate_version_id: version_6fb00b22ee724fb89fe60a39cd0dadcc
+baseline_version_id: version_2dae8104719c43398a2760421e363a9c
+market_profile: crypto_perpetual.binance.eth
+candidate_run_manifest_artifact_key: experiments/runs/20260722T031716Z-candidate-3ff2e4df/manifest.json
+candidate_acceptance_artifact_key: reports/proposals/proposal_9515e2ec16b94fcabdf519874f1a11fa-acceptance.json
+
+scope:
+  train: "[2026-04-21T00:00:00Z, 2026-06-20T00:00:00Z)"
+  validation: "[2026-06-20T00:00:00Z, 2026-07-10T00:00:00Z)"
+  previous_locked_test_used: false
+  future_locked_test_used: false
+
+entry_rule:
+  mode: confirmation_candle_breakout
+  leverage: 1.0
+  live_trading_enabled: false
+
+funding:
+  required: true
+  missing_policy: adverse_p99_abs_observed
+  zero_funding_fallback_allowed: false
+
+reference_cost_model:
+  fee_per_side: 0.0005
+  slippage_bps_per_side: 2.0
+
+scenarios:
+  - id: high_slippage_5bps
+    description: Keep taker fee fixed and raise slippage to 5 bps per side.
+    fee_per_side: 0.0005
+    slippage_bps_per_side: 5.0
+  - id: doubled_fee_and_slippage
+    description: Double both the taker fee and baseline slippage assumptions.
+    fee_per_side: 0.001
+    slippage_bps_per_side: 4.0
+
+failure_conditions:
+  - metric: validation_total_return_delta_vs_candidate
+    operator: lt
+    value: -0.05
+    interpretation: Cost stress reduces validation return by more than 5 percentage points.
+  - metric: validation_max_drawdown_abs
+    operator: gt
+    value: 0.20
+    interpretation: Validation drawdown exceeds 20 percent under cost stress.
+
+guardrails:
+  candidate_status_change_allowed: false
+  automatic_validation_allowed: false
+  dry_run_allowed: false
+  production_allowed: false
+  live_trading_enabled: false

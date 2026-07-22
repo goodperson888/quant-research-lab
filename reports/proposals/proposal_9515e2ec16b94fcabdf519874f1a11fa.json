@@ -1,0 +1,57 @@
+{
+  "baseline_immutable": true,
+  "baseline_version_id": "version_2dae8104719c43398a2760421e363a9c",
+  "candidate_implementation_artifact_key": "strategies/research/price_structure_hh_hl_entry_confirmation_candidate_v1.py",
+  "constraints": [
+    {
+      "actual": 0.09056603773584905,
+      "metric": "train_same_bar_stop_rate",
+      "operator": "lte",
+      "passed": true,
+      "threshold": 0.125
+    },
+    {
+      "actual": 81.0,
+      "metric": "validation_trade_count",
+      "operator": "gte",
+      "passed": true,
+      "threshold": 30.0
+    },
+    {
+      "actual": 0.1264045554047345,
+      "metric": "validation_max_drawdown_abs",
+      "operator": "lte",
+      "passed": true,
+      "threshold": 0.17820829177759823
+    }
+  ],
+  "derived_metrics": {
+    "train_same_bar_stop_rate": 0.09056603773584905,
+    "validation_max_drawdown_abs": 0.1264045554047345,
+    "validation_net_return_delta_vs_baseline": 0.08016129029987284,
+    "validation_trade_count": 81.0
+  },
+  "experiment_plan_id": "plan_58cb87968168418f9dc7711429993848",
+  "future_locked_test_required": true,
+  "manifest_artifact_key": "experiments/runs/20260722T031716Z-candidate-3ff2e4df/manifest.json",
+  "out_of_sample_comparison": {
+    "future_locked_test_available": false,
+    "locked_test_used": false,
+    "previous_locked_test_used": false,
+    "split": "validation"
+  },
+  "parameter_stability_analysis": {
+    "reason": "The approved budget contains exactly one categorical Trial; no parameter surface was searched.",
+    "status": "not_applicable_single_categorical_ablation"
+  },
+  "production_promotion_requested": false,
+  "proposal_id": "proposal_9515e2ec16b94fcabdf519874f1a11fa",
+  "proposal_type": "strategy_version",
+  "report_artifact_key": "reports/backtests/20260722T031716Z-candidate-3ff2e4df.md",
+  "run_id": "20260722T031716Z-candidate-3ff2e4df",
+  "single_change": {
+    "entry_mode": "confirmation_candle_breakout"
+  },
+  "status": "awaiting_user_acceptance",
+  "strategy_version_created": false
+}

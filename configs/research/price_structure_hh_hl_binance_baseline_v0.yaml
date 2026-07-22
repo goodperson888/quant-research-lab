@@ -1,0 +1,67 @@
+schema_version: 1
+intent: baseline_backtest
+session_id: session_3e4a8d5c390949bf9cf6691859fdf4fe
+strategy_version_id: version_2dae8104719c43398a2760421e363a9c
+strategy_artifact_key: strategies/research/price_structure_hh_hl_baseline_v0.py
+market_profile: crypto_perpetual.binance.eth
+validation_scope: binance_only
+data_manifest_key: data/manifests/binance_ethusdt_perpetual_20260421_20260720.json
+
+evaluation_range:
+  start_utc_inclusive: "2026-04-21T00:00:00+00:00"
+  end_utc_exclusive: "2026-07-20T00:00:00+00:00"
+
+time_splits:
+  train:
+    start_utc_inclusive: "2026-04-21T00:00:00+00:00"
+    end_utc_exclusive: "2026-06-20T00:00:00+00:00"
+    complete_utc_days: 60
+  validation:
+    start_utc_inclusive: "2026-06-20T00:00:00+00:00"
+    end_utc_exclusive: "2026-07-10T00:00:00+00:00"
+    complete_utc_days: 20
+  locked_test:
+    start_utc_inclusive: "2026-07-10T00:00:00+00:00"
+    end_utc_exclusive: "2026-07-20T00:00:00+00:00"
+    complete_utc_days: 10
+    inspection_count_before_this_run: 0
+    contaminated: false
+
+strategy_parameters:
+  timeframe: 15m
+  pivot_left_bars: 2
+  pivot_right_bars: 2
+  strict_pivot_comparison: true
+  signal_on_first_structure_transition_only: true
+  entry: next_bar_open
+  fixed_take_profit: null
+  stop: latest_confirmed_opposite_swing
+  same_bar_conflict: protective_stop_first
+  allow_long: true
+  allow_short: true
+  pyramiding: false
+  hedging: false
+  maximum_positions: 1
+  leverage: 1.0
+
+cost_model:
+  order_assumption: taker
+  fee_per_side: 0.0005
+  slippage_bps_per_side: 2.0
+  leverage: 1.0
+
+funding:
+  required: true
+  source_field: last_funding_rate
+  expected_interval_hours: 8
+  missing_policy: adverse_p99_abs_observed
+  zero_funding_fallback_allowed: false
+  interpretation: Missing scheduled events are charged at the observed absolute 99th percentile in the adverse direction of the open position.
+
+limitations:
+  - The 90-day window is for engineering verification and initial screening only.
+  - Funding is unavailable after 2026-07-01 and is conservatively imputed, not reconstructed as fact.
+  - Mark and index price have a documented 96-candle gap on 2026-06-29.
+  - Binance exchangeInfo is unavailable from the current network; precision and minimum-notional execution constraints remain incomplete.
+  - Leverage tiers and liquidation mechanics are not fully modeled; research leverage remains fixed at 1.
+  - This Binance result does not validate the requested OKX primary market profile.

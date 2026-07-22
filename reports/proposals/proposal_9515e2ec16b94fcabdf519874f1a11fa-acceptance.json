@@ -1,0 +1,16 @@
+{
+  "baseline_immutable": true,
+  "baseline_version_id": "version_2dae8104719c43398a2760421e363a9c",
+  "candidate_implementation_artifact_key": "strategies/research/price_structure_hh_hl_entry_confirmation_candidate_v1.py",
+  "decision": "accepted_by_user",
+  "dry_run_enabled": false,
+  "experiment_manifest_artifact_key": "experiments/runs/20260722T031716Z-candidate-3ff2e4df/manifest.json",
+  "future_locked_test_required": true,
+  "live_trading_enabled": false,
+  "production_enabled": false,
+  "proposal_id": "proposal_9515e2ec16b94fcabdf519874f1a11fa",
+  "status": "candidate",
+  "strategy_version_id": "version_6fb00b22ee724fb89fe60a39cd0dadcc",
+  "validated": false,
+  "version": 1
+}

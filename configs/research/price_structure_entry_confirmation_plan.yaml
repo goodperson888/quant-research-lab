@@ -1,0 +1,76 @@
+schema_version: 1
+intent: parameter_optimization
+status: draft
+session_id: session_3e4a8d5c390949bf9cf6691859fdf4fe
+baseline_version_id: version_2dae8104719c43398a2760421e363a9c
+market_profile: crypto_perpetual.binance.eth
+evidence_artifact_key: reports/backtests/20260721T130001Z-baseline-7675b895-train-loss-attribution.json
+
+hypothesis: >-
+  Requiring price to break the structure-confirmation candle high for longs or
+  low for shorts before entry will reduce immediate false entries and
+  execution-cost drag without using future data.
+
+single_rule_change: >-
+  Replace next-bar-open entry with a stop-entry at the confirmation candle
+  high for longs or low for shorts. Pivot confirmation, structure transitions,
+  protective stops, opposite-structure exits, costs, leverage and position
+  limits remain identical to baseline v0.
+
+parameter_space:
+  - name: entry_mode
+    kind: categorical
+    values:
+      - confirmation_candle_breakout
+
+objectives:
+  - metric: validation_net_return_delta_vs_baseline
+    direction: maximize
+
+constraints:
+  - metric: train_same_bar_stop_rate
+    operator: lte
+    value: 0.125
+  - metric: validation_trade_count
+    operator: gte
+    value: 30
+  - metric: validation_max_drawdown_abs
+    operator: lte
+    value: 0.17820829177759823
+
+data_splits:
+  train: "[2026-04-21T00:00:00Z, 2026-06-20T00:00:00Z)"
+  validation: "[2026-06-20T00:00:00Z, 2026-07-10T00:00:00Z)"
+  locked_test: "[2026-07-22T00:00:00Z, 2026-08-21T00:00:00Z) future_unseen_not_yet_available"
+  excluded_previous_locked_test: "[2026-07-10T00:00:00Z, 2026-07-20T00:00:00Z) inspected_baseline_only"
+  embargo: "[2026-07-20T00:00:00Z, 2026-07-22T00:00:00Z)"
+
+cost_model:
+  fee_per_side: 0.0005
+  slippage_bps_per_side: 2.0
+  leverage: 1.0
+  funding_rate: required
+  zero_funding_fallback_allowed: false
+
+max_trials: 1
+time_budget_seconds: 300
+stopping_conditions:
+  - Run exactly one candidate trial against the immutable baseline; do not expand the search space.
+  - Reject if the training same-bar stop rate is above 12.5%.
+  - Reject if validation trade count is below 30.
+  - Reject if validation maximum drawdown is worse than the baseline validation drawdown.
+  - Do not inspect the future locked period until a candidate version is frozen.
+  - Preserve all negative results and stop after this single hypothesis.
+
+approval:
+  required_before_execution: true
+  confirmed_by_user: false
+  parameter_search_job_allowed: false
+
+guardrails:
+  baseline_immutable: true
+  validation_used_for_hypothesis_selection: false
+  previous_locked_test_excluded: true
+  new_locked_data_available: false
+  live_trading_enabled: false
+  automatic_production_promotion: false
