@@ -1,0 +1,58 @@
+schema_version: 1
+profile_id: fast_screen
+label: Fast Screen
+description: Fail fast before expensive validation while preserving diagnostic improvements.
+candidate_eligible: true
+stages:
+  - id: correctness
+    gate: correctness
+    approval: none
+    stop_on_fail: true
+    outputs: [code_checks, representative_trade_audit]
+  - id: fast_screen
+    gate: fast_screen
+    approval: none
+    stop_on_fail: true
+    outputs: [train_validation_metrics, manifest]
+  - id: viability
+    gate: viability
+    approval: none
+    stop_on_fail: true
+    outputs: [viability_result, failure_reasons]
+  - id: cheap_cost_sensitivity
+    gate: incremental
+    approval: none
+    stop_on_fail: true
+    outputs: [cost_sensitivity, kill_conditions]
+gates:
+  correctness:
+    requires: []
+  fast_screen:
+    requires: [correctness]
+  incremental:
+    requires: [fast_screen]
+  viability:
+    requires: [fast_screen]
+  robustness:
+    requires: [viability]
+  locked_test:
+    requires: [robustness]
+  dry_run:
+    requires: [locked_test]
+acceptance_policies:
+  crypto_perpetual:
+    standalone:
+      min_validation_net_return: 0.0
+      min_validation_profit_factor: 1.05
+      min_validation_expectancy: 0.0
+      min_validation_trades: 30
+      max_validation_drawdown_abs: 0.20
+    diagnostic_component:
+      min_incremental_net_return_delta: 0.02
+      min_validation_trades: 30
+pine_validation:
+  natural_language_or_python:
+    full_reconciliation_after: viability
+  pine_source:
+    early_checks: [semantic, repainting, multi_timeframe, golden_trades]
+    full_diagnostic_after: viability

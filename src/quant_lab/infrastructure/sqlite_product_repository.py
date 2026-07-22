@@ -13,21 +13,28 @@ from quant_lab.domain.models import (
     Artifact,
     AuditEvent,
     Constraint,
+    ComponentCandidate,
+    ComponentEvidence,
     ExecutionTargetKind,
     ExperimentPlan,
+    GateEvaluation,
     Job,
     Message,
     Objective,
     ParameterSpace,
+    Proposal,
+    Report,
     ResearchSession,
     StrategyDraft,
+    StrategyOutcome,
     StrategyVersion,
     ToolCall,
     Trial,
+    RegimeValidation,
 )
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class SQLiteProductRepository:
@@ -243,6 +250,75 @@ class SQLiteProductRepository:
                     UNIQUE (agent_run_id, artifact_key),
                     FOREIGN KEY (agent_run_id) REFERENCES agent_runs(id)
                 );
+
+                CREATE TABLE IF NOT EXISTS gate_evaluations (
+                    id TEXT PRIMARY KEY,
+                    profile_id TEXT NOT NULL,
+                    gate_name TEXT NOT NULL,
+                    subject_type TEXT NOT NULL,
+                    subject_id TEXT NOT NULL,
+                    market_profile TEXT NOT NULL,
+                    strategy_objective TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    metrics_json TEXT NOT NULL,
+                    reasons_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS strategy_outcomes (
+                    id TEXT PRIMARY KEY,
+                    strategy_version_id TEXT NOT NULL,
+                    market_profile TEXT NOT NULL,
+                    pipeline_profile_id TEXT NOT NULL,
+                    outcome_type TEXT NOT NULL,
+                    viability_gate_result_id TEXT,
+                    evidence_artifact_keys_json TEXT NOT NULL,
+                    notes TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (strategy_version_id) REFERENCES strategy_versions(id),
+                    FOREIGN KEY (viability_gate_result_id) REFERENCES gate_evaluations(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS component_evidence (
+                    id TEXT PRIMARY KEY,
+                    source_strategy_version_id TEXT NOT NULL,
+                    lineage_json TEXT NOT NULL,
+                    component_type TEXT NOT NULL,
+                    target_market_profile TEXT NOT NULL,
+                    incremental_metrics_json TEXT NOT NULL,
+                    out_of_sample_status TEXT NOT NULL,
+                    failure_conditions_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (source_strategy_version_id) REFERENCES strategy_versions(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS component_candidates (
+                    id TEXT PRIMARY KEY,
+                    evidence_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (evidence_id) REFERENCES component_evidence(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS regime_validations (
+                    id TEXT PRIMARY KEY,
+                    subject_type TEXT NOT NULL,
+                    subject_id TEXT NOT NULL,
+                    market_profile TEXT NOT NULL,
+                    detector_version TEXT NOT NULL,
+                    ex_ante_observable INTEGER NOT NULL,
+                    target_regimes_json TEXT NOT NULL,
+                    suitable_regimes_json TEXT NOT NULL,
+                    conditional_regimes_json TEXT NOT NULL,
+                    blocked_regimes_json TEXT NOT NULL,
+                    unknown_regimes_json TEXT NOT NULL,
+                    regime_metrics_json TEXT NOT NULL,
+                    transition_policy_json TEXT NOT NULL,
+                    history_days INTEGER NOT NULL,
+                    evidence_status TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
                 """
             )
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -425,6 +501,244 @@ class SQLiteProductRepository:
             )
         return version
 
+    def get_strategy_version(self, version_id: str) -> StrategyVersion:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM strategy_versions WHERE id = ?", (version_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"strategy version not found: {version_id}")
+        return self._strategy_version(row)
+
+    def create_proposal(self, proposal: Proposal) -> Proposal:
+        with self._connect() as connection:
+            draft = connection.execute(
+                "SELECT id FROM strategy_drafts WHERE id = ?", (proposal.draft_id,)
+            ).fetchone()
+            if draft is None:
+                raise NotFoundError(f"strategy draft not found: {proposal.draft_id}")
+            connection.execute(
+                """
+                INSERT INTO proposals (
+                    id, draft_id, proposal_type, content_json, status
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    proposal.id,
+                    proposal.draft_id,
+                    proposal.proposal_type,
+                    json.dumps(proposal.content, ensure_ascii=False, sort_keys=True),
+                    proposal.status,
+                ),
+            )
+        return proposal
+
+    def get_proposal(self, proposal_id: str) -> Proposal:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM proposals WHERE id = ?", (proposal_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"proposal not found: {proposal_id}")
+        return Proposal(
+            id=row["id"],
+            draft_id=row["draft_id"],
+            proposal_type=row["proposal_type"],
+            content=json.loads(row["content_json"]),
+            status=row["status"],
+        )
+
+    def list_proposals(self, draft_id: str | None = None) -> Sequence[Proposal]:
+        query = "SELECT * FROM proposals"
+        parameters: tuple[str, ...] = ()
+        if draft_id is not None:
+            query += " WHERE draft_id = ?"
+            parameters = (draft_id,)
+        query += " ORDER BY rowid DESC"
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [
+            Proposal(
+                id=row["id"],
+                draft_id=row["draft_id"],
+                proposal_type=row["proposal_type"],
+                content=json.loads(row["content_json"]),
+                status=row["status"],
+            )
+            for row in rows
+        ]
+
+    def accept_proposal(
+        self,
+        proposal: Proposal,
+        *,
+        version_id: str,
+        approval_id: str,
+        created_at: str,
+    ) -> StrategyVersion:
+        if proposal.status != "accepted":
+            raise ApprovalRequiredError("proposal acceptance must come from the user")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute(
+                "SELECT * FROM proposals WHERE id = ?", (proposal.id,)
+            ).fetchone()
+            if current is None:
+                raise NotFoundError(f"proposal not found: {proposal.id}")
+            if current["status"] != "draft":
+                raise ConflictError("proposal has already left draft state")
+            if current["draft_id"] != proposal.draft_id:
+                raise ConflictError("proposal draft identity changed")
+
+            baseline_id = proposal.content.get("baseline_version_id")
+            baseline = connection.execute(
+                """
+                SELECT * FROM strategy_versions
+                WHERE id = ? AND strategy_id = ?
+                  AND status = 'baseline' AND immutable = 1
+                """,
+                (baseline_id, proposal.draft_id),
+            ).fetchone()
+            if baseline is None:
+                raise NotFoundError("proposal requires its original immutable baseline")
+            latest_version = connection.execute(
+                "SELECT COALESCE(MAX(version), 0) AS value FROM strategy_versions WHERE strategy_id = ?",
+                (proposal.draft_id,),
+            ).fetchone()
+            version_number = int(latest_version["value"]) + 1
+            content_snapshot = {
+                "baseline_version_id": baseline_id,
+                "proposal_id": proposal.id,
+                "proposal": dict(proposal.content),
+                "automatic_validation": False,
+                "dry_run_enabled": False,
+                "production_enabled": False,
+            }
+            version = StrategyVersion(
+                id=version_id,
+                strategy_id=proposal.draft_id,
+                version=version_number,
+                status="candidate",
+                content_snapshot=content_snapshot,
+                source_snapshot=baseline["source_snapshot"],
+                created_at=created_at,
+                immutable=True,
+            )
+            connection.execute(
+                """
+                INSERT INTO strategy_versions (
+                    id, strategy_id, version, status, content_json,
+                    source_snapshot, immutable, created_at
+                ) VALUES (?, ?, ?, 'candidate', ?, ?, 1, ?)
+                """,
+                (
+                    version.id,
+                    version.strategy_id,
+                    version.version,
+                    json.dumps(
+                        version.content_snapshot,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    version.source_snapshot,
+                    version.created_at,
+                ),
+            )
+            connection.execute(
+                "UPDATE proposals SET status = 'accepted' WHERE id = ?",
+                (proposal.id,),
+            )
+            connection.execute(
+                """
+                INSERT INTO approvals (
+                    id, subject_type, subject_id, decision, actor, created_at
+                ) VALUES (?, 'strategy_proposal', ?, 'approved', 'user', ?)
+                """,
+                (approval_id, proposal.id, created_at),
+            )
+            connection.execute(
+                """
+                UPDATE research_sessions
+                SET status = 'candidate', updated_at = ?
+                WHERE id = (
+                    SELECT session_id FROM strategy_drafts WHERE id = ?
+                )
+                """,
+                (created_at, proposal.draft_id),
+            )
+        return version
+
+    def reject_candidate(
+        self,
+        *,
+        version_id: str,
+        approval_id: str,
+        created_at: str,
+    ) -> StrategyVersion:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM strategy_versions WHERE id = ?", (version_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"strategy version not found: {version_id}")
+            if row["status"] != "candidate":
+                raise ConflictError("only candidate status can transition to rejected")
+            if not bool(row["immutable"]):
+                raise ConflictError("candidate strategy version must remain immutable")
+
+            content = json.loads(row["content_json"])
+            baseline_id = content.get("baseline_version_id")
+            baseline = connection.execute(
+                """
+                SELECT id FROM strategy_versions
+                WHERE id = ? AND strategy_id = ?
+                  AND status = 'baseline' AND immutable = 1
+                """,
+                (baseline_id, row["strategy_id"]),
+            ).fetchone()
+            if baseline is None:
+                raise NotFoundError("candidate requires its original immutable baseline")
+
+            changed = connection.execute(
+                """
+                UPDATE strategy_versions SET status = 'rejected'
+                WHERE id = ? AND status = 'candidate' AND immutable = 1
+                """,
+                (version_id,),
+            )
+            if changed.rowcount != 1:
+                raise ConflictError("candidate status changed before rejection completed")
+            connection.execute(
+                """
+                INSERT INTO approvals (
+                    id, subject_type, subject_id, decision, actor, created_at
+                ) VALUES (?, 'strategy_candidate', ?, 'rejected', 'user', ?)
+                """,
+                (approval_id, version_id, created_at),
+            )
+            connection.execute(
+                """
+                UPDATE research_sessions
+                SET status = 'rejected', updated_at = ?
+                WHERE id = (
+                    SELECT session_id FROM strategy_drafts WHERE id = ?
+                )
+                """,
+                (created_at, row["strategy_id"]),
+            )
+
+        return StrategyVersion(
+            id=row["id"],
+            strategy_id=row["strategy_id"],
+            version=row["version"],
+            status="rejected",
+            content_snapshot=content,
+            source_snapshot=row["source_snapshot"],
+            immutable=True,
+            created_at=row["created_at"],
+        )
+
     def create_job(self, job: Job) -> Job:
         with self._connect() as connection:
             connection.execute(
@@ -466,6 +780,48 @@ class SQLiteProductRepository:
             raise NotFoundError(f"job not found: {job_id}")
         return self._job(row)
 
+    def update_job(
+        self,
+        job_id: str,
+        *,
+        status: str,
+        updated_at: str,
+        error: str | None = None,
+    ) -> Job:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs SET status = ?, updated_at = ?, error = ?
+                WHERE id = ?
+                """,
+                (status, updated_at, error, job_id),
+            )
+            if cursor.rowcount != 1:
+                raise NotFoundError(f"job not found: {job_id}")
+        return self.get_job(job_id)
+
+    def append_job_log(
+        self,
+        job_id: str,
+        *,
+        level: str,
+        message: str,
+        created_at: str,
+    ) -> None:
+        with self._connect() as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if exists is None:
+                raise NotFoundError(f"job not found: {job_id}")
+            connection.execute(
+                """
+                INSERT INTO job_logs (job_id, level, message, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (job_id, level, message, created_at),
+            )
+
     def list_job_logs(self, job_id: str) -> Sequence[Mapping[str, Any]]:
         with self._connect() as connection:
             rows = connection.execute(
@@ -476,6 +832,36 @@ class SQLiteProductRepository:
                 (job_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def create_report(self, report: Report) -> Report:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO reports (
+                    id, job_id, report_type, path, summary_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    report.id,
+                    report.job_id,
+                    report.report_type,
+                    report.artifact_key,
+                    json.dumps(report.summary, ensure_ascii=False, sort_keys=True),
+                    report.created_at,
+                ),
+            )
+        return report
+
+    def list_reports(self, job_id: str | None = None) -> Sequence[Report]:
+        query = "SELECT * FROM reports"
+        parameters: tuple[str, ...] = ()
+        if job_id is not None:
+            query += " WHERE job_id = ?"
+            parameters = (job_id,)
+        query += " ORDER BY created_at DESC"
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [self._report(row) for row in rows]
 
     def append_event(self, event: AuditEvent) -> AuditEvent:
         with self._connect() as connection:
@@ -659,6 +1045,37 @@ class SQLiteProductRepository:
             ).fetchall()
         return [self._trial(row) for row in rows]
 
+    def update_trial(
+        self,
+        trial_id: str,
+        *,
+        status: str,
+        metrics: Mapping[str, float],
+        log_artifact_key: str | None,
+    ) -> Trial:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE trials
+                SET status = ?, metrics_json = ?, log_artifact_key = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    json.dumps(metrics, sort_keys=True),
+                    log_artifact_key,
+                    trial_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise NotFoundError(f"trial not found: {trial_id}")
+            row = connection.execute(
+                "SELECT * FROM trials WHERE id = ?", (trial_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"trial not found: {trial_id}")
+        return self._trial(row)
+
     def create_agent_run(self, agent_run: AgentRun) -> AgentRun:
         with self._connect() as connection:
             connection.execute(
@@ -690,6 +1107,16 @@ class SQLiteProductRepository:
         if row is None:
             raise NotFoundError(f"agent run not found: {agent_run_id}")
         return self._agent_run(row)
+
+    def update_agent_run_status(self, agent_run_id: str, *, status: str) -> AgentRun:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE agent_runs SET status = ? WHERE id = ?",
+                (status, agent_run_id),
+            )
+            if cursor.rowcount != 1:
+                raise NotFoundError(f"agent run not found: {agent_run_id}")
+        return self.get_agent_run(agent_run_id)
 
     def list_agent_runs(self) -> Sequence[AgentRun]:
         with self._connect() as connection:
@@ -759,6 +1186,195 @@ class SQLiteProductRepository:
             ).fetchall()
         return [self._artifact(row) for row in rows]
 
+    def create_gate_evaluation(self, evaluation: GateEvaluation) -> GateEvaluation:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO gate_evaluations (
+                    id, profile_id, gate_name, subject_type, subject_id,
+                    market_profile, strategy_objective, status, metrics_json,
+                    reasons_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    evaluation.id,
+                    evaluation.profile_id,
+                    evaluation.gate_name,
+                    evaluation.subject_type,
+                    evaluation.subject_id,
+                    evaluation.market_profile,
+                    evaluation.strategy_objective,
+                    evaluation.status,
+                    json.dumps(evaluation.metrics, sort_keys=True),
+                    json.dumps(evaluation.reasons, ensure_ascii=False),
+                    evaluation.created_at,
+                ),
+            )
+        return evaluation
+
+    def get_gate_evaluation(self, evaluation_id: str) -> GateEvaluation:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM gate_evaluations WHERE id = ?", (evaluation_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"gate evaluation not found: {evaluation_id}")
+        return self._gate_evaluation(row)
+
+    def list_gate_evaluations(
+        self, *, subject_id: str | None = None
+    ) -> Sequence[GateEvaluation]:
+        query = "SELECT * FROM gate_evaluations"
+        parameters: tuple[str, ...] = ()
+        if subject_id is not None:
+            query += " WHERE subject_id = ?"
+            parameters = (subject_id,)
+        query += " ORDER BY created_at DESC"
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [self._gate_evaluation(row) for row in rows]
+
+    def create_strategy_outcome(self, outcome: StrategyOutcome) -> StrategyOutcome:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO strategy_outcomes (
+                    id, strategy_version_id, market_profile, pipeline_profile_id,
+                    outcome_type, viability_gate_result_id,
+                    evidence_artifact_keys_json, notes, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    outcome.id,
+                    outcome.strategy_version_id,
+                    outcome.market_profile,
+                    outcome.pipeline_profile_id,
+                    outcome.outcome_type,
+                    outcome.viability_gate_result_id,
+                    json.dumps(outcome.evidence_artifact_keys),
+                    outcome.notes,
+                    outcome.created_at,
+                ),
+            )
+        return outcome
+
+    def list_strategy_outcomes(self) -> Sequence[StrategyOutcome]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM strategy_outcomes ORDER BY created_at DESC"
+            ).fetchall()
+        return [self._strategy_outcome(row) for row in rows]
+
+    def create_component_evidence(
+        self, evidence: ComponentEvidence
+    ) -> ComponentEvidence:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO component_evidence (
+                    id, source_strategy_version_id, lineage_json, component_type,
+                    target_market_profile, incremental_metrics_json,
+                    out_of_sample_status, failure_conditions_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    evidence.id,
+                    evidence.source_strategy_version_id,
+                    json.dumps(evidence.lineage, ensure_ascii=False, sort_keys=True),
+                    evidence.component_type,
+                    evidence.target_market_profile,
+                    json.dumps(evidence.incremental_metrics, sort_keys=True),
+                    evidence.out_of_sample_status,
+                    json.dumps(evidence.failure_conditions, ensure_ascii=False),
+                    evidence.created_at,
+                ),
+            )
+        return evidence
+
+    def get_component_evidence(self, evidence_id: str) -> ComponentEvidence:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM component_evidence WHERE id = ?", (evidence_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"component evidence not found: {evidence_id}")
+        return self._component_evidence(row)
+
+    def list_component_evidence(self) -> Sequence[ComponentEvidence]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM component_evidence ORDER BY created_at DESC"
+            ).fetchall()
+        return [self._component_evidence(row) for row in rows]
+
+    def create_component_candidate(
+        self, candidate: ComponentCandidate
+    ) -> ComponentCandidate:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO component_candidates (id, evidence_id, name, status, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    candidate.id,
+                    candidate.evidence_id,
+                    candidate.name,
+                    candidate.status,
+                    candidate.created_at,
+                ),
+            )
+        return candidate
+
+    def list_component_candidates(self) -> Sequence[ComponentCandidate]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM component_candidates ORDER BY created_at DESC"
+            ).fetchall()
+        return [self._component_candidate(row) for row in rows]
+
+    def create_regime_validation(
+        self, validation: RegimeValidation
+    ) -> RegimeValidation:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO regime_validations (
+                    id, subject_type, subject_id, market_profile, detector_version,
+                    ex_ante_observable, target_regimes_json, suitable_regimes_json,
+                    conditional_regimes_json, blocked_regimes_json,
+                    unknown_regimes_json, regime_metrics_json,
+                    transition_policy_json, history_days, evidence_status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    validation.id,
+                    validation.subject_type,
+                    validation.subject_id,
+                    validation.market_profile,
+                    validation.detector_version,
+                    int(validation.ex_ante_observable),
+                    json.dumps(validation.target_regimes),
+                    json.dumps(validation.suitable_regimes),
+                    json.dumps(validation.conditional_regimes),
+                    json.dumps(validation.blocked_regimes),
+                    json.dumps(validation.unknown_regimes),
+                    json.dumps(validation.regime_metrics, sort_keys=True),
+                    json.dumps(validation.transition_policy, ensure_ascii=False, sort_keys=True),
+                    validation.history_days,
+                    validation.evidence_status,
+                    validation.created_at,
+                ),
+            )
+        return validation
+
+    def list_regime_validations(self) -> Sequence[RegimeValidation]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM regime_validations ORDER BY created_at DESC"
+            ).fetchall()
+        return [self._regime_validation(row) for row in rows]
+
     @staticmethod
     def _session(row: sqlite3.Row) -> ResearchSession:
         return ResearchSession(
@@ -794,6 +1410,96 @@ class SQLiteProductRepository:
         )
 
     @staticmethod
+    def _strategy_version(row: sqlite3.Row) -> StrategyVersion:
+        return StrategyVersion(
+            id=row["id"],
+            strategy_id=row["strategy_id"],
+            version=row["version"],
+            status=row["status"],
+            content_snapshot=json.loads(row["content_json"]),
+            source_snapshot=row["source_snapshot"],
+            immutable=bool(row["immutable"]),
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _gate_evaluation(row: sqlite3.Row) -> GateEvaluation:
+        return GateEvaluation(
+            id=row["id"],
+            profile_id=row["profile_id"],
+            gate_name=row["gate_name"],
+            subject_type=row["subject_type"],
+            subject_id=row["subject_id"],
+            market_profile=row["market_profile"],
+            strategy_objective=row["strategy_objective"],
+            status=row["status"],
+            metrics=json.loads(row["metrics_json"]),
+            reasons=tuple(json.loads(row["reasons_json"])),
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _strategy_outcome(row: sqlite3.Row) -> StrategyOutcome:
+        return StrategyOutcome(
+            id=row["id"],
+            strategy_version_id=row["strategy_version_id"],
+            market_profile=row["market_profile"],
+            pipeline_profile_id=row["pipeline_profile_id"],
+            outcome_type=row["outcome_type"],
+            viability_gate_result_id=row["viability_gate_result_id"],
+            evidence_artifact_keys=tuple(
+                json.loads(row["evidence_artifact_keys_json"])
+            ),
+            notes=row["notes"],
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _component_evidence(row: sqlite3.Row) -> ComponentEvidence:
+        return ComponentEvidence(
+            id=row["id"],
+            source_strategy_version_id=row["source_strategy_version_id"],
+            lineage=json.loads(row["lineage_json"]),
+            component_type=row["component_type"],
+            target_market_profile=row["target_market_profile"],
+            incremental_metrics=json.loads(row["incremental_metrics_json"]),
+            out_of_sample_status=row["out_of_sample_status"],
+            failure_conditions=tuple(json.loads(row["failure_conditions_json"])),
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _component_candidate(row: sqlite3.Row) -> ComponentCandidate:
+        return ComponentCandidate(
+            id=row["id"],
+            evidence_id=row["evidence_id"],
+            name=row["name"],
+            status=row["status"],
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _regime_validation(row: sqlite3.Row) -> RegimeValidation:
+        return RegimeValidation(
+            id=row["id"],
+            subject_type=row["subject_type"],
+            subject_id=row["subject_id"],
+            market_profile=row["market_profile"],
+            detector_version=row["detector_version"],
+            ex_ante_observable=bool(row["ex_ante_observable"]),
+            target_regimes=tuple(json.loads(row["target_regimes_json"])),
+            suitable_regimes=tuple(json.loads(row["suitable_regimes_json"])),
+            conditional_regimes=tuple(json.loads(row["conditional_regimes_json"])),
+            blocked_regimes=tuple(json.loads(row["blocked_regimes_json"])),
+            unknown_regimes=tuple(json.loads(row["unknown_regimes_json"])),
+            regime_metrics=json.loads(row["regime_metrics_json"]),
+            transition_policy=json.loads(row["transition_policy_json"]),
+            history_days=row["history_days"],
+            evidence_status=row["evidence_status"],
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
     def _job(row: sqlite3.Row) -> Job:
         return Job(
             id=row["id"],
@@ -803,6 +1509,17 @@ class SQLiteProductRepository:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             error=row["error"],
+        )
+
+    @staticmethod
+    def _report(row: sqlite3.Row) -> Report:
+        return Report(
+            id=row["id"],
+            job_id=row["job_id"],
+            report_type=row["report_type"],
+            artifact_key=row["path"],
+            summary=json.loads(row["summary_json"]),
+            created_at=row["created_at"],
         )
 
     @staticmethod

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
-from quant_lab.domain.errors import ApprovalRequiredError, InvalidJobError
+from quant_lab.domain.errors import ApprovalRequiredError, ConflictError, InvalidJobError
 from quant_lab.domain.models import (
     ALLOWED_JOB_TYPES,
     AgentProviderKind,
@@ -18,6 +18,7 @@ from quant_lab.domain.models import (
     Message,
     Objective,
     ParameterSpace,
+    Proposal,
     ResearchSession,
     StrategyDraft,
     StrategyVersion,
@@ -208,6 +209,44 @@ class ResearchApplicationService:
                 raise ApprovalRequiredError(
                     "parameter search requires explicit user approval of the experiment plan"
                 )
+        if job_type == "stress_test":
+            stress_level = payload.get("stress_level")
+            if stress_level == "full":
+                gate_id = payload.get("viability_gate_result_id")
+                subject_id = payload.get("strategy_version_id") or payload.get(
+                    "candidate_version_id"
+                )
+                if not isinstance(gate_id, str) or not isinstance(subject_id, str):
+                    raise ApprovalRequiredError(
+                        "full stress requires a strategy subject and passed viability gate"
+                    )
+                gate = self.repository.get_gate_evaluation(gate_id)
+                if (
+                    gate.subject_id != subject_id
+                    or gate.gate_name != "viability"
+                    or gate.status != "passed"
+                ):
+                    raise ApprovalRequiredError(
+                        "full stress is forbidden until the subject passes viability"
+                    )
+            elif stress_level == "cheap_cost_sensitivity":
+                gate_id = payload.get("fast_screen_gate_result_id")
+                subject_id = payload.get("strategy_version_id") or payload.get(
+                    "candidate_version_id"
+                )
+                if not isinstance(gate_id, str) or not isinstance(subject_id, str):
+                    raise ApprovalRequiredError(
+                        "cheap cost sensitivity requires a passed fast_screen gate"
+                    )
+                gate = self.repository.get_gate_evaluation(gate_id)
+                if (
+                    gate.subject_id != subject_id
+                    or gate.gate_name != "fast_screen"
+                    or gate.status != "passed"
+                ):
+                    raise ApprovalRequiredError(
+                        "cheap cost sensitivity requires the subject's passed fast_screen gate"
+                    )
         now = utc_now()
         job = Job(
             id=new_id("job"),
@@ -225,6 +264,151 @@ class ResearchApplicationService:
             payload={"job_type": created.job_type, "status": created.status},
         )
         return created
+
+    def propose_strategy_version(
+        self,
+        *,
+        baseline_version_id: str,
+        content: Mapping[str, Any],
+    ) -> Proposal:
+        baseline = self.repository.get_strategy_version(baseline_version_id)
+        if baseline.status != "baseline" or not baseline.immutable:
+            raise ValueError("proposal requires an immutable baseline")
+        proposal = Proposal(
+            id=new_id("proposal"),
+            draft_id=baseline.strategy_id,
+            proposal_type="strategy_version",
+            content=dict(content),
+            status="draft",
+        )
+        created = self.repository.create_proposal(proposal)
+        self._audit(
+            event_type="strategy_version.proposed",
+            aggregate_type="proposal",
+            aggregate_id=created.id,
+            payload={
+                "baseline_version_id": baseline_version_id,
+                "status": created.status,
+                "automatic_acceptance": False,
+            },
+            actor_type="external_agent",
+        )
+        return created
+
+    def accept_proposal(
+        self, *, proposal_id: str, confirmed_by_user: bool
+    ) -> StrategyVersion:
+        if not confirmed_by_user:
+            raise ApprovalRequiredError(
+                "strategy proposal acceptance requires explicit user confirmation"
+            )
+        current = self.repository.get_proposal(proposal_id)
+        if current.proposal_type != "strategy_version":
+            raise ValueError("only strategy-version proposals can be accepted")
+        content = current.content
+        if content.get("status") != "awaiting_user_acceptance":
+            raise ValueError("proposal is not awaiting user acceptance")
+        if content.get("baseline_immutable") is not True:
+            raise ValueError("proposal must preserve the immutable baseline")
+        if content.get("strategy_version_created") is not False:
+            raise ValueError("proposal already claims a strategy version")
+        if content.get("future_locked_test_required") is not True:
+            raise ValueError("candidate must retain the future locked-test requirement")
+        if content.get("production_promotion_requested") is not False:
+            raise ValueError("proposal must not request production promotion")
+        plan_id = content.get("experiment_plan_id")
+        if not isinstance(plan_id, str):
+            raise ValueError("proposal must reference an experiment plan")
+        plan = self.repository.get_experiment_plan(plan_id)
+        if plan.status != "approved" or plan.approved_by != "user":
+            raise ApprovalRequiredError("proposal requires an approved experiment plan")
+        trials = list(self.repository.list_trials(plan_id))
+        if len(trials) != 1 or trials[0].status != "succeeded":
+            raise ValueError("proposal requires exactly one succeeded bounded Trial")
+        if trials[0].metrics.get("all_constraints_passed") != 1.0:
+            raise ValueError("proposal constraints did not pass")
+
+        accepted = Proposal(
+            id=current.id,
+            draft_id=current.draft_id,
+            proposal_type=current.proposal_type,
+            content=current.content,
+            status="accepted",
+        )
+        version = self.repository.accept_proposal(
+            accepted,
+            version_id=new_id("version"),
+            approval_id=new_id("approval"),
+            created_at=utc_now(),
+        )
+        self._audit(
+            event_type="strategy_proposal.accepted",
+            aggregate_type="strategy_version",
+            aggregate_id=version.id,
+            payload={
+                "proposal_id": proposal_id,
+                "version": version.version,
+                "status": version.status,
+                "baseline_version_id": content["baseline_version_id"],
+                "baseline_overwritten": False,
+                "validated": False,
+                "dry_run": False,
+                "production": False,
+                "approved_by": "user",
+            },
+        )
+        return version
+
+    def reject_candidate(
+        self,
+        *,
+        version_id: str,
+        confirmed_by_user: bool,
+        stress_manifest_artifact_key: str,
+        failure_conditions: Sequence[Mapping[str, Any]],
+    ) -> StrategyVersion:
+        if not confirmed_by_user:
+            raise ApprovalRequiredError(
+                "candidate rejection requires explicit user confirmation"
+            )
+        current = self.repository.get_strategy_version(version_id)
+        if current.status != "candidate":
+            raise ConflictError("only a candidate strategy version can be rejected")
+        if not current.immutable:
+            raise ValueError("candidate rejection requires an immutable strategy version")
+        baseline_id = current.content_snapshot.get("baseline_version_id")
+        if not isinstance(baseline_id, str):
+            raise ValueError("candidate does not reference its immutable baseline")
+        baseline = self.repository.get_strategy_version(baseline_id)
+        if baseline.status != "baseline" or not baseline.immutable:
+            raise ValueError("candidate rejection requires its original immutable baseline")
+        if not failure_conditions:
+            raise ValueError("candidate rejection requires recorded stress failure conditions")
+
+        rejected = self.repository.reject_candidate(
+            version_id=version_id,
+            approval_id=new_id("approval"),
+            created_at=utc_now(),
+        )
+        self._audit(
+            event_type="strategy_candidate.rejected",
+            aggregate_type="strategy_version",
+            aggregate_id=rejected.id,
+            payload={
+                "previous_status": "candidate",
+                "status": rejected.status,
+                "approved_by": "user",
+                "stress_manifest_artifact_key": stress_manifest_artifact_key,
+                "failure_conditions": [dict(item) for item in failure_conditions],
+                "baseline_version_id": baseline.id,
+                "baseline_overwritten": False,
+                "locked_test_used": False,
+                "dry_run": False,
+                "production": False,
+                "live_trading": False,
+            },
+        )
+        return rejected
 
     def list_jobs(self) -> Sequence[Job]:
         return self.repository.list_jobs()
@@ -343,6 +527,28 @@ class ResearchApplicationService:
         )
         return created
 
+    def update_agent_run_status(self, *, agent_run_id: str, status: str) -> AgentRun:
+        allowed = {
+            "queued",
+            "running",
+            "waiting_approval",
+            "paused",
+            "completed",
+            "failed",
+            "cancelled",
+        }
+        if status not in allowed:
+            raise ValueError("invalid agent run status")
+        updated = self.repository.update_agent_run_status(agent_run_id, status=status)
+        self._audit(
+            event_type="agent_run.status_changed",
+            aggregate_type="agent_run",
+            aggregate_id=agent_run_id,
+            payload={"status": updated.status},
+            actor_type="external_agent",
+        )
+        return updated
+
     def record_tool_call(
         self,
         *,
@@ -442,3 +648,28 @@ class ResearchApplicationService:
             actor_type="system",
         )
         return created
+
+    def update_trial(
+        self,
+        *,
+        trial_id: str,
+        status: str,
+        metrics: Mapping[str, float],
+        log_artifact_key: str | None,
+    ) -> Trial:
+        if status not in {"running", "succeeded", "failed", "cancelled"}:
+            raise ValueError("invalid trial status")
+        updated = self.repository.update_trial(
+            trial_id,
+            status=status,
+            metrics=metrics,
+            log_artifact_key=log_artifact_key,
+        )
+        self._audit(
+            event_type="trial.status_changed",
+            aggregate_type="experiment_plan",
+            aggregate_id=updated.experiment_plan_id,
+            payload={"trial_id": updated.id, "status": updated.status},
+            actor_type="system",
+        )
+        return updated

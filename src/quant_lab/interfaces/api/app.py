@@ -10,10 +10,16 @@ from fastapi.responses import JSONResponse
 
 from quant_lab import __version__
 from quant_lab.application.services import ResearchApplicationService
+from quant_lab.application.pipeline import (
+    PipelineApplicationService,
+    PipelineProfileCatalog,
+    profile_as_dict,
+)
 from quant_lab.domain.errors import (
     ApprovalRequiredError,
     ConflictError,
     ExperimentPlanValidationError,
+    GatePolicyError,
     InvalidJobError,
     NotFoundError,
     ProviderNotConfiguredError,
@@ -27,6 +33,11 @@ from quant_lab.paths import app_database_path, project_root
 
 from .schemas import (
     AuditEventResponse,
+    ComponentCandidateResponse,
+    ComponentEvidenceResponse,
+    CreateComponentCandidateRequest,
+    CreateRegimeValidationRequest,
+    CreateStrategyOutcomeRequest,
     CreateIntakeRequest,
     CreateExperimentPlanRequest,
     CreateJobRequest,
@@ -34,11 +45,16 @@ from .schemas import (
     CreateSessionRequest,
     FreezeBaselineRequest,
     ExperimentPlanResponse,
+    EvaluateGateRequest,
+    GateEvaluationResponse,
     JobResponse,
     MessageResponse,
+    PipelineProfileResponse,
+    RegimeValidationResponse,
     SessionDetailResponse,
     SessionResponse,
     StrategyDraftResponse,
+    StrategyOutcomeResponse,
     StrategyVersionResponse,
 )
 
@@ -58,6 +74,9 @@ def create_app(
 
     repository = SQLiteProductRepository(resolved_database)
     service = ResearchApplicationService(repository)
+    pipeline_service = PipelineApplicationService(
+        repository, PipelineProfileCatalog(resolved_root)
+    )
     provider = UnconfiguredLLMProvider()
     project_reader = ProjectStatusReader(resolved_root)
     data_reader = DataSummaryReader(resolved_root)
@@ -79,6 +98,7 @@ def create_app(
     )
     application.state.repository = repository
     application.state.research_service = service
+    application.state.pipeline_service = pipeline_service
     application.state.llm_provider = provider
 
     @application.exception_handler(NotFoundError)
@@ -108,6 +128,12 @@ def create_app(
     @application.exception_handler(ExperimentPlanValidationError)
     async def handle_invalid_plan(
         _request: Request, exc: ExperimentPlanValidationError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+    @application.exception_handler(GatePolicyError)
+    async def handle_gate_policy(
+        _request: Request, exc: GatePolicyError
     ) -> JSONResponse:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
@@ -191,6 +217,8 @@ def create_app(
         tags=["strategies"],
     )
     def freeze_baseline(draft_id: str, body: FreezeBaselineRequest) -> Any:
+        if body.subject_id is not None and body.subject_id != draft_id:
+            raise GatePolicyError("approval subject_id does not match the draft")
         return service.freeze_baseline(
             draft_id=draft_id, confirmed_by_user=body.confirmed_by_user
         )
@@ -239,6 +267,8 @@ def create_app(
         tags=["experiments"],
     )
     def approve_experiment_plan(plan_id: str, body: FreezeBaselineRequest) -> Any:
+        if body.subject_id is not None and body.subject_id != plan_id:
+            raise GatePolicyError("approval subject_id does not match the experiment plan")
         return service.approve_experiment_plan(
             plan_id=plan_id, confirmed_by_user=body.confirmed_by_user
         )
@@ -312,6 +342,96 @@ def create_app(
     )
     def audit_events(limit: int = Query(default=100, ge=1, le=500)) -> Any:
         return service.list_audit_events(limit=limit)
+
+    @application.get(
+        "/api/pipeline-profiles",
+        response_model=list[PipelineProfileResponse],
+        tags=["research-pipeline"],
+    )
+    def pipeline_profiles() -> Any:
+        return [profile_as_dict(profile) for profile in pipeline_service.list_profiles()]
+
+    @application.post(
+        "/api/gates/evaluate",
+        response_model=GateEvaluationResponse,
+        status_code=status.HTTP_201_CREATED,
+        tags=["research-pipeline"],
+    )
+    def evaluate_gate(body: EvaluateGateRequest) -> Any:
+        return pipeline_service.evaluate_gate(**body.model_dump())
+
+    @application.get(
+        "/api/gates/results",
+        response_model=list[GateEvaluationResponse],
+        tags=["research-pipeline"],
+    )
+    def gate_results(subject_id: str | None = Query(default=None)) -> Any:
+        return pipeline_service.list_gate_results(subject_id=subject_id)
+
+    @application.get(
+        "/api/strategy-outcomes",
+        response_model=list[StrategyOutcomeResponse],
+        tags=["research-pipeline"],
+    )
+    def strategy_outcomes() -> Any:
+        return pipeline_service.list_strategy_outcomes()
+
+    @application.post(
+        "/api/strategy-outcomes",
+        response_model=StrategyOutcomeResponse,
+        status_code=status.HTTP_201_CREATED,
+        tags=["research-pipeline"],
+    )
+    def create_strategy_outcome(body: CreateStrategyOutcomeRequest) -> Any:
+        return pipeline_service.create_strategy_outcome(**body.model_dump())
+
+    @application.get(
+        "/api/component-candidates",
+        response_model=list[ComponentCandidateResponse],
+        tags=["research-components"],
+    )
+    def component_candidates() -> Any:
+        return pipeline_service.list_component_candidates()
+
+    @application.get(
+        "/api/component-evidence",
+        response_model=list[ComponentEvidenceResponse],
+        tags=["research-components"],
+    )
+    def component_evidence() -> Any:
+        return pipeline_service.list_component_evidence()
+
+    @application.post(
+        "/api/component-candidates",
+        response_model=ComponentCandidateResponse,
+        status_code=status.HTTP_201_CREATED,
+        tags=["research-components"],
+    )
+    def create_component_candidate(body: CreateComponentCandidateRequest) -> Any:
+        values = body.model_dump()
+        name = values.pop("name")
+        candidate_status = values.pop("status")
+        evidence = pipeline_service.create_component_evidence(**values)
+        return pipeline_service.create_component_candidate(
+            evidence_id=evidence.id, name=name, status=candidate_status
+        )
+
+    @application.get(
+        "/api/regime-validations",
+        response_model=list[RegimeValidationResponse],
+        tags=["research-regimes"],
+    )
+    def regime_validations() -> Any:
+        return pipeline_service.list_regime_validations()
+
+    @application.post(
+        "/api/regime-validations",
+        response_model=RegimeValidationResponse,
+        status_code=status.HTTP_201_CREATED,
+        tags=["research-regimes"],
+    )
+    def create_regime_validation(body: CreateRegimeValidationRequest) -> Any:
+        return pipeline_service.create_regime_validation(**body.model_dump())
 
     return application
 

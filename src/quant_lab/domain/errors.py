@@ -27,3 +27,7 @@ class ProviderNotConfiguredError(QuantLabError):
 
 class ExperimentPlanValidationError(QuantLabError):
     """An experiment plan is missing an explicit research safety boundary."""
+
+
+class GatePolicyError(QuantLabError):
+    """A configured research gate or pipeline precondition was not satisfied."""

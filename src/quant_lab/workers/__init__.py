@@ -1,8 +1,4 @@
-"""Local worker boundary.
-
-Stage 0 intentionally registers no backtest or optimization handler. Jobs remain
-queued until a deterministic, reviewed handler is added in a later phase.
-"""
+"""Local one-shot worker boundary with explicitly registered allowlisted handlers."""
 
 from .runner import LocalWorker
 

@@ -23,9 +23,15 @@ ALLOWED_RESEARCH_TOOLS = frozenset(
         "compare_runs",
         "propose_strategy_version",
         "accept_proposal",
+        "reject_candidate",
         "reject_proposal",
         "generate_report",
         "prepare_dry_run",
+        "list_pipeline_profiles",
+        "evaluate_gate",
+        "create_strategy_outcome",
+        "create_component_candidate",
+        "record_regime_validation",
     }
 )
 
@@ -73,8 +79,20 @@ class ResearchToolGateway(Protocol):
 
     def accept_proposal(self, proposal_id: str) -> Mapping[str, Any]: ...
 
+    def reject_candidate(self, version_id: str) -> Mapping[str, Any]: ...
+
     def reject_proposal(self, proposal_id: str) -> Mapping[str, Any]: ...
 
     def generate_report(self, job_id: str) -> Mapping[str, Any]: ...
 
     def prepare_dry_run(self, strategy_version_id: str) -> Mapping[str, Any]: ...
+
+    def list_pipeline_profiles(self) -> list[Mapping[str, Any]]: ...
+
+    def evaluate_gate(self, payload: Mapping[str, Any]) -> Mapping[str, Any]: ...
+
+    def create_strategy_outcome(self, payload: Mapping[str, Any]) -> Mapping[str, Any]: ...
+
+    def create_component_candidate(self, payload: Mapping[str, Any]) -> Mapping[str, Any]: ...
+
+    def record_regime_validation(self, payload: Mapping[str, Any]) -> Mapping[str, Any]: ...

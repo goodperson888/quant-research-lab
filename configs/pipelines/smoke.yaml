@@ -1,0 +1,45 @@
+schema_version: 1
+profile_id: smoke
+label: Smoke
+description: Validate wiring, data semantics and deterministic execution only.
+candidate_eligible: false
+stages:
+  - id: correctness
+    gate: correctness
+    approval: none
+    stop_on_fail: true
+    outputs: [code_checks, golden_trades]
+  - id: fast_screen
+    gate: fast_screen
+    approval: none
+    stop_on_fail: true
+    outputs: [screening_metrics]
+gates:
+  correctness:
+    requires: []
+  fast_screen:
+    requires: [correctness]
+  incremental:
+    requires: [fast_screen]
+  viability:
+    requires: [fast_screen]
+  robustness:
+    requires: [viability]
+  locked_test:
+    requires: [robustness]
+  dry_run:
+    requires: [locked_test]
+acceptance_policies:
+  crypto_perpetual:
+    standalone:
+      min_validation_net_return: 0.0
+      min_validation_profit_factor: 1.0
+      min_validation_expectancy: 0.0
+      min_validation_trades: 20
+      max_validation_drawdown_abs: 0.25
+pine_validation:
+  natural_language_or_python:
+    full_reconciliation_after: viability
+  pine_source:
+    early_checks: [semantic, repainting, multi_timeframe, golden_trades]
+    full_diagnostic_after: viability

@@ -20,6 +20,7 @@ SessionStatus = Literal[
 DraftStatus = Literal["draft", "awaiting_confirmation", "baseline_frozen"]
 JobStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 AgentRunMode = Literal["supervised", "guided", "bounded_autonomous"]
+GateStatus = Literal["passed", "failed", "blocked", "not_evaluated"]
 
 
 class AgentProviderKind(StrEnum):
@@ -34,7 +35,7 @@ class ExecutionTargetKind(StrEnum):
     HOSTED_SANDBOX = "hosted_sandbox"
 
 ALLOWED_JOB_TYPES = frozenset(
-    {"backtest", "data_quality", "parameter_search", "report"}
+    {"backtest", "data_quality", "parameter_search", "report", "stress_test"}
 )
 
 
@@ -117,7 +118,9 @@ class StrategyVersion:
     id: str
     strategy_id: str
     version: int
-    status: Literal["baseline", "candidate", "validated", "dry_run"]
+    status: Literal[
+        "baseline", "candidate", "validated", "dry_run", "degraded", "retired", "rejected"
+    ]
     content_snapshot: Mapping[str, Any]
     source_snapshot: str
     created_at: str
@@ -312,3 +315,103 @@ class AuditEvent:
     actor_type: Literal["user", "external_agent", "embedded_provider", "system"]
     payload: Mapping[str, Any]
     created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class PipelineProfile:
+    id: str
+    label: str
+    description: str
+    candidate_eligible: bool
+    stages: tuple[Mapping[str, Any], ...]
+    gates: Mapping[str, Mapping[str, Any]]
+    acceptance_policies: Mapping[str, Any]
+    pine_validation: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class GateEvaluation:
+    id: str
+    profile_id: str
+    gate_name: str
+    subject_type: Literal["strategy_version", "component_candidate", "experiment_plan"]
+    subject_id: str
+    market_profile: str
+    strategy_objective: str
+    status: GateStatus
+    metrics: Mapping[str, float]
+    reasons: tuple[str, ...]
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyOutcome:
+    id: str
+    strategy_version_id: str
+    market_profile: str
+    pipeline_profile_id: str
+    outcome_type: Literal[
+        "diagnostic_improvement", "strategy_candidate", "validated", "rejected"
+    ]
+    viability_gate_result_id: str | None
+    evidence_artifact_keys: tuple[str, ...]
+    notes: str
+    created_at: str
+
+    def __post_init__(self) -> None:
+        for artifact_key in self.evidence_artifact_keys:
+            validate_artifact_key(artifact_key)
+
+
+@dataclass(frozen=True, slots=True)
+class ComponentEvidence:
+    id: str
+    source_strategy_version_id: str
+    lineage: Mapping[str, Any]
+    component_type: Literal["entry", "filter", "exit", "risk", "execution"]
+    target_market_profile: str
+    incremental_metrics: Mapping[str, float]
+    out_of_sample_status: Literal[
+        "not_tested", "screening", "insufficient_history", "passed", "failed"
+    ]
+    failure_conditions: tuple[Mapping[str, Any], ...]
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ComponentCandidate:
+    id: str
+    evidence_id: str
+    name: str
+    status: Literal["diagnostic_improvement", "component_candidate", "rejected"]
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class RegimeValidation:
+    id: str
+    subject_type: Literal["strategy_version", "component_candidate"]
+    subject_id: str
+    market_profile: str
+    detector_version: str
+    ex_ante_observable: bool
+    target_regimes: tuple[str, ...]
+    suitable_regimes: tuple[str, ...]
+    conditional_regimes: tuple[str, ...]
+    blocked_regimes: tuple[str, ...]
+    unknown_regimes: tuple[str, ...]
+    regime_metrics: Mapping[str, Mapping[str, float]]
+    transition_policy: Mapping[str, Any]
+    history_days: int
+    evidence_status: Literal[
+        "screening", "insufficient_history", "extended_validation"
+    ]
+    created_at: str
+
+    def __post_init__(self) -> None:
+        if not self.ex_ante_observable:
+            raise ValueError("regime labels must be ex-ante observable")
+        if self.history_days <= 90 and self.evidence_status == "extended_validation":
+            raise ValueError(
+                "90-day regime evidence must remain screening or insufficient_history"
+            )
