@@ -38,6 +38,13 @@ Read [references/pipeline-gates.md](references/pipeline-gates.md) whenever evalu
 - Never optimize solely for maximum historical profit or inspect locked test repeatedly.
 - Never treat validation in one Market Profile as validation in another.
 
+## Select storage and backtest engines explicitly
+
+- Read `docs/21-存储治理与保留策略.md` for storage inventory or retention work. Preserve permanent Trial metrics, manifests and failure reasons; never auto-delete evidence.
+- Read `docs/22-ETH永续一年数据扩展记录.md` before extending or consuming the current annual ETH perpetual dataset. Keep the v2 manifest authoritative and leave funding/mark/index/OI gaps explicit.
+- Read `docs/20-Freqtrade能力边界与融合方案.md` before baseline or stress execution. Use the native engine for current smoke/fast-screen evidence and Freqtrade only as a reviewed reconciliation/full-validation adapter.
+- Do not relabel existing native runs as Freqtrade results. Do not enable Hyperopt, FreqAI or dry-run merely because their modules or CLI commands exist.
+
 ## Bound parameter search
 
 Do not tune parameters conversationally or one-by-one without a budget. Require an approved ExperimentPlan containing:

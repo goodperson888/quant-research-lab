@@ -57,6 +57,8 @@ intents:
       - docs/10-市场适配与因子适用性.md
       - docs/14-ETH永续第一阶段数据记录.md
       - docs/18-Agent与Skill执行架构.md
+      - docs/21-存储治理与保留策略.md
+      - docs/22-ETH永续一年数据扩展记录.md
     required_preconditions:
       - explicit_market_profile
       - utc_inclusive_start_and_exclusive_end
@@ -85,6 +87,7 @@ intents:
       - docs/10-市场适配与因子适用性.md
       - docs/15-产品需求规格-v1.md
       - docs/18-Agent与Skill执行架构.md
+      - docs/20-Freqtrade能力边界与融合方案.md
     required_preconditions:
       - baseline_frozen
       - market_profile_matches_validation_scope
@@ -149,6 +152,7 @@ intents:
       - docs/04-压力测试清单.md
       - docs/07-个人量化策略研究工作法.md
       - docs/18-Agent与Skill执行架构.md
+      - docs/20-Freqtrade能力边界与融合方案.md
     required_preconditions:
       - candidate_or_baseline_version_selected
       - pipeline_profile_selected
@@ -156,8 +160,8 @@ intents:
       - stress_scenarios_declared
       - cost_and_execution_assumptions_declared
       - immutable_run_manifest_destination
-      - fast_screen_passed_for_cheap_sensitivity
-      - viability_passed_for_full_stress
+      - fast_screen_passed_when_stress_level_is_cheap
+      - viability_passed_when_stress_level_is_full
     allowed_tools:
       - create_job
       - run_backtest

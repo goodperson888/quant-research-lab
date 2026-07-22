@@ -16,6 +16,9 @@
 - [架构重构实施计划](docs/17-架构重构实施计划.md)：查看阶段0纵切和后续功能渐进路线。
 - [Agent 与 Skill 执行架构](docs/18-Agent与Skill执行架构.md)：查看 Agent、Skill、文档路由、工具白名单和状态机如何共同约束执行。
 - [本地启动与操作手册](docs/19-本地启动与操作手册.md)：两个终端启动 API/Web、one-shot Worker、排错与备份。
+- [Freqtrade 能力边界与融合方案](docs/20-Freqtrade能力边界与融合方案.md)：区分 Native 与 Freqtrade 引擎职责；
+- [存储治理与保留策略](docs/21-存储治理与保留策略.md)：查看权威、可重建、可归档数据和 Trial 保留规则；
+- [ETH 永续一年数据扩展记录](docs/22-ETH永续一年数据扩展记录.md)：查看当前年度数据、缺口、metadata 和代理结果。
 
 ## 产品化阶段 0
 
@@ -57,15 +60,17 @@ cheap sensitivity → regime/Pine → full validation/locked/full stress → dry
 跨 Parquet 聚合和报告视图层；SQLite 保存因子、策略、实验和状态等注册元数据；
 JSON/YAML 保存配置与 manifest。Parquet 是可重建分析数据的权威层，DuckDB 不替代
 原始文件。当前不部署 PostgreSQL、ClickHouse 或其他服务。详见
-[docs/09-数据存储架构.md](docs/09-数据存储架构.md)。
+[docs/09-数据存储架构.md](docs/09-数据存储架构.md) 和
+[docs/21-存储治理与保留策略.md](docs/21-存储治理与保留策略.md)。
 
 ## 市场适配原则
 
 因子拆分为“通用思想、市场适配实现、市场独有数据”三层。同名或同公式因子不能跨
 市场继承 `validated`/`production` 结论，必须按资产类别、工具类型、交易场所、周期
 和成本独立验证。第一阶段已选择 OKX ETH-USDT 永续为请求主研究源、Binance 为跨所
-对照源；由于当前网络无法访问两家的实时公共 API，本次实际数据来自 Binance 官方
-历史归档。后续下载仍必须明确选择 market profile。详见
+对照源；当前一年历史实际来自 Binance 官方归档。Binance/OKX 实时 metadata 直连超时，
+但已通过用户指定的本机代理取得并缓存官方公开快照；没有下载 OKX 一年历史。后续下载
+仍必须明确选择 market profile。详见
 [docs/10-市场适配与因子适用性.md](docs/10-市场适配与因子适用性.md)。
 
 ## 安全边界
@@ -106,23 +111,26 @@ automation/         定时任务模板
 - 每日、每周任务入口；
 - Freqtrade/研究环境的隔离安装位置；
 - 禁止自动实盘的工程级约束。
-- ETH-USDT USDT 本位永续的 90 个完整 UTC 日初筛数据；
+- ETH-USDT USDT 本位永续的 365 个完整 UTC 日研究数据，并保留原 90 日版本；
 - 可重建 DuckDB 视图和 Freqtrade 本地 Parquet 数据。
+- 只读 storage policy/report、ex-ante regime detector 和 Native/Freqtrade 引擎边界。
 
 第一阶段依赖固定为 Python 3.12、研究数据栈、QuantStats、pytest 和基础
 Freqtrade。Hyperopt/FreqAI/vectorbt 暂不安装。
 
-当前数据窗口为 `2026-04-21T00:00:00Z`（含）至
+当前权威年度数据窗口为 `2025-07-20T00:00:00Z`（含）至
 `2026-07-20T00:00:00Z`（不含）：
 
 - Binance ETHUSDT 永续交易 OHLCV：5m/15m/1h/4h 全覆盖；
 - mark/index 15m 各缺 2026-06-29 的 96 根；
 - funding 只覆盖至 2026-06-30 16:00 UTC；
-- OI metrics 缺 3 个 5m 时点；
-- OKX 公共 API 当前网络不可达，尚无 OKX 对照数据。
+- OI metrics 在精确 5m 网格缺 56 个时点，其中 51 个官方时间戳偏离网格；
+- OKX/Binance 官方 metadata 可通过本机代理访问，但尚无 OKX 一年历史对照。
 
-这 90 日只用于工程验证、原样基准和候选初筛，不能证明长期盈利，也不足以覆盖完整
-牛熊周期。详见 [docs/14-ETH永续第一阶段数据记录.md](docs/14-ETH永续第一阶段数据记录.md)。
+一年数据改善了 regime screening 和 Walk-forward 设计条件，但仍不能证明长期盈利或
+覆盖可重复的完整市场周期。详见
+[docs/22-ETH永续一年数据扩展记录.md](docs/22-ETH永续一年数据扩展记录.md)；原 90 日证据
+保留在 [docs/14-ETH永续第一阶段数据记录.md](docs/14-ETH永续第一阶段数据记录.md)。
 
 ## 快速检查
 
@@ -166,18 +174,28 @@ Freqtrade 必须优先通过安全包装器调用：
 
 ```bash
 .venv/bin/python scripts/download_binance_vision.py \
-  --profile configs/market_profiles/crypto_perpetual.binance.eth.yaml
-.venv/bin/python scripts/export_freqtrade_data.py
+  --profile configs/market_profiles/crypto_perpetual.binance.eth.yaml \
+  --start-utc 2025-07-20T00:00:00Z \
+  --end-utc 2026-07-20T00:00:00Z \
+  --data-version binance-vision-ethusdt-perpetual-20250720_20260720-v1 \
+  --manifest-name REPLACE_WITH_NEW_IMMUTABLE_MANIFEST.json \
+  --report-name REPLACE_WITH_NEW_IMMUTABLE_REPORT.md \
+  --plan-only
+.venv/bin/python scripts/export_freqtrade_data.py \
+  --data-version binance-vision-ethusdt-perpetual-20250720_20260720-v1
 .venv/bin/python scripts/build_data_catalog.py
+PYTHONPATH=src .venv/bin/python -m quant_lab.cli storage-report
 ```
+
+现有年度 manifest 不可覆盖；复现或修订必须使用新文件名。`--plan-only` 不发起网络下载。
 
 ## 推荐落地顺序
 
 1. 用户提供下一份自然语言/Pine 策略，或对已有 baseline 提出一个新假设。
 2. 新策略原样收录并冻结基准；新假设必须引用现有不可变 baseline。
-3. 定义训练、验证和锁定测试切分；90 日数据只用于初筛。
+3. 定义训练、验证和锁定测试切分；一年数据仍只提供有限历史证据。
 4. 先完成基准回测，再一次验证一个改进假设。
-5. 出现候选后扩展更长历史、OKX 数据和更多市场状态。
+5. 出现可行候选后再扩展更长历史、OKX 数据和更多市场状态。
 6. 通过样本外、成本和压力测试后进入模拟盘。
 7. 流程稳定后再配置每日自动任务。
 

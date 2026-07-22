@@ -45,6 +45,8 @@ Agent 在行动前先分类 intent：strategy intake、data download、baseline 
 - `approval_gate`：触发动作前必须存在用户批准。
 
 如果一个请求跨多个 intent，例如“下载数据并回测”，必须合并两组要求，采用更严格的门禁。
+当前 data download 路由还要求阅读存储治理和年度数据记录；baseline/stress 路由要求阅读
+Freqtrade 能力边界，避免把 Native 证据误称为 Freqtrade 结果。
 
 每个 AgentRun/AuditEvent 应记录：选择的 intent、读过的文档、前置条件结果、审批、工具、脱敏参数和输出 Artifact。
 
@@ -159,7 +161,9 @@ strategies/research/strategy_abc/v1.py
 - 停止条件；
 - 用户批准。
 
-`run_parameter_search` Job 必须引用已批准计划。即使 Job 创建成功，Phase 0 Worker 也没有参数搜索 Handler，不会执行或伪造成功。
+`run_parameter_search` Job 必须引用已批准计划。当前 Worker 只有一个为既定入场确认假设
+编写的 bounded single-Trial 兼容 Handler，不是通用参数优化器；未匹配其固定计划的 Job
+会失败，不能执行或伪造成功。
 
 ### 8.3 Trial
 
@@ -203,7 +207,8 @@ Worker 是确定性执行层，不是自主 Agent。它接收已校验的 Job ID
 当前 Worker 是 one-shot：无 `--job-id` 只打印能力/status 并退出，不得在 Web 显示为
 正在常驻消费。Full stress Handler 必须自己复查 passed viability，不信任单独的 Agent 说明。
 
-当前 Handler 限于 baseline、一个有边界的入场确认 Trial 和成本压力测试。新增或现有 Handler 都必须：
+当前 Handler 限于 baseline、一个有边界的入场确认 Trial、成本压力测试和 ex-ante regime
+validation。新增或现有 Handler 都必须：
 
 - 不使用任意 Shell payload；
 - 创建实验 manifest；

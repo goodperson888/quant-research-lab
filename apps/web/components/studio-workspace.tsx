@@ -364,7 +364,10 @@ export function StudioWorkspace() {
                 <Meta label="Unknown" value={regimes.data[0].unknown_regimes.join(", ") || "none"} />
               </div>
             ) : (
-              <Empty>尚未运行 regime validation；90日数据最多标记 screening/insufficient_history。</Empty>
+              <Empty>
+                尚未运行 regime validation；90日证据最多标记 screening/insufficient_history，
+                当前一年数据也只可形成 extended-validation evidence，不等于 validated。
+              </Empty>
             )}
             <div className="mt-3 border-t border-white/[0.06] pt-3 text-xs leading-5 text-slate-400">
               Pine 来源先检查 semantic / repainting / MTF 和少量 golden trades；完整诊断在 fast screen 与 viability 通过后。
