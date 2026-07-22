@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import pandas as pd
@@ -21,11 +22,15 @@ DATADIR = ROOT / "runtime" / "freqtrade" / "user_data" / "data" / "binance"
 PAIR = "ETH/USDT:USDT"
 
 
-def load(dataset: str, timeframe: str) -> pd.DataFrame:
+def load(dataset: str, timeframe: str, *, data_version: str) -> pd.DataFrame:
+    version_root = (
+        PROCESSED
+        / f"dataset={dataset}"
+        / f"timeframe={timeframe}"
+        / f"version={data_version}"
+    )
     paths = sorted(
-        (PROCESSED / f"dataset={dataset}" / f"timeframe={timeframe}").glob(
-            "year=*/month=*/*.parquet"
-        )
+        version_root.glob("year=*/month=*/*.parquet")
     )
     if not paths:
         raise FileNotFoundError(f"No processed files for {dataset} {timeframe}")
@@ -76,21 +81,35 @@ def funding_ohlcv(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--data-version",
+        default="binance-vision-ethusdt-perpetual-20250720_20260720-v1",
+    )
+    args = parser.parse_args()
     handler = ParquetDataHandler(DATADIR)
     for timeframe in ("5m", "15m", "1h", "4h"):
-        frame = to_freqtrade_ohlcv(load("futures_ohlcv", timeframe))
+        frame = to_freqtrade_ohlcv(
+            load("futures_ohlcv", timeframe, data_version=args.data_version)
+        )
         handler.ohlcv_store(PAIR, timeframe, frame, CandleType.FUTURES)
         print(f"stored futures {timeframe}: {len(frame)}")
 
-    mark = resample_ohlcv(load("mark_price", "15m"), "1h")
+    mark = resample_ohlcv(
+        load("mark_price", "15m", data_version=args.data_version), "1h"
+    )
     handler.ohlcv_store(PAIR, "1h", mark, CandleType.MARK)
     print(f"stored mark 1h: {len(mark)}")
 
-    index = resample_ohlcv(load("index_price", "15m"), "1h")
+    index = resample_ohlcv(
+        load("index_price", "15m", data_version=args.data_version), "1h"
+    )
     handler.ohlcv_store(PAIR, "1h", index, CandleType.INDEX)
     print(f"stored index 1h: {len(index)}")
 
-    funding = funding_ohlcv(load("funding_rate", "native"))
+    funding = funding_ohlcv(
+        load("funding_rate", "native", data_version=args.data_version)
+    )
     handler.ohlcv_store(PAIR, "1h", funding, CandleType.FUNDING_RATE)
     print(f"stored funding events in 1h container: {len(funding)}")
     return 0
