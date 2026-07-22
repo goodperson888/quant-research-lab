@@ -1,5 +1,5 @@
-version: 1
-policy_id: quant_lab_document_routing_v1
+version: 2
+policy_id: quant_lab_document_routing_v2
 default_agent_run_mode: guided
 instruction_precedence:
   - system_developer_runtime_permissions
@@ -18,6 +18,11 @@ enforcement:
     - append_only_audit_events
     - locked_test_isolation
     - no_live_trade_endpoint
+    - configured_pipeline_profiles
+    - standalone_viability_gate
+    - full_stress_requires_viability
+    - ex_ante_regime_labels
+    - exact_approval_subject_id
 
 intents:
   - intent: strategy_intake
@@ -126,6 +131,7 @@ intents:
       - get_job
       - compare_runs
       - propose_strategy_version
+      - accept_proposal
     required_outputs:
       - approved_experiment_plan
       - trial_records
@@ -145,14 +151,19 @@ intents:
       - docs/18-Agent与Skill执行架构.md
     required_preconditions:
       - candidate_or_baseline_version_selected
+      - pipeline_profile_selected
+      - stress_level_declared_as_cheap_or_full
       - stress_scenarios_declared
       - cost_and_execution_assumptions_declared
       - immutable_run_manifest_destination
+      - fast_screen_passed_for_cheap_sensitivity
+      - viability_passed_for_full_stress
     allowed_tools:
       - create_job
       - run_backtest
       - compare_runs
       - generate_report
+      - reject_candidate
     required_outputs:
       - stress_run_manifests
       - sensitivity_results
@@ -162,6 +173,37 @@ intents:
     approval_gate:
       action: change_strategy_status
       required: explicit_user_confirmation
+
+  - intent: pipeline_evaluation
+    required_docs:
+      - docs/00-标准研究流程.md
+      - docs/02-回测与验收规范.md
+      - docs/04-压力测试清单.md
+      - docs/07-个人量化策略研究工作法.md
+      - docs/15-产品需求规格-v1.md
+      - docs/16-产品化目标架构-v1.md
+      - docs/18-Agent与Skill执行架构.md
+    required_preconditions:
+      - pipeline_profile_selected
+      - exact_subject_id_selected
+      - market_profile_selected
+      - gate_inputs_and_evidence_declared
+      - no_locked_test_use_before_viability
+    allowed_tools:
+      - list_pipeline_profiles
+      - evaluate_gate
+      - create_strategy_outcome
+      - create_component_candidate
+      - record_regime_validation
+      - generate_report
+    required_outputs:
+      - gate_evaluation
+      - stop_or_continue_decision
+      - strategy_outcome_or_component_branch
+      - audit_events
+    approval_gate:
+      action: locked_test_full_stress_or_state_change
+      required: explicit_subject_id_and_user_confirmation
 
   - intent: dry_run
     required_docs:

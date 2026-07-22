@@ -15,6 +15,7 @@
 - [产品化目标架构 v1](docs/16-产品化目标架构-v1.md)：查看 Web、External Agent、API、Worker 和审计控制平面；
 - [架构重构实施计划](docs/17-架构重构实施计划.md)：查看阶段0纵切和后续功能渐进路线。
 - [Agent 与 Skill 执行架构](docs/18-Agent与Skill执行架构.md)：查看 Agent、Skill、文档路由、工具白名单和状态机如何共同约束执行。
+- [本地启动与操作手册](docs/19-本地启动与操作手册.md)：两个终端启动 API/Web、one-shot Worker、排错与备份。
 
 ## 产品化阶段 0
 
@@ -28,7 +29,9 @@
 ./scripts/dev-worker.sh
 ```
 
-API 默认仅监听 `127.0.0.1:8000`，Web 默认监听 `127.0.0.1:3000`。根页面进入 `/studio`。Worker 当前只报告能力，没有注册回测处理器，不会伪造 Job 成功。
+API 默认仅监听 `127.0.0.1:8000`，Web 默认监听 `127.0.0.1:3000`。根页面进入 `/studio`。
+`dev-worker.sh` 是 one-shot：无 `--job-id` 只打印 status 并退出，不是正在运行的常驻队列。
+指定 `--job-id job_xxx` 时才执行一个白名单 Job。
 
 项目级 Agent 编排 Skill 位于 `.agents/skills/quant-strategy-research/`。所有研究动作先按 `configs/agent_policies/document-routing.yaml` 选择 intent、读取必需文档、检查前置条件和审批门禁；安全不只依赖提示词，后端状态机、Repository、ArtifactStore、Job 白名单和测试共同执行约束。
 
@@ -43,6 +46,10 @@ API 默认仅监听 `127.0.0.1:8000`，Web 默认监听 `127.0.0.1:3000`。根�
 测试、简单组件库、报告和模拟盘门禁；不启用重型机器学习、大规模因子工厂、暴力
 组合搜索或自动生产晋升。完整原则见
 [docs/07-个人量化策略研究工作法.md](docs/07-个人量化策略研究工作法.md)。
+
+Pipeline Profile 配置于 `configs/pipelines/`，顺序为 correctness → fast screen → viability →
+cheap sensitivity → regime/Pine → full validation/locked/full stress → dry-run。只比 baseline
+少亏的结果只作为 diagnostic improvement，不是完整可交易 strategy candidate。
 
 ## 数据存储方案
 
@@ -166,8 +173,8 @@ Freqtrade 必须优先通过安全包装器调用：
 
 ## 推荐落地顺序
 
-1. 用户提供第一份自然语言或 Pine Script 策略。
-2. 原样收录并冻结 15m 基准版本。
+1. 用户提供下一份自然语言/Pine 策略，或对已有 baseline 提出一个新假设。
+2. 新策略原样收录并冻结基准；新假设必须引用现有不可变 baseline。
 3. 定义训练、验证和锁定测试切分；90 日数据只用于初筛。
 4. 先完成基准回测，再一次验证一个改进假设。
 5. 出现候选后扩展更长历史、OKX 数据和更多市场状态。

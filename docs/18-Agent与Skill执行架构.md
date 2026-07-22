@@ -110,10 +110,12 @@ flowchart LR
 
 - intake/formalization：`intake_strategy`、`formalize_strategy`、`list_ambiguities`；
 - data：`download_market_data`、`validate_market_data`、`build_data_manifest`、`build_catalog_views`；
-- baseline/version：`freeze_baseline`、`propose_strategy_version`、`accept_proposal`、`reject_proposal`；
+- baseline/version：`freeze_baseline`、`propose_strategy_version`、`accept_proposal`、`reject_proposal`、`reject_candidate`（仅允许有明确人工批准和失败证据的 `candidate → rejected`）；
 - experiment：`create_experiment_plan`、`approve_experiment_plan`、`run_backtest`、`run_parameter_search`、`compare_runs`；
 - observation：`get_job`、`get_agent_run`、`generate_report`。
 - dry-run preparation：`prepare_dry_run`（只生成/校验模拟配置，不启动 live trade）。
+- pipeline：`list_pipeline_profiles`、`evaluate_gate`、`create_strategy_outcome`、
+  `create_component_candidate`、`record_regime_validation`。
 
 禁止加入：
 
@@ -167,6 +169,17 @@ strategies/research/strategy_abc/v1.py
 
 AgentRun 保存 Provider、Execution Target、run mode、状态和计划摘要。ToolCall 保存领域工具名、脱敏输入/输出和状态。密钥、Cookie、账户标识和提现凭据不得进入 ToolCall 或事件 payload。
 
+### 8.5 Pipeline 与 Fail-fast
+
+Agent 先选择 `smoke`、`fast_screen` 或 `full_validation`，然后按
+correctness、fast screen、viability、cheap sensitivity、regime/Pine、full validation/
+locked/full stress、dry-run 前进。GateEvaluation 是独立事实；任何前置失败必须
+`blocked` 或 `failed`，不可由对话跳过。
+
+“少亏”只能创建 diagnostic improvement。组件证据与完整 StrategyOutcome 分开持久化；
+失败策略不自动产生 validated factor。Regime 标签必须 ex ante，90 日只是 screening。
+完整 Pine 对账后移，Pine 来源早期仍检查 repainting/MTF 和少量 golden trades。
+
 ## 9. 审计与可观察性
 
 所有关键动作形成 append-only AuditEvent：
@@ -187,7 +200,10 @@ Web 时间线只读这些结构化事件，不从聊天文本反推事实。SQLi
 
 Worker 是确定性执行层，不是自主 Agent。它接收已校验的 Job ID，加载不可变计划和版本，执行注册 Handler，写 Trial/Run/Report/Artifact 和日志。
 
-Phase 0 Handler 为空。后续添加 Handler 时必须：
+当前 Worker 是 one-shot：无 `--job-id` 只打印能力/status 并退出，不得在 Web 显示为
+正在常驻消费。Full stress Handler 必须自己复查 passed viability，不信任单独的 Agent 说明。
+
+当前 Handler 限于 baseline、一个有边界的入场确认 Trial 和成本压力测试。新增或现有 Handler 都必须：
 
 - 不使用任意 Shell payload；
 - 创建实验 manifest；

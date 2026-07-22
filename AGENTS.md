@@ -24,6 +24,13 @@ These rules apply to every automated agent working in this project.
 20. A factor or strategy validated in one market profile is not validated in another. Validation and production status must remain separate by asset class, instrument type, venue or broker, timeframe, and cost model.
 21. Never describe FX tick volume as global real traded volume. Never treat a futures continuous series as a directly tradable contract. Stock research must handle corporate actions, delistings, and survivorship bias. Perpetual-futures research must handle funding, mark/index prices, liquidation mechanics, and venue-specific leverage rules.
 22. Do not introduce PostgreSQL, TimescaleDB, ClickHouse, InfluxDB, Redis, or other data services in the first phase without a demonstrated scale requirement and explicit user approval.
+23. Select a machine-readable Pipeline Profile (`smoke`, `fast_screen`, or `full_validation`) before research execution. Do not hide stage order, acceptance thresholds, approvals, or stop rules in strategy-specific code.
+24. Evaluate standalone viability separately from correctness, incremental improvement, robustness, locked-test, and dry-run gates. Viability thresholds are profile/market/objective policy, not universal trading truths.
+25. A result that merely loses less than baseline is not a tradable strategy candidate. Preserve it as `diagnostic_improvement` or separately evidenced `component_candidate`; never auto-promote a component from a failed strategy to validated.
+26. Cheap cost sensitivity is a post-fast-screen kill test. Full stress is forbidden until the same strategy version passes viability; the Worker must re-check this gate.
+27. Regime labels must be observable ex ante. Ninety-day regime evidence is only `screening` or `insufficient_history`, never long-term validation.
+28. Move full Pine/TradingView reconciliation after fast screen and viability. Pine-origin strategies still require early semantic, repainting, multi-timeframe, and golden-trade checks.
+29. Approval records and UI actions must identify an exact `subject_id`; a free-floating “agree/approve” flag is insufficient for backend state changes.
 
 ## Instruction priority and enforcement
 
@@ -52,5 +59,6 @@ Before taking an action in one of these intents, read the listed documents in fu
 | Parameter optimization/search | `docs/02-回测与验收规范.md`, `docs/04-压力测试清单.md`, `docs/07-个人量化策略研究工作法.md`, `docs/15-产品需求规格-v1.md`, `docs/16-产品化目标架构-v1.md`, `docs/18-Agent与Skill执行架构.md` |
 | Stress testing | `docs/02-回测与验收规范.md`, `docs/04-压力测试清单.md`, `docs/07-个人量化策略研究工作法.md`, `docs/18-Agent与Skill执行架构.md` |
 | Dry-run preparation or start | `docs/02-回测与验收规范.md`, `docs/05-自动化运行规范.md`, `docs/06-安全与实盘门禁.md`, `docs/07-个人量化策略研究工作法.md`, `docs/15-产品需求规格-v1.md`, `docs/18-Agent与Skill执行架构.md` |
+| Pipeline/gate, outcome, component, regime, or Pine validation | `docs/00-标准研究流程.md`, `docs/02-回测与验收规范.md`, `docs/04-压力测试清单.md`, `docs/07-个人量化策略研究工作法.md`, `docs/15-产品需求规格-v1.md`, `docs/16-产品化目标架构-v1.md`, `docs/18-Agent与Skill执行架构.md` |
 
 If an intent is ambiguous, route to the stricter applicable set. Record the selected intent, documents read, preconditions, approval decision, tools used, and required outputs in the AgentRun or audit trail. Missing preconditions stop execution; they are not warnings to bypass.

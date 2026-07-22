@@ -1,6 +1,6 @@
 ---
 name: quant-strategy-research
-description: Orchestrate safe, auditable, reproducible quantitative strategy research in Quant Research Lab. Use when Codex or another agent intakes or formalizes a natural-language/Pine strategy, downloads market data, runs a baseline backtest, proposes parameter optimization, performs stress tests, prepares dry-run work, or creates strategy/experiment/report artifacts in this repository.
+description: Orchestrate safe, auditable, fail-fast quantitative strategy research in Quant Research Lab. Use when Codex or another agent intakes or formalizes a natural-language/Pine strategy, selects a pipeline profile, evaluates correctness/viability/robustness gates, downloads market data, runs backtests or bounded parameter research, performs cost or full stress tests, records component/regime evidence, prepares dry-run work, or creates strategy/experiment/report artifacts in this repository.
 ---
 
 # Quant Strategy Research
@@ -16,6 +16,17 @@ description: Orchestrate safe, auditable, reproducible quantitative strategy res
 7. Pause at each `approval_gate`. Never infer approval from past research or general permission.
 8. Produce every `required_outputs` artifact and append audit events for key actions and failures.
 9. Report the intent, documents read, preconditions, approvals, tools, artifact keys, tests, and unresolved gaps.
+
+## Follow the configured fail-fast pipeline
+
+1. Select `smoke`, `fast_screen`, or `full_validation` from `configs/pipelines/`; do not invent a hidden pipeline in strategy-specific code.
+2. Execute in order: correctness → fast screen → viability → cheap sensitivity → regime/Pine → full validation/locked/full stress → dry-run.
+3. Stop on a failed configured gate. After failure, allow only inexpensive attribution and component-evidence capture unless the user approves a new hypothesis.
+4. Treat viability as a standalone-strategy gate, separate from correctness, incremental improvement, robustness, locked-test and dry-run gates.
+5. Never call a strategy candidate merely because it loses less than baseline. Record it as `diagnostic_improvement`, reject the standalone strategy when appropriate, and preserve a reusable component only with separate evidence.
+6. Require a passed viability result before full stress. Cheap cost sensitivity requires fast-screen evidence and is a kill test, not full validation.
+
+Read [references/pipeline-gates.md](references/pipeline-gates.md) whenever evaluating a gate, creating a StrategyOutcome or ComponentCandidate, running regime validation, reconciling Pine, or creating a stress Job.
 
 ## Preserve research integrity
 
@@ -39,6 +50,14 @@ Do not tune parameters conversationally or one-by-one without a budget. Require 
 - stopping conditions and explicit user approval.
 
 Only then create a `parameter_search` Job. The deterministic Worker, not the Agent, runs Trials. Analyze stable regions and validation results before using the locked test.
+
+## Keep regime and Pine claims bounded
+
+- Use only ex-ante observable regime labels. Never label history from future returns.
+- Treat 90-day regime results as `screening` or `insufficient_history`, never long-term validation.
+- For natural-language/Python sources, move full Pine/TradingView reconciliation after fast screen and viability.
+- For Pine sources, perform early semantic, repainting, multi-timeframe and a few golden-trade checks; move the complete Pine diagnostic after viability.
+- Require explicit approval records with an exact `subject_id`; a free-floating “approved” flag is insufficient.
 
 ## Use safe artifact references
 

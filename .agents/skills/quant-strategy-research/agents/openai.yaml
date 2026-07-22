@@ -1,4 +1,4 @@
 interface:
   display_name: "Quant Strategy Research"
-  short_description: "Orchestrate safe, auditable quant strategy research"
-  default_prompt: "Use $quant-strategy-research to execute this strategy research task with document routing, approval gates, and reproducible artifacts."
+  short_description: "Fail-fast, auditable quant research orchestration"
+  default_prompt: "Use $quant-strategy-research to run this research task through configured pipeline gates, approval checks, and reproducible artifacts."
