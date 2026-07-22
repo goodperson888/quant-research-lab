@@ -82,6 +82,91 @@ export type AuditEvent = {
   created_at: string;
 };
 
+export type PipelineProfile = {
+  id: string;
+  label: string;
+  description: string;
+  candidate_eligible: boolean;
+  stages: Array<{
+    id: string;
+    gate: string;
+    approval: string;
+    stop_on_fail: boolean;
+    outputs: string[];
+  }>;
+  gates: Record<string, { requires: string[] }>;
+  acceptance_policies: Record<string, unknown>;
+  pine_validation: {
+    natural_language_or_python: { full_reconciliation_after: string };
+    pine_source: { early_checks: string[]; full_diagnostic_after: string };
+  };
+};
+
+export type GateEvaluation = {
+  id: string;
+  profile_id: string;
+  gate_name: string;
+  subject_type: string;
+  subject_id: string;
+  market_profile: string;
+  strategy_objective: string;
+  status: "passed" | "failed" | "blocked" | "not_evaluated";
+  metrics: Record<string, number>;
+  reasons: string[];
+  created_at: string;
+};
+
+export type StrategyOutcome = {
+  id: string;
+  strategy_version_id: string;
+  market_profile: string;
+  pipeline_profile_id: string;
+  outcome_type: "diagnostic_improvement" | "strategy_candidate" | "validated" | "rejected";
+  viability_gate_result_id: string | null;
+  evidence_artifact_keys: string[];
+  notes: string;
+  created_at: string;
+};
+
+export type ComponentCandidate = {
+  id: string;
+  evidence_id: string;
+  name: string;
+  status: "diagnostic_improvement" | "component_candidate" | "rejected";
+  created_at: string;
+};
+
+export type ComponentEvidence = {
+  id: string;
+  source_strategy_version_id: string;
+  lineage: Record<string, unknown>;
+  component_type: string;
+  target_market_profile: string;
+  incremental_metrics: Record<string, number>;
+  out_of_sample_status: string;
+  failure_conditions: Array<Record<string, unknown>>;
+  created_at: string;
+};
+
+export type RegimeValidation = {
+  id: string;
+  subject_type: string;
+  subject_id: string;
+  market_profile: string;
+  detector_version: string;
+  ex_ante_observable: boolean;
+  target_regimes: string[];
+  suitable_regimes: string[];
+  conditional_regimes: string[];
+  blocked_regimes: string[];
+  unknown_regimes: string[];
+  regime_metrics: Record<string, Record<string, number>>;
+  transition_policy: Record<string, unknown>;
+  history_days: number;
+  evidence_status: "screening" | "insufficient_history" | "extended_validation";
+  created_at: string;
+};
+
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,

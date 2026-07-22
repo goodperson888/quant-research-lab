@@ -8,8 +8,14 @@ import {
   AgentStatus,
   apiFetch,
   AuditEvent,
+  ComponentCandidate,
+  ComponentEvidence,
+  GateEvaluation,
+  PipelineProfile,
   ProjectStatus,
+  RegimeValidation,
   Session,
+  StrategyOutcome,
   StrategyDraft,
 } from "@/lib/api";
 
@@ -37,7 +43,10 @@ export function StudioWorkspace() {
   const [session, setSession] = useState<Session | null>(null);
   const [draft, setDraft] = useState<StrategyDraft | null>(null);
   const [baseline, setBaseline] = useState<BaselineVersion | null>(null);
-  const [notice, setNotice] = useState("等待输入第一份真实策略。AI Provider 当前未配置。");
+  const [pipelineProfileId, setPipelineProfileId] = useState("fast_screen");
+  const [notice, setNotice] = useState(
+    "可输入下一份策略或新研究假设。当前已保留一份 rejected 策略及 diagnostic component 证据；AI Provider 未配置。",
+  );
 
   const project = useQuery({
     queryKey: ["project-status"],
@@ -51,6 +60,33 @@ export function StudioWorkspace() {
     queryKey: ["audit-events"],
     queryFn: () => apiFetch<AuditEvent[]>("/api/audit/events?limit=20"),
   });
+  const profiles = useQuery({
+    queryKey: ["pipeline-profiles"],
+    queryFn: () => apiFetch<PipelineProfile[]>("/api/pipeline-profiles"),
+  });
+  const gates = useQuery({
+    queryKey: ["gate-results"],
+    queryFn: () => apiFetch<GateEvaluation[]>("/api/gates/results"),
+  });
+  const outcomes = useQuery({
+    queryKey: ["strategy-outcomes"],
+    queryFn: () => apiFetch<StrategyOutcome[]>("/api/strategy-outcomes"),
+  });
+  const components = useQuery({
+    queryKey: ["component-candidates"],
+    queryFn: () => apiFetch<ComponentCandidate[]>("/api/component-candidates"),
+  });
+  const componentEvidence = useQuery({
+    queryKey: ["component-evidence"],
+    queryFn: () => apiFetch<ComponentEvidence[]>("/api/component-evidence"),
+  });
+  const regimes = useQuery({
+    queryKey: ["regime-validations"],
+    queryFn: () => apiFetch<RegimeValidation[]>("/api/regime-validations"),
+  });
+  const selectedProfile = profiles.data?.find((profile) => profile.id === pipelineProfileId);
+  const latestViability = gates.data?.find((gate) => gate.gate_name === "viability");
+  const latestOutcome = outcomes.data?.[0];
 
   const saveIntake = useMutation({
     mutationFn: async () => {
@@ -92,7 +128,7 @@ export function StudioWorkspace() {
     mutationFn: () =>
       apiFetch<BaselineVersion>(`/api/strategy-drafts/${draft?.id}/freeze-baseline`, {
         method: "POST",
-        body: JSON.stringify({ confirmed_by_user: true }),
+        body: JSON.stringify({ confirmed_by_user: true, subject_id: draft?.id }),
       }),
     onSuccess: (version) => {
       setBaseline(version);
@@ -258,6 +294,82 @@ export function StudioWorkspace() {
               <li>• Trials / 时间预算 / 停止条件：待审批</li>
             </ul>
           </Panel>
+          <Panel title="Research Pipeline">
+            <label className="mb-2 block text-xs text-slate-500" htmlFor="pipeline-profile">
+              Pipeline Profile
+            </label>
+            <select
+              id="pipeline-profile"
+              value={pipelineProfileId}
+              onChange={(event) => setPipelineProfileId(event.target.value)}
+              className="mb-3 w-full rounded-lg border border-white/10 bg-[#071017] px-3 py-2 text-xs text-slate-200"
+            >
+              {(profiles.data ?? []).map((profile) => (
+                <option key={profile.id} value={profile.id}>{profile.label}</option>
+              ))}
+            </select>
+            <div className="space-y-2">
+              {(selectedProfile?.stages ?? []).map((stage, index) => {
+                const result = gates.data?.find((gate) => gate.gate_name === stage.gate);
+                return (
+                  <div key={stage.id} className="flex gap-3 text-xs">
+                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-white/15 text-[10px] text-slate-400">
+                      {index + 1}
+                    </span>
+                    <div>
+                      <div className="text-slate-200">{stage.id}</div>
+                      <div className="text-slate-500">
+                        {result?.status ?? "not_evaluated"} · fail-fast {stage.stop_on_fail ? "on" : "off"}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              {!selectedProfile ? <Empty>Pipeline Profile 读取中。</Empty> : null}
+            </div>
+          </Panel>
+          <Panel title="Viability & Outcome">
+            {latestViability ? (
+              <div className="space-y-2 text-xs">
+                <Meta label="Viability" value={latestViability.status} />
+                <div className="leading-5 text-slate-400">{latestViability.reasons.join("；")}</div>
+              </div>
+            ) : (
+              <Empty>尚无 viability 结果；“只比 baseline 少亏”不会成为完整策略 candidate。</Empty>
+            )}
+            <div className="mt-3 border-t border-white/[0.06] pt-3 text-xs text-slate-400">
+              Strategy outcome：<span className="text-slate-200">{latestOutcome?.outcome_type ?? "未记录"}</span>
+            </div>
+          </Panel>
+          <Panel title="Failure → Component Branch">
+            {components.data?.length ? (
+              components.data.slice(0, 3).map((component) => (
+                <div key={component.id} className="mb-2 rounded-lg border border-white/10 p-2 text-xs last:mb-0">
+                  <div className="text-slate-200">{component.name}</div>
+                  <div className="mt-1 text-amber-200">{component.status}</div>
+                  <div className="mt-1 text-slate-500">
+                    {componentEvidence.data?.find((item) => item.id === component.evidence_id)
+                      ?.out_of_sample_status ?? "evidence pending"}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <Empty>失败策略可做廉价归因；组件只能保留为 diagnostic/component candidate，不会自动成为 validated factor。</Empty>
+            )}
+          </Panel>
+          <Panel title="Regime & Pine Stage">
+            {regimes.data?.length ? (
+              <div className="space-y-2 text-xs">
+                <Meta label="Evidence" value={regimes.data[0].evidence_status} />
+                <Meta label="Unknown" value={regimes.data[0].unknown_regimes.join(", ") || "none"} />
+              </div>
+            ) : (
+              <Empty>尚未运行 regime validation；90日数据最多标记 screening/insufficient_history。</Empty>
+            )}
+            <div className="mt-3 border-t border-white/[0.06] pt-3 text-xs leading-5 text-slate-400">
+              Pine 来源先检查 semantic / repainting / MTF 和少量 golden trades；完整诊断在 fast screen 与 viability 通过后。
+            </div>
+          </Panel>
           <Panel title="审批与成果">
             <div className="mb-3 text-xs leading-5 text-slate-400">
               baseline 冻结后不可覆盖；策略 diff、实验、Trial 与报告将作为独立 Artifact 展示。
@@ -268,11 +380,21 @@ export function StudioWorkspace() {
               onClick={() => freeze.mutate()}
               className="w-full rounded-xl border border-emerald-300/30 bg-emerald-300/10 px-3 py-2.5 text-sm font-medium text-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {baseline ? "baseline v0 已冻结" : "人工确认并冻结 baseline v0"}
+              {baseline
+                ? "baseline v0 已冻结"
+                : `确认 subject ${draft?.id?.slice(0, 16) ?? "—"} 并冻结 baseline v0`}
             </button>
           </Panel>
         </aside>
       </div>
+    </div>
+  );
+}
+
+function Empty({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-dashed border-white/15 p-3 text-xs leading-5 text-slate-500">
+      {children}
     </div>
   );
 }
