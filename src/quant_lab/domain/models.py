@@ -35,7 +35,14 @@ class ExecutionTargetKind(StrEnum):
     HOSTED_SANDBOX = "hosted_sandbox"
 
 ALLOWED_JOB_TYPES = frozenset(
-    {"backtest", "data_quality", "parameter_search", "report", "stress_test"}
+    {
+        "backtest",
+        "data_quality",
+        "parameter_search",
+        "regime_validation",
+        "report",
+        "stress_test",
+    }
 )
 
 

@@ -16,6 +16,7 @@ from quant_lab.application.experiment_plan_config import (
     parse_experiment_plan_draft,
 )
 from quant_lab.application.services import ResearchApplicationService, utc_now
+from quant_lab.application.storage import StorageReporter
 from quant_lab.infrastructure.artifact_store import LocalArtifactStore
 from quant_lab.infrastructure.baseline_backtest_runner import BaselineBacktestRunner
 from quant_lab.infrastructure.candidate_cost_stress_runner import (
@@ -34,6 +35,9 @@ from quant_lab.infrastructure.trade_reconciliation_report import (
 from quant_lab.paths import app_database_path, project_root, registry_path
 from quant_lab.registry import initialize, list_factors, register_factor
 from quant_lab.runs import create_run
+
+from .governance_commands import add_governance_parsers, handle_governance_command
+from .storage_commands import add_storage_parsers, handle_storage_command
 
 
 def _installed_versions() -> dict[str, str | None]:
@@ -62,6 +66,7 @@ def _installed_versions() -> dict[str, str | None]:
 
 def command_doctor() -> int:
     root = project_root()
+    storage = StorageReporter(root).read()
     uv_path = shutil.which("uv")
     managed_uv = root / ".tools" / "bin" / "uv"
     if not uv_path and managed_uv.is_file():
@@ -85,6 +90,13 @@ def command_doctor() -> int:
         ),
         "installed_versions": _installed_versions(),
         "disk_free_gib": round(shutil.disk_usage(root).free / (1024**3), 2),
+        "storage_policy": {
+            "policy_id": storage["policy_id"],
+            "tracked_file_count": storage["summary"]["file_count"],
+            "tracked_total_bytes": storage["summary"]["total_bytes"],
+            "warning_count": storage["summary"]["warning_count"],
+            "automatic_deletion": storage["automatic_deletion"],
+        },
         "live_trading_enabled": False,
         "ai_provider_configured": False,
     }
@@ -184,6 +196,7 @@ def command_create_baseline_job(args: argparse.Namespace) -> int:
                 "docs/10-市场适配与因子适用性.md",
                 "docs/15-产品需求规格-v1.md",
                 "docs/18-Agent与Skill执行架构.md",
+                "docs/20-Freqtrade能力边界与融合方案.md",
             ],
             "preconditions": {
                 "baseline_frozen": True,
@@ -758,12 +771,17 @@ def create_candidate_stress_job(
                 "docs/04-压力测试清单.md",
                 "docs/07-个人量化策略研究工作法.md",
                 "docs/18-Agent与Skill执行架构.md",
+                "docs/20-Freqtrade能力边界与融合方案.md",
             ],
             "preconditions": {
                 "candidate_or_baseline_version_selected": True,
+                "pipeline_profile_selected": True,
+                "stress_level_declared_as_cheap_or_full": True,
                 "stress_scenarios_declared": True,
                 "cost_and_execution_assumptions_declared": True,
                 "immutable_run_manifest_destination": True,
+                "fast_screen_passed_when_stress_level_is_cheap": True,
+                "viability_passed_when_stress_level_is_full": False,
             },
             "approval": {
                 "strategy_status_change_requested": False,
@@ -1057,11 +1075,21 @@ def build_parser() -> argparse.ArgumentParser:
     reject_candidate.add_argument("--version-id", required=True)
     reject_candidate.add_argument("--stress-manifest", required=True)
     reject_candidate.add_argument("--confirmed-by-user", action="store_true")
+    add_storage_parsers(subparsers)
+    add_governance_parsers(subparsers)
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
+    modular_result = handle_storage_command(args, root=project_root())
+    if modular_result is not None:
+        return modular_result
+    modular_result = handle_governance_command(
+        args, root=project_root(), database_path=app_database_path()
+    )
+    if modular_result is not None:
+        return modular_result
     if args.command == "doctor":
         return command_doctor()
     if args.command == "init":

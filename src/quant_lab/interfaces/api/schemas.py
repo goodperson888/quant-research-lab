@@ -253,6 +253,22 @@ class ComponentEvidenceResponse(StrictModel):
     created_at: str
 
 
+class ComponentTriageResponse(StrictModel):
+    evidence: ComponentEvidenceResponse
+    candidate: ComponentCandidateResponse
+    automatic_validation: Literal[False]
+
+
+class CreateRegimeValidationJobRequest(StrictModel):
+    subject_type: Literal["strategy_version", "component_candidate"]
+    subject_id: str = Field(min_length=1)
+    market_profile: str = Field(min_length=1)
+    detector_config_artifact_key: str = Field(min_length=1)
+    data_manifest_artifact_key: str = Field(min_length=1)
+    trades_artifact_key: str = Field(min_length=1)
+    agent_run_id: str | None = None
+
+
 class CreateRegimeValidationRequest(StrictModel):
     subject_type: Literal["strategy_version", "component_candidate"]
     subject_id: str = Field(min_length=1)

@@ -1,0 +1,83 @@
+schema_version: 1
+policy_id: local_lightweight_storage_v1
+automatic_deletion: false
+
+classification:
+  authoritative:
+    meaning: "Cannot be reconstructed without losing source or research evidence."
+    backup_required: true
+  rebuildable:
+    meaning: "Can be reconstructed from authoritative data, manifests, code, and configs."
+    backup_required: false
+  archiveable:
+    meaning: "Retained selectively after its summary and lineage are permanently recorded."
+    backup_required: false
+
+thresholds:
+  small_file_bytes: 65536
+  directory_file_count_warning: 10000
+  small_file_ratio_warning: 0.70
+  directory_size_warning_gib: 20
+  minimum_trial_metric_batch_rows: 500
+  target_trial_metric_batch_rows: 5000
+
+areas:
+  - id: raw_market_data
+    path: data/raw
+    classification: authoritative
+    immutable: true
+  - id: processed_parquet
+    path: data/processed
+    classification: authoritative
+    immutable: false
+  - id: data_manifests
+    path: data/manifests
+    classification: authoritative
+    immutable: true
+  - id: experiment_runs
+    path: experiments/runs
+    classification: authoritative
+    immutable: true
+  - id: research_reports
+    path: reports
+    classification: authoritative
+    immutable: true
+  - id: analytics_catalog
+    path: data/catalog
+    classification: rebuildable
+    immutable: false
+  - id: freqtrade_runtime_data
+    path: runtime/freqtrade/user_data/data
+    classification: rebuildable
+    immutable: false
+  - id: web_build_cache
+    path: apps/web/.next
+    classification: rebuildable
+    immutable: false
+  - id: local_caches
+    path: .cache
+    classification: rebuildable
+    immutable: false
+
+experiment_retention:
+  permanent:
+    - manifest
+    - metrics
+    - status
+    - failure_reason
+    - parameters
+    - code_version
+    - data_version
+    - cost_model
+    - random_seed
+  full_trades_and_equity:
+    retain_for:
+      - frozen_baseline
+      - key_candidate
+      - locked_test_candidate
+      - explicitly_retained
+    other_trials: archiveable_after_summary_and_checksum
+  batch_metrics:
+    format: parquet
+    partitioning: "experiment_plan_id/year/month"
+    rule: "Append trials in bounded batches; do not create one metrics file per Trial."

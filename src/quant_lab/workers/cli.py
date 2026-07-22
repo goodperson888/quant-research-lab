@@ -4,6 +4,7 @@ import argparse
 import json
 
 from quant_lab.infrastructure.baseline_backtest_runner import BaselineBacktestRunner
+from quant_lab.infrastructure.backtest_engines import NativeBacktestEngineAdapter
 from quant_lab.infrastructure.candidate_cost_stress_runner import (
     CandidateCostStressRunner,
 )
@@ -11,6 +12,7 @@ from quant_lab.infrastructure.entry_confirmation_experiment_runner import (
     EntryConfirmationExperimentRunner,
 )
 from quant_lab.infrastructure.sqlite_product_repository import SQLiteProductRepository
+from quant_lab.infrastructure.regime_validation_runner import RegimeValidationRunner
 from quant_lab.paths import app_database_path, project_root
 from quant_lab.workers.runner import LocalWorker
 
@@ -25,8 +27,11 @@ def main() -> int:
     worker = LocalWorker(
         repository,
         handlers={
-            "backtest": BaselineBacktestRunner(root, repository),
+            "backtest": NativeBacktestEngineAdapter(
+                BaselineBacktestRunner(root, repository)
+            ).run,
             "parameter_search": EntryConfirmationExperimentRunner(root, repository),
+            "regime_validation": RegimeValidationRunner(root, repository),
             "stress_test": CandidateCostStressRunner(root, repository),
         },
     )

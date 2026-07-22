@@ -381,6 +381,59 @@ class PipelineApplicationService:
         )
         return created
 
+    def triage_component(
+        self,
+        *,
+        source_strategy_version_id: str,
+        lineage: Mapping[str, Any],
+        component_type: str,
+        target_market_profile: str,
+        incremental_metrics: Mapping[str, float],
+        out_of_sample_status: str,
+        failure_conditions: Sequence[Mapping[str, Any]],
+        name: str,
+        status: str,
+    ) -> tuple[ComponentEvidence, ComponentCandidate]:
+        """Record bounded ablation evidence without implying factor validation."""
+
+        required_lineage = {
+            "hypothesis",
+            "baseline_version_id",
+            "source_run_ids",
+            "ablation",
+        }
+        missing = sorted(required_lineage - set(lineage))
+        if missing:
+            raise GatePolicyError(
+                "component triage requires lineage fields: " + ", ".join(missing)
+            )
+        if status not in {"diagnostic_improvement", "component_candidate", "rejected"}:
+            raise GatePolicyError("component triage cannot create a validated component")
+        evidence = self.create_component_evidence(
+            source_strategy_version_id=source_strategy_version_id,
+            lineage=lineage,
+            component_type=component_type,
+            target_market_profile=target_market_profile,
+            incremental_metrics=incremental_metrics,
+            out_of_sample_status=out_of_sample_status,
+            failure_conditions=failure_conditions,
+        )
+        candidate = self.create_component_candidate(
+            evidence_id=evidence.id, name=name, status=status
+        )
+        self._audit(
+            event_type="component_triage.recorded",
+            aggregate_type="component_candidate",
+            aggregate_id=candidate.id,
+            payload={
+                "source_strategy_version_id": source_strategy_version_id,
+                "evidence_id": evidence.id,
+                "status": candidate.status,
+                "automatic_validation": False,
+            },
+        )
+        return evidence, candidate
+
     def create_regime_validation(self, **values: Any) -> RegimeValidation:
         history_days = int(values["history_days"])
         evidence_status = str(values["evidence_status"])
@@ -391,6 +444,14 @@ class PipelineApplicationService:
             raise GatePolicyError(
                 "90-day regime evidence must be screening or insufficient_history"
             )
+        if values["subject_type"] == "strategy_version":
+            self.repository.get_strategy_version(values["subject_id"])
+        else:
+            candidates = {
+                item.id for item in self.repository.list_component_candidates()
+            }
+            if values["subject_id"] not in candidates:
+                raise GatePolicyError("component candidate subject does not exist")
         validation = RegimeValidation(
             id=new_id("regime"),
             subject_type=values["subject_type"],

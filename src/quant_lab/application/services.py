@@ -24,6 +24,7 @@ from quant_lab.domain.models import (
     StrategyVersion,
     ToolCall,
     Trial,
+    validate_artifact_key,
 )
 from quant_lab.domain.repositories import ProductRepository
 
@@ -247,6 +248,43 @@ class ResearchApplicationService:
                     raise ApprovalRequiredError(
                         "cheap cost sensitivity requires the subject's passed fast_screen gate"
                     )
+        if job_type == "regime_validation":
+            required = {
+                "subject_type",
+                "subject_id",
+                "market_profile",
+                "detector_config_artifact_key",
+                "data_manifest_artifact_key",
+                "trades_artifact_key",
+            }
+            missing = sorted(required - set(payload))
+            if missing:
+                raise InvalidJobError(
+                    "regime validation payload missing: " + ", ".join(missing)
+                )
+            if payload.get("ex_ante_observable") is not True:
+                raise InvalidJobError("regime validation must be ex-ante observable")
+            if payload.get("locked_test_used") is not False:
+                raise InvalidJobError("regime screening must not use locked-test evidence")
+            for name in (
+                "detector_config_artifact_key",
+                "data_manifest_artifact_key",
+                "trades_artifact_key",
+            ):
+                try:
+                    validate_artifact_key(str(payload[name]))
+                except ValueError as exc:
+                    raise InvalidJobError(str(exc)) from exc
+            subject_type = payload["subject_type"]
+            subject_id = str(payload["subject_id"])
+            if subject_type == "strategy_version":
+                self.repository.get_strategy_version(subject_id)
+            elif subject_type == "component_candidate":
+                known = {item.id for item in self.repository.list_component_candidates()}
+                if subject_id not in known:
+                    raise InvalidJobError("component candidate subject does not exist")
+            else:
+                raise InvalidJobError("unsupported regime validation subject_type")
         now = utc_now()
         job = Job(
             id=new_id("job"),

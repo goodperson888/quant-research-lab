@@ -1,0 +1,27 @@
+schema_version: 1
+detector_id: eth_perpetual_1h_trend_vol_v1
+detector_version: "1.0.0"
+market_profile: crypto_perpetual.binance.eth
+input:
+  dataset: futures_ohlcv
+  timeframe: 1h
+  timestamp_semantics: bar_open_time
+  require_complete_bars: true
+  decision_lag_bars: 1
+features:
+  fast_ema_bars: 20
+  slow_ema_bars: 50
+  realized_vol_window_bars: 24
+  annualization_bars: 8760
+thresholds:
+  trend_spread_bps: 20
+  low_vol_annualized: 0.45
+  high_vol_annualized: 1.20
+validation:
+  minimum_history_days_for_screening: 60
+  minimum_history_days_for_extended_validation: 365
+  minimum_trades_per_regime: 20
+transition_policy:
+  apply_label_from: next_complete_1h_bar
+  unknown_until_minimum_history: true
+  blocked_regimes_require_explicit_strategy_rule: true

@@ -1,0 +1,17 @@
+source_strategy_version_id: version_REPLACE_ME
+lineage:
+  hypothesis: "Describe one falsifiable component hypothesis."
+  baseline_version_id: version_REPLACE_ME
+  source_run_ids: [run_REPLACE_ME]
+  ablation: "baseline versus baseline plus exactly this component"
+component_type: filter
+target_market_profile: crypto_perpetual.binance.eth
+incremental_metrics:
+  validation_net_return_delta: 0.0
+  validation_profit_factor_delta: 0.0
+  validation_expectancy_delta: 0.0
+out_of_sample_status: not_tested
+failure_conditions:
+  - condition: "No independent out-of-sample evidence yet."
+name: "Replace with component name"
+status: diagnostic_improvement

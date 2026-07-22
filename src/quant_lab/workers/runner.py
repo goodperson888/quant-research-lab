@@ -70,11 +70,11 @@ class LocalWorker:
                 raise ValueError("full stress is blocked until viability passes")
 
         agent_run_id = job.payload.get("agent_run_id")
-        tool_name = (
-            "run_parameter_search"
-            if job.job_type == "parameter_search"
-            else "run_backtest"
-        )
+        tool_name = {
+            "parameter_search": "run_parameter_search",
+            "regime_validation": "record_regime_validation",
+            "report": "generate_report",
+        }.get(job.job_type, "run_backtest")
         now = _utc_now()
         self.repository.update_job(job.id, status="running", updated_at=now)
         self.repository.append_job_log(

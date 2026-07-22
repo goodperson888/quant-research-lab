@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping, Protocol, Sequence
 
 from quant_lab.domain.models import AgentProviderKind, ExecutionTargetKind, Job
 
@@ -43,6 +43,32 @@ class ArtifactStore(Protocol):
     def get(self, artifact_key: str) -> bytes: ...
 
     def exists(self, artifact_key: str) -> bool: ...
+
+
+@dataclass(frozen=True, slots=True)
+class BacktestEngineCapabilities:
+    engine_id: str
+    supported_stages: tuple[str, ...]
+    supports_exchange_execution_model: bool
+    supports_dry_run: bool
+    requires_exchange_metadata: bool
+    notes: tuple[str, ...] = ()
+
+
+class BacktestEnginePort(Protocol):
+    """Deterministic backtest boundary; never exposes live trade or arbitrary shell."""
+
+    def capabilities(self) -> BacktestEngineCapabilities: ...
+
+    def run(self, job: Job) -> Mapping[str, Any]: ...
+
+
+class TrialMetricsSink(Protocol):
+    """Batch Trial metrics to columnar storage instead of one tiny file per Trial."""
+
+    def append_batch(
+        self, *, experiment_plan_id: str, rows: Sequence[Mapping[str, Any]]
+    ) -> tuple[str, ...]: ...
 
 
 class LLMProvider(AgentProvider, Protocol):

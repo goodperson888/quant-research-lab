@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from quant_lab import __version__
 from quant_lab.application.services import ResearchApplicationService
+from quant_lab.application.backtest_engines import BacktestEngineRegistry
 from quant_lab.application.pipeline import (
     PipelineApplicationService,
     PipelineProfileCatalog,
@@ -27,7 +28,12 @@ from quant_lab.domain.errors import (
 from quant_lab.domain.models import AgentProviderKind, ExecutionTargetKind
 from quant_lab.domain.models import Constraint, Objective, ParameterSpace
 from quant_lab.infrastructure.llm import UnconfiguredLLMProvider
+from quant_lab.infrastructure.backtest_engines import (
+    FreqtradeBacktestEngineAdapter,
+    NativeBacktestEngineAdapter,
+)
 from quant_lab.infrastructure.project_readers import DataSummaryReader, ProjectStatusReader
+from quant_lab.application.storage import StorageReporter
 from quant_lab.infrastructure.sqlite_product_repository import SQLiteProductRepository
 from quant_lab.paths import app_database_path, project_root
 
@@ -35,8 +41,10 @@ from .schemas import (
     AuditEventResponse,
     ComponentCandidateResponse,
     ComponentEvidenceResponse,
+    ComponentTriageResponse,
     CreateComponentCandidateRequest,
     CreateRegimeValidationRequest,
+    CreateRegimeValidationJobRequest,
     CreateStrategyOutcomeRequest,
     CreateIntakeRequest,
     CreateExperimentPlanRequest,
@@ -80,6 +88,13 @@ def create_app(
     provider = UnconfiguredLLMProvider()
     project_reader = ProjectStatusReader(resolved_root)
     data_reader = DataSummaryReader(resolved_root)
+    storage_reporter = StorageReporter(resolved_root)
+    engine_registry = BacktestEngineRegistry(
+        (
+            NativeBacktestEngineAdapter(lambda _job: {}),
+            FreqtradeBacktestEngineAdapter(),
+        )
+    )
 
     application = FastAPI(
         title="Quant Research Lab API",
@@ -290,6 +305,14 @@ def create_app(
     def data_summary() -> dict[str, Any]:
         return data_reader.read()
 
+    @application.get("/api/storage/report", tags=["data"])
+    def storage_report() -> dict[str, Any]:
+        return storage_reporter.read()
+
+    @application.get("/api/backtest-engines", tags=["research-pipeline"])
+    def backtest_engines() -> list[dict[str, Any]]:
+        return [asdict(item) for item in engine_registry.capabilities()]
+
     @application.get("/api/settings/status", tags=["system"])
     def settings_status() -> dict[str, Any]:
         return {
@@ -416,6 +439,20 @@ def create_app(
             evidence_id=evidence.id, name=name, status=candidate_status
         )
 
+    @application.post(
+        "/api/component-triage",
+        response_model=ComponentTriageResponse,
+        status_code=status.HTTP_201_CREATED,
+        tags=["research-components"],
+    )
+    def component_triage(body: CreateComponentCandidateRequest) -> Any:
+        evidence, candidate = pipeline_service.triage_component(**body.model_dump())
+        return {
+            "evidence": evidence,
+            "candidate": candidate,
+            "automatic_validation": False,
+        }
+
     @application.get(
         "/api/regime-validations",
         response_model=list[RegimeValidationResponse],
@@ -432,6 +469,19 @@ def create_app(
     )
     def create_regime_validation(body: CreateRegimeValidationRequest) -> Any:
         return pipeline_service.create_regime_validation(**body.model_dump())
+
+    @application.post(
+        "/api/regime-validation-jobs",
+        response_model=JobResponse,
+        status_code=status.HTTP_201_CREATED,
+        tags=["research-regimes"],
+    )
+    def create_regime_validation_job(body: CreateRegimeValidationJobRequest) -> Any:
+        payload = body.model_dump(exclude_none=True)
+        payload["intent"] = "regime_validation"
+        payload["ex_ante_observable"] = True
+        payload["locked_test_used"] = False
+        return service.create_job(job_type="regime_validation", payload=payload)
 
     return application
 
