@@ -21,6 +21,7 @@ DraftStatus = Literal["draft", "awaiting_confirmation", "baseline_frozen"]
 JobStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 AgentRunMode = Literal["supervised", "guided", "bounded_autonomous"]
 GateStatus = Literal["passed", "failed", "blocked", "not_evaluated"]
+RegimeMode = Literal["regime_diagnostic", "regime_validation"]
 
 
 class AgentProviderKind(StrEnum):
@@ -37,6 +38,7 @@ class ExecutionTargetKind(StrEnum):
 ALLOWED_JOB_TYPES = frozenset(
     {
         "backtest",
+        "correctness_diagnostic",
         "data_quality",
         "parameter_search",
         "regime_validation",
@@ -68,6 +70,36 @@ class ResearchSession:
     status: SessionStatus
     created_at: str
     updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchBudget:
+    session_id: str
+    max_hypotheses: int
+    max_trials_total: int
+    max_compute_minutes: int
+    max_locked_test_uses: int
+    require_user_approval_for_new_hypothesis: bool
+    used_hypotheses: int = 0
+    reserved_trials: int = 0
+    reserved_compute_minutes: int = 0
+    used_locked_test_uses: int = 0
+
+    @property
+    def remaining_hypotheses(self) -> int:
+        return max(0, self.max_hypotheses - self.used_hypotheses)
+
+    @property
+    def remaining_trials(self) -> int:
+        return max(0, self.max_trials_total - self.reserved_trials)
+
+    @property
+    def remaining_compute_minutes(self) -> int:
+        return max(0, self.max_compute_minutes - self.reserved_compute_minutes)
+
+    @property
+    def remaining_locked_test_uses(self) -> int:
+        return max(0, self.max_locked_test_uses - self.used_locked_test_uses)
 
 
 @dataclass(frozen=True, slots=True)
@@ -399,6 +431,7 @@ class RegimeValidation:
     id: str
     subject_type: Literal["strategy_version", "component_candidate"]
     subject_id: str
+    mode: RegimeMode
     market_profile: str
     detector_version: str
     ex_ante_observable: bool
@@ -413,11 +446,21 @@ class RegimeValidation:
     evidence_status: Literal[
         "screening", "insufficient_history", "extended_validation"
     ]
+    viability_gate_result_id: str | None
     created_at: str
 
     def __post_init__(self) -> None:
         if not self.ex_ante_observable:
             raise ValueError("regime labels must be ex-ante observable")
+        if self.mode == "regime_diagnostic":
+            if self.evidence_status not in {"screening", "insufficient_history"}:
+                raise ValueError(
+                    "regime diagnostic evidence must remain screening or insufficient_history"
+                )
+            if self.viability_gate_result_id is not None:
+                raise ValueError("regime diagnostic must not claim a viability gate")
+        elif self.viability_gate_result_id is None:
+            raise ValueError("regime validation requires a passed viability gate result")
         if self.history_days <= 90 and self.evidence_status == "extended_validation":
             raise ValueError(
                 "90-day regime evidence must remain screening or insufficient_history"

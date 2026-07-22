@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from math import ceil
+import re
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
-from quant_lab.domain.errors import ApprovalRequiredError, ConflictError, InvalidJobError
+from quant_lab.domain.errors import (
+    ApprovalRequiredError,
+    ConflictError,
+    InvalidJobError,
+    NotFoundError,
+)
 from quant_lab.domain.models import (
     ALLOWED_JOB_TYPES,
     AgentProviderKind,
@@ -19,6 +26,7 @@ from quant_lab.domain.models import (
     Objective,
     ParameterSpace,
     Proposal,
+    ResearchBudget,
     ResearchSession,
     StrategyDraft,
     StrategyVersion,
@@ -56,10 +64,37 @@ def _contains_forbidden_key(value: Any) -> bool:
     return False
 
 
+DEFAULT_RESEARCH_BUDGET = {
+    "max_hypotheses": 8,
+    "max_trials_total": 200,
+    "max_compute_minutes": 240,
+    "max_locked_test_uses": 2,
+    "require_user_approval_for_new_hypothesis": True,
+}
+
+
 class ResearchApplicationService:
-    def __init__(self, repository: ProductRepository) -> None:
+    def __init__(
+        self,
+        repository: ProductRepository,
+        *,
+        budget_policy: Mapping[str, Any] | None = None,
+    ) -> None:
         self.repository = repository
+        self.budget_policy = {
+            **DEFAULT_RESEARCH_BUDGET,
+            **dict(budget_policy or {}),
+        }
         self.repository.initialize()
+
+    def _new_budget(self, session_id: str) -> ResearchBudget:
+        return ResearchBudget(session_id=session_id, **self.budget_policy)
+
+    def _ensure_budget(self, session_id: str) -> ResearchBudget:
+        try:
+            return self.repository.get_research_budget(session_id)
+        except NotFoundError:
+            return self.repository.create_research_budget(self._new_budget(session_id))
 
     def _audit(
         self,
@@ -92,6 +127,7 @@ class ResearchApplicationService:
             updated_at=now,
         )
         created = self.repository.create_session(session)
+        self.repository.create_research_budget(self._new_budget(created.id))
         self._audit(
             event_type="research_session.created",
             aggregate_type="research_session",
@@ -99,6 +135,10 @@ class ResearchApplicationService:
             payload={"title": created.title, "status": created.status},
         )
         return created
+
+    def get_research_budget(self, session_id: str) -> ResearchBudget:
+        self.repository.get_session(session_id)
+        return self._ensure_budget(session_id)
 
     def list_research_sessions(self) -> Sequence[ResearchSession]:
         return self.repository.list_sessions()
@@ -200,6 +240,8 @@ class ResearchApplicationService:
         if _contains_forbidden_key(payload):
             raise InvalidJobError("job payload contains a forbidden execution or secret key")
         if job_type == "parameter_search":
+            if payload.get("locked_test_used") is True:
+                raise InvalidJobError("parameter search must not use locked-test data")
             plan_id = payload.get("experiment_plan_id")
             if not isinstance(plan_id, str) or not plan_id:
                 raise ApprovalRequiredError(
@@ -210,6 +252,31 @@ class ResearchApplicationService:
                 raise ApprovalRequiredError(
                     "parameter search requires explicit user approval of the experiment plan"
                 )
+            session_id = self.repository.get_session_id_for_strategy_version(
+                plan.baseline_version_id
+            )
+            self._ensure_budget(session_id)
+            trials = plan.max_trials or 0
+            compute_minutes = ceil((plan.time_budget_seconds or 0) / 60)
+            try:
+                self.repository.reserve_experiment_resources(
+                    session_id,
+                    trials=trials,
+                    compute_minutes=compute_minutes,
+                )
+            except ConflictError as exc:
+                self._audit(
+                    event_type="research_budget.blocked",
+                    aggregate_type="research_session",
+                    aggregate_id=session_id,
+                    payload={
+                        "job_type": job_type,
+                        "experiment_plan_id": plan.id,
+                        "reason": str(exc),
+                    },
+                    actor_type="system",
+                )
+                raise
         if job_type == "stress_test":
             stress_level = payload.get("stress_level")
             if stress_level == "full":
@@ -285,6 +352,82 @@ class ResearchApplicationService:
                     raise InvalidJobError("component candidate subject does not exist")
             else:
                 raise InvalidJobError("unsupported regime validation subject_type")
+            mode = payload.get("mode")
+            if mode not in {"regime_diagnostic", "regime_validation"}:
+                raise InvalidJobError("regime job requires an explicit diagnostic/validation mode")
+            if mode == "regime_validation":
+                gate_id = payload.get("viability_gate_result_id")
+                if not isinstance(gate_id, str):
+                    raise ApprovalRequiredError(
+                        "formal regime validation requires a passed viability gate"
+                    )
+                gate = self.repository.get_gate_evaluation(gate_id)
+                if (
+                    gate.subject_id != subject_id
+                    or gate.gate_name != "viability"
+                    or gate.status != "passed"
+                    or gate.market_profile != payload["market_profile"]
+                ):
+                    raise ApprovalRequiredError(
+                        "formal regime validation requires the subject's passed viability gate"
+                    )
+        if job_type == "correctness_diagnostic":
+            required = {
+                "strategy_version_id",
+                "analysis_type",
+                "strategy_name",
+                "strategy_artifact_key",
+                "config_artifact_key",
+            }
+            missing = sorted(required - set(payload))
+            if missing:
+                raise InvalidJobError(
+                    "correctness diagnostic payload missing: " + ", ".join(missing)
+                )
+            version = self.repository.get_strategy_version(
+                str(payload["strategy_version_id"])
+            )
+            if version.status == "rejected":
+                raise InvalidJobError("correctness diagnostics must not rerun rejected strategies")
+            if payload["analysis_type"] not in {
+                "lookahead-analysis",
+                "recursive-analysis",
+            }:
+                raise InvalidJobError("unsupported correctness diagnostic type")
+            if payload.get("locked_test_used") is not False:
+                raise InvalidJobError("correctness diagnostics must not use locked-test data")
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(payload["strategy_name"])):
+                raise InvalidJobError("strategy_name must be a Python class identifier")
+            for name in ("strategy_artifact_key", "config_artifact_key"):
+                try:
+                    key = validate_artifact_key(str(payload[name]))
+                except ValueError as exc:
+                    raise InvalidJobError(str(exc)) from exc
+                if name == "strategy_artifact_key" and not key.startswith(
+                    ("strategies/freqtrade/", "runtime/freqtrade/user_data/strategies/")
+                ):
+                    raise InvalidJobError("strategy artifact is outside approved strategy roots")
+                if name == "config_artifact_key" and not key.startswith("configs/"):
+                    raise InvalidJobError("Freqtrade config must be a project config artifact")
+        if payload.get("locked_test_used") is True:
+            session_id = payload.get("session_id")
+            if not isinstance(session_id, str):
+                raise ApprovalRequiredError(
+                    "locked-test use requires an explicit research session budget"
+                )
+            self.repository.get_session(session_id)
+            self._ensure_budget(session_id)
+            try:
+                self.repository.reserve_locked_test_use(session_id)
+            except ConflictError as exc:
+                self._audit(
+                    event_type="research_budget.blocked",
+                    aggregate_type="research_session",
+                    aggregate_id=session_id,
+                    payload={"job_type": job_type, "reason": str(exc)},
+                    actor_type="system",
+                )
+                raise
         now = utc_now()
         job = Job(
             id=new_id("job"),
@@ -515,7 +658,26 @@ class ResearchApplicationService:
                 "experiment plan approval requires explicit user confirmation"
             )
         current = self.repository.get_experiment_plan(plan_id)
+        if current.status != "draft":
+            raise ConflictError("only a draft experiment plan can be approved")
         approved = current.approve(actor="user")
+        session_id = self.repository.get_session_id_for_strategy_version(
+            current.baseline_version_id
+        )
+        budget = self._ensure_budget(session_id)
+        if budget.require_user_approval_for_new_hypothesis and not confirmed_by_user:
+            raise ApprovalRequiredError("new hypothesis requires explicit user approval")
+        try:
+            self.repository.reserve_hypothesis(session_id)
+        except ConflictError as exc:
+            self._audit(
+                event_type="research_budget.blocked",
+                aggregate_type="research_session",
+                aggregate_id=session_id,
+                payload={"experiment_plan_id": plan_id, "reason": str(exc)},
+                actor_type="system",
+            )
+            raise
         saved = self.repository.approve_experiment_plan(
             approved,
             approval_id=new_id("approval"),
@@ -525,7 +687,11 @@ class ResearchApplicationService:
             event_type="experiment_plan.approved",
             aggregate_type="experiment_plan",
             aggregate_id=saved.id,
-            payload={"approved_by": "user", "status": saved.status},
+            payload={
+                "approved_by": "user",
+                "status": saved.status,
+                "research_budget_session_id": session_id,
+            },
         )
         return saved
 

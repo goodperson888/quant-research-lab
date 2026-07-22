@@ -17,6 +17,7 @@ ALLOWED_RESEARCH_TOOLS = frozenset(
         "create_experiment_plan",
         "approve_experiment_plan",
         "run_backtest",
+        "run_correctness_diagnostic",
         "run_parameter_search",
         "get_job",
         "get_agent_run",
@@ -66,6 +67,8 @@ class ResearchToolGateway(Protocol):
     def approve_experiment_plan(self, plan_id: str) -> Mapping[str, Any]: ...
 
     def run_backtest(self, plan_id: str) -> Mapping[str, Any]: ...
+
+    def run_correctness_diagnostic(self, job_id: str) -> Mapping[str, Any]: ...
 
     def run_parameter_search(self, plan_id: str) -> Mapping[str, Any]: ...
 

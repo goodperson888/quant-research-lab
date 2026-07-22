@@ -185,8 +185,9 @@ def test_regime_validation_requires_ex_ante_labels_and_limits_90_day_claims(
         "regime_metrics": {},
         "transition_policy": {"on_unknown": "block_promotion"},
         "history_days": 90,
+        "mode": "regime_diagnostic",
     }
-    with pytest.raises(ValueError, match="ex-ante observable"):
+    with pytest.raises(GatePolicyError, match="ex-ante observable"):
         pipeline.create_regime_validation(
             **common,
             ex_ante_observable=False,

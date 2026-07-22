@@ -25,7 +25,12 @@ def add_governance_parsers(subparsers: argparse._SubParsersAction) -> None:
 
     regime = subparsers.add_parser(
         "create-regime-validation-job",
-        help="Queue an ex-ante regime validation for one explicit subject.",
+        help="Queue an ex-ante regime diagnostic or formal validation.",
+    )
+    regime.add_argument(
+        "--mode",
+        choices=["regime_diagnostic", "regime_validation"],
+        default="regime_diagnostic",
     )
     regime.add_argument("--subject-type", choices=["strategy_version", "component_candidate"], required=True)
     regime.add_argument("--subject-id", required=True)
@@ -34,6 +39,7 @@ def add_governance_parsers(subparsers: argparse._SubParsersAction) -> None:
     regime.add_argument("--data-manifest", required=True)
     regime.add_argument("--trades", required=True)
     regime.add_argument("--agent-run-id")
+    regime.add_argument("--viability-gate-result-id")
 
     triage = subparsers.add_parser(
         "triage-component",
@@ -64,7 +70,8 @@ def handle_governance_command(
     repository = SQLiteProductRepository(database_path)
     if args.command == "create-regime-validation-job":
         payload = {
-            "intent": "regime_validation",
+            "intent": args.mode,
+            "mode": args.mode,
             "subject_type": args.subject_type,
             "subject_id": args.subject_id,
             "market_profile": args.market_profile,
@@ -76,6 +83,8 @@ def handle_governance_command(
         }
         if args.agent_run_id:
             payload["agent_run_id"] = args.agent_run_id
+        if args.viability_gate_result_id:
+            payload["viability_gate_result_id"] = args.viability_gate_result_id
         job = ResearchApplicationService(repository).create_job(
             job_type="regime_validation", payload=payload
         )

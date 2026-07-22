@@ -134,6 +134,7 @@ def test_regime_job_requires_ex_ante_and_never_uses_locked_test(tmp_path: Path) 
         "data_manifest_artifact_key": "data/manifests/data.json",
         "trades_artifact_key": "experiments/runs/run/trades.parquet",
         "locked_test_used": False,
+        "mode": "regime_diagnostic",
     }
     with pytest.raises(InvalidJobError, match="ex-ante"):
         research.create_job(

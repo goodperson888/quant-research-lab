@@ -46,6 +46,13 @@ class RegimeValidationRunner:
         if missing:
             raise ValueError(f"regime validation payload missing: {missing}")
         values = {key: str(payload[key]) for key in required}
+        mode = str(payload.get("mode", ""))
+        if mode not in {"regime_diagnostic", "regime_validation"}:
+            raise ValueError("regime job requires an explicit diagnostic/validation mode")
+        values["mode"] = mode
+        gate_id = payload.get("viability_gate_result_id")
+        if gate_id is not None:
+            values["viability_gate_result_id"] = str(gate_id)
         if values["subject_type"] not in {"strategy_version", "component_candidate"}:
             raise ValueError("unsupported regime validation subject_type")
         for name in (
@@ -86,7 +93,10 @@ class RegimeValidationRunner:
         )
         if history_days < config.minimum_history_days_for_screening:
             evidence_status = "insufficient_history"
-        elif history_days < config.minimum_history_days_for_extended_validation:
+        elif (
+            payload["mode"] == "regime_diagnostic"
+            or history_days < config.minimum_history_days_for_extended_validation
+        ):
             evidence_status = "screening"
         else:
             evidence_status = "extended_validation"
@@ -95,6 +105,7 @@ class RegimeValidationRunner:
         validation = self.pipeline.create_regime_validation(
             subject_type=payload["subject_type"],
             subject_id=payload["subject_id"],
+            mode=payload["mode"],
             market_profile=payload["market_profile"],
             detector_version=f"{config.detector_id}:{config.detector_version}",
             ex_ante_observable=True,
@@ -107,6 +118,7 @@ class RegimeValidationRunner:
             transition_policy=dict(config.transition_policy),
             history_days=history_days,
             evidence_status=evidence_status,
+            viability_gate_result_id=payload.get("viability_gate_result_id"),
         )
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -124,11 +136,13 @@ class RegimeValidationRunner:
             "regime_validation_id": validation.id,
             "subject_type": validation.subject_type,
             "subject_id": validation.subject_id,
+            "mode": validation.mode,
             "market_profile": validation.market_profile,
             "detector_version": validation.detector_version,
             "ex_ante_observable": True,
             "history_days": history_days,
             "evidence_status": evidence_status,
+            "viability_gate_result_id": validation.viability_gate_result_id,
             "regime_metrics": metrics,
             "groups": groups,
             "limitations": [
@@ -141,7 +155,7 @@ class RegimeValidationRunner:
             "manifest_version": 1,
             "run_id": prefix.rsplit("/", 1)[-1],
             "job_id": job.id,
-            "run_type": "regime_validation",
+            "run_type": validation.mode,
             "subject_id": validation.subject_id,
             "market_profile": validation.market_profile,
             "detector_config_artifact_key": payload["detector_config_artifact_key"],
@@ -151,6 +165,8 @@ class RegimeValidationRunner:
             "ex_ante_observable": True,
             "history_days": history_days,
             "evidence_status": evidence_status,
+            "viability_gate_result_id": validation.viability_gate_result_id,
+            "strategy_promotion_allowed": False,
             "locked_test_used": False,
             "live_trading": False,
             "outputs": [labels_key, report_key],

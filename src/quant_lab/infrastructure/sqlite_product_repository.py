@@ -25,6 +25,7 @@ from quant_lab.domain.models import (
     Proposal,
     Report,
     ResearchSession,
+    ResearchBudget,
     StrategyDraft,
     StrategyOutcome,
     StrategyVersion,
@@ -34,7 +35,7 @@ from quant_lab.domain.models import (
 )
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class SQLiteProductRepository:
@@ -67,6 +68,20 @@ class SQLiteProductRepository:
                     status TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS research_budgets (
+                    session_id TEXT PRIMARY KEY,
+                    max_hypotheses INTEGER NOT NULL,
+                    max_trials_total INTEGER NOT NULL,
+                    max_compute_minutes INTEGER NOT NULL,
+                    max_locked_test_uses INTEGER NOT NULL,
+                    require_user_approval_for_new_hypothesis INTEGER NOT NULL,
+                    used_hypotheses INTEGER NOT NULL DEFAULT 0,
+                    reserved_trials INTEGER NOT NULL DEFAULT 0,
+                    reserved_compute_minutes INTEGER NOT NULL DEFAULT 0,
+                    used_locked_test_uses INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY (session_id) REFERENCES research_sessions(id)
                 );
 
                 CREATE TABLE IF NOT EXISTS messages (
@@ -305,6 +320,7 @@ class SQLiteProductRepository:
                     id TEXT PRIMARY KEY,
                     subject_type TEXT NOT NULL,
                     subject_id TEXT NOT NULL,
+                    mode TEXT NOT NULL DEFAULT 'regime_diagnostic',
                     market_profile TEXT NOT NULL,
                     detector_version TEXT NOT NULL,
                     ex_ante_observable INTEGER NOT NULL,
@@ -317,10 +333,27 @@ class SQLiteProductRepository:
                     transition_policy_json TEXT NOT NULL,
                     history_days INTEGER NOT NULL,
                     evidence_status TEXT NOT NULL,
+                    viability_gate_result_id TEXT,
                     created_at TEXT NOT NULL
                 );
                 """
             )
+            regime_columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(regime_validations)"
+                ).fetchall()
+            }
+            if "mode" not in regime_columns:
+                connection.execute(
+                    "ALTER TABLE regime_validations "
+                    "ADD COLUMN mode TEXT NOT NULL DEFAULT 'regime_diagnostic'"
+                )
+            if "viability_gate_result_id" not in regime_columns:
+                connection.execute(
+                    "ALTER TABLE regime_validations "
+                    "ADD COLUMN viability_gate_result_id TEXT"
+                )
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def create_session(self, session: ResearchSession) -> ResearchSession:
@@ -355,6 +388,106 @@ class SQLiteProductRepository:
         if row is None:
             raise NotFoundError(f"research session not found: {session_id}")
         return self._session(row)
+
+    def create_research_budget(self, budget: ResearchBudget) -> ResearchBudget:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO research_budgets (
+                    session_id, max_hypotheses, max_trials_total,
+                    max_compute_minutes, max_locked_test_uses,
+                    require_user_approval_for_new_hypothesis, used_hypotheses,
+                    reserved_trials, reserved_compute_minutes, used_locked_test_uses
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    budget.session_id,
+                    budget.max_hypotheses,
+                    budget.max_trials_total,
+                    budget.max_compute_minutes,
+                    budget.max_locked_test_uses,
+                    int(budget.require_user_approval_for_new_hypothesis),
+                    budget.used_hypotheses,
+                    budget.reserved_trials,
+                    budget.reserved_compute_minutes,
+                    budget.used_locked_test_uses,
+                ),
+            )
+        return budget
+
+    def get_research_budget(self, session_id: str) -> ResearchBudget:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM research_budgets WHERE session_id = ?", (session_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"research budget not found for session: {session_id}")
+        return self._research_budget(row)
+
+    def reserve_hypothesis(self, session_id: str) -> ResearchBudget:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE research_budgets
+                SET used_hypotheses = used_hypotheses + 1
+                WHERE session_id = ? AND used_hypotheses < max_hypotheses
+                """,
+                (session_id,),
+            )
+            if cursor.rowcount != 1:
+                raise ConflictError("research budget max_hypotheses exceeded")
+        return self.get_research_budget(session_id)
+
+    def reserve_experiment_resources(
+        self, session_id: str, *, trials: int, compute_minutes: int
+    ) -> ResearchBudget:
+        if trials < 0 or compute_minutes < 0:
+            raise ValueError("research resource reservation must be non-negative")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE research_budgets
+                SET reserved_trials = reserved_trials + ?,
+                    reserved_compute_minutes = reserved_compute_minutes + ?
+                WHERE session_id = ?
+                  AND reserved_trials + ? <= max_trials_total
+                  AND reserved_compute_minutes + ? <= max_compute_minutes
+                """,
+                (trials, compute_minutes, session_id, trials, compute_minutes),
+            )
+            if cursor.rowcount != 1:
+                raise ConflictError("research budget trial or compute limit exceeded")
+        return self.get_research_budget(session_id)
+
+    def reserve_locked_test_use(self, session_id: str) -> ResearchBudget:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE research_budgets
+                SET used_locked_test_uses = used_locked_test_uses + 1
+                WHERE session_id = ?
+                  AND used_locked_test_uses < max_locked_test_uses
+                """,
+                (session_id,),
+            )
+            if cursor.rowcount != 1:
+                raise ConflictError("research budget max_locked_test_uses exceeded")
+        return self.get_research_budget(session_id)
+
+    def get_session_id_for_strategy_version(self, version_id: str) -> str:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT d.session_id
+                FROM strategy_versions v
+                JOIN strategy_drafts d ON d.id = v.strategy_id
+                WHERE v.id = ?
+                """,
+                (version_id,),
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"strategy version not found: {version_id}")
+        return str(row["session_id"])
 
     def add_message(self, message: Message) -> Message:
         with self._connect() as connection:
@@ -1340,17 +1473,19 @@ class SQLiteProductRepository:
             connection.execute(
                 """
                 INSERT INTO regime_validations (
-                    id, subject_type, subject_id, market_profile, detector_version,
+                    id, subject_type, subject_id, mode, market_profile, detector_version,
                     ex_ante_observable, target_regimes_json, suitable_regimes_json,
                     conditional_regimes_json, blocked_regimes_json,
                     unknown_regimes_json, regime_metrics_json,
-                    transition_policy_json, history_days, evidence_status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    transition_policy_json, history_days, evidence_status,
+                    viability_gate_result_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     validation.id,
                     validation.subject_type,
                     validation.subject_id,
+                    validation.mode,
                     validation.market_profile,
                     validation.detector_version,
                     int(validation.ex_ante_observable),
@@ -1363,6 +1498,7 @@ class SQLiteProductRepository:
                     json.dumps(validation.transition_policy, ensure_ascii=False, sort_keys=True),
                     validation.history_days,
                     validation.evidence_status,
+                    validation.viability_gate_result_id,
                     validation.created_at,
                 ),
             )
@@ -1383,6 +1519,23 @@ class SQLiteProductRepository:
             status=row["status"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _research_budget(row: sqlite3.Row) -> ResearchBudget:
+        return ResearchBudget(
+            session_id=row["session_id"],
+            max_hypotheses=row["max_hypotheses"],
+            max_trials_total=row["max_trials_total"],
+            max_compute_minutes=row["max_compute_minutes"],
+            max_locked_test_uses=row["max_locked_test_uses"],
+            require_user_approval_for_new_hypothesis=bool(
+                row["require_user_approval_for_new_hypothesis"]
+            ),
+            used_hypotheses=row["used_hypotheses"],
+            reserved_trials=row["reserved_trials"],
+            reserved_compute_minutes=row["reserved_compute_minutes"],
+            used_locked_test_uses=row["used_locked_test_uses"],
         )
 
     @staticmethod
@@ -1484,6 +1637,7 @@ class SQLiteProductRepository:
             id=row["id"],
             subject_type=row["subject_type"],
             subject_id=row["subject_id"],
+            mode=row["mode"],
             market_profile=row["market_profile"],
             detector_version=row["detector_version"],
             ex_ante_observable=bool(row["ex_ante_observable"]),
@@ -1496,6 +1650,7 @@ class SQLiteProductRepository:
             transition_policy=json.loads(row["transition_policy_json"]),
             history_days=row["history_days"],
             evidence_status=row["evidence_status"],
+            viability_gate_result_id=row["viability_gate_result_id"],
             created_at=row["created_at"],
         )
 

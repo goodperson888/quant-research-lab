@@ -1,0 +1,8 @@
+schema_version: 1
+policy_id: personal_guided_research_v1
+limits:
+  max_hypotheses: 8
+  max_trials_total: 200
+  max_compute_minutes: 240
+  max_locked_test_uses: 2
+  require_user_approval_for_new_hypothesis: true

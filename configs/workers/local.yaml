@@ -1,0 +1,8 @@
+schema_version: 1
+policy_id: local_one_shot_worker_v1
+limits:
+  max_rss_mb: 4096
+  max_concurrent_trials: 1
+  max_job_minutes: 30
+  parquet_batch_rows: 1000
+  kill_on_memory_limit: true

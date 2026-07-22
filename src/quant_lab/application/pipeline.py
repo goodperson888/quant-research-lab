@@ -437,6 +437,12 @@ class PipelineApplicationService:
     def create_regime_validation(self, **values: Any) -> RegimeValidation:
         history_days = int(values["history_days"])
         evidence_status = str(values["evidence_status"])
+        mode = str(values["mode"])
+        viability_gate_result_id = values.get("viability_gate_result_id")
+        if values.get("ex_ante_observable") is not True:
+            raise GatePolicyError("regime labels must be ex-ante observable")
+        if mode not in {"regime_diagnostic", "regime_validation"}:
+            raise GatePolicyError("unknown regime evidence mode")
         if history_days <= 90 and evidence_status not in {
             "screening",
             "insufficient_history",
@@ -444,6 +450,28 @@ class PipelineApplicationService:
             raise GatePolicyError(
                 "90-day regime evidence must be screening or insufficient_history"
             )
+        if mode == "regime_diagnostic":
+            if evidence_status not in {"screening", "insufficient_history"}:
+                raise GatePolicyError(
+                    "regime diagnostic cannot produce formal validation evidence"
+                )
+            if viability_gate_result_id is not None:
+                raise GatePolicyError("regime diagnostic must not claim viability approval")
+        else:
+            if not isinstance(viability_gate_result_id, str):
+                raise GatePolicyError(
+                    "formal regime validation requires a passed viability gate"
+                )
+            gate = self.repository.get_gate_evaluation(viability_gate_result_id)
+            if (
+                gate.subject_id != values["subject_id"]
+                or gate.gate_name != "viability"
+                or gate.status != "passed"
+                or gate.market_profile != values["market_profile"]
+            ):
+                raise GatePolicyError(
+                    "formal regime validation requires the subject's passed viability gate"
+                )
         if values["subject_type"] == "strategy_version":
             self.repository.get_strategy_version(values["subject_id"])
         else:
@@ -456,6 +484,7 @@ class PipelineApplicationService:
             id=new_id("regime"),
             subject_type=values["subject_type"],
             subject_id=values["subject_id"],
+            mode=mode,  # type: ignore[arg-type]
             market_profile=values["market_profile"],
             detector_version=values["detector_version"],
             ex_ante_observable=values["ex_ante_observable"],
@@ -470,19 +499,23 @@ class PipelineApplicationService:
             transition_policy=dict(values["transition_policy"]),
             history_days=history_days,
             evidence_status=evidence_status,  # type: ignore[arg-type]
+            viability_gate_result_id=viability_gate_result_id,
             created_at=utc_now(),
         )
         created = self.repository.create_regime_validation(validation)
         self._audit(
-            event_type="regime_validation.created",
+            event_type=f"{created.mode}.created",
             aggregate_type="regime_validation",
             aggregate_id=created.id,
             payload={
                 "subject_id": created.subject_id,
+                "mode": created.mode,
                 "detector_version": created.detector_version,
                 "ex_ante_observable": created.ex_ante_observable,
                 "history_days": created.history_days,
                 "evidence_status": created.evidence_status,
+                "viability_gate_result_id": created.viability_gate_result_id,
+                "strategy_promotion_allowed": False,
             },
         )
         return created

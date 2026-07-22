@@ -260,6 +260,7 @@ class ComponentTriageResponse(StrictModel):
 
 
 class CreateRegimeValidationJobRequest(StrictModel):
+    mode: Literal["regime_diagnostic", "regime_validation"]
     subject_type: Literal["strategy_version", "component_candidate"]
     subject_id: str = Field(min_length=1)
     market_profile: str = Field(min_length=1)
@@ -267,9 +268,11 @@ class CreateRegimeValidationJobRequest(StrictModel):
     data_manifest_artifact_key: str = Field(min_length=1)
     trades_artifact_key: str = Field(min_length=1)
     agent_run_id: str | None = None
+    viability_gate_result_id: str | None = None
 
 
 class CreateRegimeValidationRequest(StrictModel):
+    mode: Literal["regime_diagnostic", "regime_validation"]
     subject_type: Literal["strategy_version", "component_candidate"]
     subject_id: str = Field(min_length=1)
     market_profile: str = Field(min_length=1)
@@ -286,12 +289,14 @@ class CreateRegimeValidationRequest(StrictModel):
     evidence_status: Literal[
         "screening", "insufficient_history", "extended_validation"
     ]
+    viability_gate_result_id: str | None = None
 
 
 class RegimeValidationResponse(StrictModel):
     id: str
     subject_type: str
     subject_id: str
+    mode: str
     market_profile: str
     detector_version: str
     ex_ante_observable: bool
@@ -304,4 +309,15 @@ class RegimeValidationResponse(StrictModel):
     transition_policy: dict[str, Any]
     history_days: int
     evidence_status: str
+    viability_gate_result_id: str | None
     created_at: str
+
+
+class CreateCorrectnessDiagnosticJobRequest(StrictModel):
+    strategy_version_id: str = Field(min_length=1)
+    analysis_type: Literal["lookahead-analysis", "recursive-analysis"]
+    strategy_name: str = Field(min_length=1, max_length=160)
+    strategy_artifact_key: str = Field(min_length=1)
+    config_artifact_key: str = Field(min_length=1)
+    timerange: str | None = Field(default=None, pattern=r"^[0-9]{8}-[0-9]{8}$")
+    agent_run_id: str | None = None

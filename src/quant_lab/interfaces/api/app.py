@@ -37,6 +37,10 @@ from quant_lab.infrastructure.project_readers import (
     DataSummaryReader,
     ProjectStatusReader,
 )
+from quant_lab.infrastructure.policy_readers import (
+    ResearchBudgetPolicyReader,
+    WorkerResourcePolicyReader,
+)
 from quant_lab.application.storage import StorageReporter
 from quant_lab.infrastructure.sqlite_product_repository import SQLiteProductRepository
 from quant_lab.paths import app_database_path, project_root
@@ -49,6 +53,7 @@ from .schemas import (
     CreateComponentCandidateRequest,
     CreateRegimeValidationRequest,
     CreateRegimeValidationJobRequest,
+    CreateCorrectnessDiagnosticJobRequest,
     CreateStrategyOutcomeRequest,
     CreateIntakeRequest,
     CreateExperimentPlanRequest,
@@ -85,7 +90,12 @@ def create_app(
         raise ValueError("product database must remain inside the project root") from exc
 
     repository = SQLiteProductRepository(resolved_database)
-    service = ResearchApplicationService(repository)
+    budget_policy_path = resolved_root / "configs/research_budgets/default.yaml"
+    budget_policy_data: dict[str, Any] | None = None
+    if budget_policy_path.is_file():
+        budget_policy_data = asdict(ResearchBudgetPolicyReader(resolved_root).read())
+        budget_policy_data.pop("policy_id", None)
+    service = ResearchApplicationService(repository, budget_policy=budget_policy_data)
     pipeline_service = PipelineApplicationService(
         repository, PipelineProfileCatalog(resolved_root)
     )
@@ -197,6 +207,32 @@ def create_app(
             "session": service.get_research_session(session_id),
             "messages": service.list_messages(session_id),
             "drafts": service.list_strategy_drafts(session_id),
+        }
+
+    @application.get(
+        "/api/research/sessions/{session_id}/budget",
+        tags=["research"],
+    )
+    def research_budget(session_id: str) -> dict[str, Any]:
+        budget = service.get_research_budget(session_id)
+        return {
+            **asdict(budget),
+            "remaining_hypotheses": budget.remaining_hypotheses,
+            "remaining_trials": budget.remaining_trials,
+            "remaining_compute_minutes": budget.remaining_compute_minutes,
+            "remaining_locked_test_uses": budget.remaining_locked_test_uses,
+        }
+
+    @application.get("/api/research-budget/default", tags=["research"])
+    def default_research_budget() -> dict[str, Any]:
+        if not budget_policy_path.is_file():
+            return {
+                "available": False,
+                "reason": "research budget policy not found",
+            }
+        return {
+            "available": True,
+            **asdict(ResearchBudgetPolicyReader(resolved_root).read()),
         }
 
     @application.post(
@@ -489,10 +525,39 @@ def create_app(
     )
     def create_regime_validation_job(body: CreateRegimeValidationJobRequest) -> Any:
         payload = body.model_dump(exclude_none=True)
-        payload["intent"] = "regime_validation"
+        payload["intent"] = body.mode
         payload["ex_ante_observable"] = True
         payload["locked_test_used"] = False
         return service.create_job(job_type="regime_validation", payload=payload)
+
+    @application.post(
+        "/api/correctness-diagnostics/jobs",
+        response_model=JobResponse,
+        status_code=status.HTTP_201_CREATED,
+        tags=["research-pipeline"],
+    )
+    def create_correctness_diagnostic_job(
+        body: CreateCorrectnessDiagnosticJobRequest,
+    ) -> Any:
+        payload = body.model_dump(exclude_none=True)
+        payload.update(
+            {
+                "intent": "baseline_correctness",
+                "locked_test_used": False,
+                "live_trading": False,
+            }
+        )
+        return service.create_job(job_type="correctness_diagnostic", payload=payload)
+
+    @application.get("/api/worker/resource-policy", tags=["system"])
+    def worker_resource_policy() -> dict[str, Any]:
+        policy_path = resolved_root / "configs/workers/local.yaml"
+        if not policy_path.is_file():
+            return {"available": False, "reason": "worker resource policy not found"}
+        return {
+            "available": True,
+            **asdict(WorkerResourcePolicyReader(resolved_root).read()),
+        }
 
     return application
 
