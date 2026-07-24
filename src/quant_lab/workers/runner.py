@@ -8,6 +8,7 @@ import time
 from typing import Any, Callable, Mapping
 
 from quant_lab.application.services import ResearchApplicationService
+from quant_lab.domain.errors import JobCancelledError
 from quant_lab.domain.models import ALLOWED_JOB_TYPES
 from quant_lab.domain.models import AuditEvent, Job
 from quant_lab.domain.repositories import ProductRepository
@@ -60,6 +61,7 @@ class LocalWorker:
                 "policy_id": self.resource_policy.policy_id,
                 "max_rss_mb": self.resource_policy.max_rss_mb,
                 "max_concurrent_trials": self.resource_policy.max_concurrent_trials,
+                "default_concurrent_trials": self.resource_policy.default_concurrent_trials,
                 "max_job_minutes": self.resource_policy.max_job_minutes,
                 "parquet_batch_rows": self.resource_policy.parquet_batch_rows,
                 "kill_on_memory_limit": self.resource_policy.kill_on_memory_limit,
@@ -71,6 +73,19 @@ class LocalWorker:
             "arbitrary_shell_enabled": False,
             "live_trading_enabled": False,
         }
+
+    def _mark_batch_proposal_evaluated(self, job: Job) -> None:
+        if job.job_type != "parameter_search" or job.payload.get("batch_mode") is not True:
+            return
+        plan_id = job.payload.get("experiment_plan_id")
+        if not isinstance(plan_id, str):
+            return
+        plan = self.repository.get_experiment_plan(plan_id)
+        if plan.proposal_id is None:
+            return
+        proposal = self.repository.get_proposal(plan.proposal_id)
+        if proposal.status == "executing":
+            self.repository.update_proposal(proposal.transition("evaluated"))
 
     def run(self, job_id: str) -> Mapping[str, Any]:
         job = self.repository.get_job(job_id)
@@ -151,6 +166,38 @@ class LocalWorker:
                 "max_concurrent_trials": self.resource_policy.max_concurrent_trials,
                 "parquet_batch_rows": self.resource_policy.parquet_batch_rows,
             }
+        except JobCancelledError as exc:
+            cancelled_at = _utc_now()
+            elapsed_seconds = time.monotonic() - started_monotonic
+            peak_rss_mb = self._peak_rss_mb()
+            self.repository.update_job(
+                job.id, status="cancelled", updated_at=cancelled_at, error=str(exc)
+            )
+            self.repository.append_job_log(
+                job.id,
+                level="warning",
+                message=(
+                    f"{exc}; elapsed_seconds={elapsed_seconds:.3f}; "
+                    f"peak_rss_mb={peak_rss_mb:.3f}"
+                ),
+                created_at=cancelled_at,
+            )
+            self.repository.append_event(
+                AuditEvent(
+                    id=None,
+                    event_type="job.cancelled",
+                    aggregate_type="job",
+                    aggregate_id=job.id,
+                    actor_type="system",
+                    payload={
+                        "job_type": job.job_type,
+                        "reason": str(exc),
+                        "partial_trials_preserved": True,
+                    },
+                    created_at=cancelled_at,
+                )
+            )
+            raise
         except Exception as exc:
             failed_at = _utc_now()
             elapsed_seconds = time.monotonic() - started_monotonic
@@ -205,6 +252,7 @@ class LocalWorker:
             raise
 
         completed_at = _utc_now()
+        self._mark_batch_proposal_evaluated(job)
         self.repository.update_job(job.id, status="succeeded", updated_at=completed_at)
         self.repository.append_job_log(
             job.id,

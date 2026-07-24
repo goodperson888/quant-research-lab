@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol, Sequence
 
 from quant_lab.domain.models import AgentProviderKind, ExecutionTargetKind, Job
@@ -69,6 +69,62 @@ class TrialMetricsSink(Protocol):
     def append_batch(
         self, *, experiment_plan_id: str, rows: Sequence[Mapping[str, Any]]
     ) -> tuple[str, ...]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class TrialEvaluationRequest:
+    trial_id: str
+    experiment_plan_id: str
+    baseline_version_id: str
+    candidate_version_id: str | None
+    parameters: Mapping[str, Any]
+    data_version: str
+    data_splits: Mapping[str, str]
+    cost_model: Mapping[str, Any]
+    seed: int
+
+
+@dataclass(frozen=True, slots=True)
+class TrialEvaluationResult:
+    trial_id: str
+    status: str
+    metrics: Mapping[str, float] = field(default_factory=dict)
+    error: str | None = None
+    elapsed_seconds: float = 0.0
+    peak_rss_mb: float = 0.0
+    result_artifact_key: str | None = None
+    stop_reason: str | None = None
+
+
+class StrategyEvaluator(Protocol):
+    """Evaluate one immutable candidate without selecting parameters or using locked data."""
+
+    evaluator_id: str
+
+    def evaluate(self, request: TrialEvaluationRequest) -> TrialEvaluationResult: ...
+
+
+class TrialExecutor(Protocol):
+    """Execute deterministic Trial requests under process/resource bounds."""
+
+    def execute(
+        self,
+        *,
+        evaluator: StrategyEvaluator,
+        requests: Sequence[TrialEvaluationRequest],
+        max_concurrency: int,
+        timeout_seconds: int,
+        max_rss_mb: int,
+        kill_on_memory_limit: bool,
+    ) -> Sequence[TrialEvaluationResult]: ...
+
+
+class ComponentEvidenceAggregator(Protocol):
+    """Aggregate Trial evidence by normalized component logic, never parameter values."""
+
+    def aggregate(
+        self, *, experiment_plan_id: str, attribution: Mapping[str, Any]
+    ) -> Mapping[str, Any]: ...
 
 
 class LLMProvider(AgentProvider, Protocol):

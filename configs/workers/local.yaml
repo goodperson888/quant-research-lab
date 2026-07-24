@@ -1,8 +1,15 @@
 schema_version: 1
 policy_id: local_one_shot_worker_v1
+defaults:
+  max_concurrent_trials: 1
+  auto_concurrency: true
+auto_concurrency_by_memory_gb:
+  "8": 1
+  "16": 2
+  "32": 4
 limits:
   max_rss_mb: 4096
-  max_concurrent_trials: 1
+  max_concurrent_trials: 4
   max_job_minutes: 30
   parquet_batch_rows: 1000
   kill_on_memory_limit: true

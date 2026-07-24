@@ -252,31 +252,80 @@ class ResearchApplicationService:
                 raise ApprovalRequiredError(
                     "parameter search requires explicit user approval of the experiment plan"
                 )
+            if payload.get("batch_mode") is True:
+                if payload.get("locked_test_used") is not False:
+                    raise InvalidJobError(
+                        "batch parameter search must explicitly exclude locked-test data"
+                    )
+                if payload.get("evidence_mode") != "fixture":
+                    if not plan.proposal_id or not plan.candidate_version_id:
+                        raise ApprovalRequiredError(
+                            "research batch search requires an approved Proposal and immutable Candidate"
+                        )
+                    proposal = self.repository.get_proposal(plan.proposal_id)
+                    allowed_proposal_statuses = (
+                        {"executing"}
+                        if payload.get("resume_of_job_id") is not None
+                        else {"approved"}
+                    )
+                    if proposal.status not in allowed_proposal_statuses or (
+                        proposal.candidate_version_id != plan.candidate_version_id
+                    ):
+                        raise ApprovalRequiredError(
+                            "research batch search requires its approved Proposal/Candidate lineage"
+                        )
+                requested_trials = int(payload.get("max_trials", plan.max_trials or 0))
+                if requested_trials <= 0 or not plan.max_trials or requested_trials > plan.max_trials:
+                    raise InvalidJobError(
+                        "batch Trial budget must be positive and within the approved plan"
+                    )
+                resume_of = payload.get("resume_of_job_id")
+                related = [
+                    item
+                    for item in self.repository.list_jobs()
+                    if item.job_type == "parameter_search"
+                    and item.payload.get("batch_mode") is True
+                    and item.payload.get("experiment_plan_id") == plan.id
+                ]
+                if resume_of is None and related:
+                    raise ConflictError(
+                        "batch search already exists for this plan; use the explicit retry endpoint"
+                    )
+                if resume_of is not None:
+                    previous = self.repository.get_job(str(resume_of))
+                    if (
+                        previous.status not in {"failed", "cancelled"}
+                        or previous.payload.get("experiment_plan_id") != plan.id
+                    ):
+                        raise ConflictError(
+                            "batch resume requires a failed/cancelled job for the same plan"
+                        )
             session_id = self.repository.get_session_id_for_strategy_version(
                 plan.baseline_version_id
             )
             self._ensure_budget(session_id)
-            trials = plan.max_trials or 0
-            compute_minutes = ceil((plan.time_budget_seconds or 0) / 60)
-            try:
-                self.repository.reserve_experiment_resources(
-                    session_id,
-                    trials=trials,
-                    compute_minutes=compute_minutes,
-                )
-            except ConflictError as exc:
-                self._audit(
-                    event_type="research_budget.blocked",
-                    aggregate_type="research_session",
-                    aggregate_id=session_id,
-                    payload={
-                        "job_type": job_type,
-                        "experiment_plan_id": plan.id,
-                        "reason": str(exc),
-                    },
-                    actor_type="system",
-                )
-                raise
+            if payload.get("resume_of_job_id") is None:
+                trials = plan.max_trials or 0
+                compute_minutes = ceil((plan.time_budget_seconds or 0) / 60)
+                try:
+                    self.repository.reserve_experiment_resources(
+                        session_id,
+                        trials=trials,
+                        compute_minutes=compute_minutes,
+                    )
+                except ConflictError as exc:
+                    self._audit(
+                        event_type="research_budget.blocked",
+                        aggregate_type="research_session",
+                        aggregate_id=session_id,
+                        payload={
+                            "job_type": job_type,
+                            "experiment_plan_id": plan.id,
+                            "reason": str(exc),
+                        },
+                        actor_type="system",
+                    )
+                    raise
         if job_type == "stress_test":
             stress_level = payload.get("stress_level")
             if stress_level == "full":
@@ -438,6 +487,12 @@ class ResearchApplicationService:
             updated_at=now,
         )
         created = self.repository.create_job(job)
+        if job_type == "parameter_search" and payload.get("batch_mode") is True:
+            plan = self.repository.get_experiment_plan(str(payload["experiment_plan_id"]))
+            if plan.proposal_id is not None:
+                proposal = self.repository.get_proposal(plan.proposal_id)
+                if proposal.status == "approved":
+                    self.repository.update_proposal(proposal.transition("executing"))
         self._audit(
             event_type="job.queued",
             aggregate_type="job",
@@ -594,6 +649,40 @@ class ResearchApplicationService:
     def list_jobs(self) -> Sequence[Job]:
         return self.repository.list_jobs()
 
+    def cancel_job(
+        self, *, job_id: str, subject_id: str, confirmed_by_user: bool
+    ) -> Job:
+        if not confirmed_by_user or subject_id != job_id:
+            raise ApprovalRequiredError("job cancellation requires the exact subject_id")
+        current = self.repository.get_job(job_id)
+        if current.status not in {"queued", "running"}:
+            raise ConflictError("only queued/running jobs can be cancelled")
+        cancelled = self.repository.update_job(
+            job_id, status="cancelled", updated_at=utc_now(), error="cancelled by user"
+        )
+        self._audit(
+            event_type="job.cancellation_requested",
+            aggregate_type="job",
+            aggregate_id=job_id,
+            payload={"subject_id": subject_id, "partial_trials_preserved": True},
+        )
+        return cancelled
+
+    def retry_job(
+        self, *, job_id: str, subject_id: str, confirmed_by_user: bool
+    ) -> Job:
+        if not confirmed_by_user or subject_id != job_id:
+            raise ApprovalRequiredError("job retry requires the exact subject_id")
+        previous = self.repository.get_job(job_id)
+        if previous.job_type != "parameter_search" or previous.status not in {
+            "failed",
+            "cancelled",
+        }:
+            raise ConflictError("only failed/cancelled parameter-search jobs can be retried")
+        payload = dict(previous.payload)
+        payload["resume_of_job_id"] = previous.id
+        return self.create_job(job_type=previous.job_type, payload=payload)
+
     def get_job(self, job_id: str) -> Job:
         return self.repository.get_job(job_id)
 
@@ -617,7 +706,25 @@ class ResearchApplicationService:
         max_trials: int | None,
         time_budget_seconds: int | None,
         stopping_conditions: Sequence[str],
+        proposal_id: str | None = None,
+        candidate_version_id: str | None = None,
+        search_strategy: str = "grid",
+        random_seed: int = 0,
     ) -> ExperimentPlan:
+        if proposal_id is not None:
+            proposal = self.repository.get_proposal(proposal_id)
+            if proposal.status != "approved":
+                raise ApprovalRequiredError(
+                    "experiment plan requires an approved improvement proposal"
+                )
+            if proposal.baseline_version_id != baseline_version_id:
+                raise ConflictError("plan baseline does not match its proposal")
+            if candidate_version_id != proposal.candidate_version_id:
+                raise ConflictError("plan candidate does not match its approved proposal")
+        if candidate_version_id is not None:
+            candidate = self.repository.get_strategy_version(candidate_version_id)
+            if candidate.status != "candidate" or not candidate.immutable:
+                raise ConflictError("experiment plan candidate must be immutable")
         plan = ExperimentPlan(
             id=new_id("plan"),
             baseline_version_id=baseline_version_id,
@@ -630,6 +737,10 @@ class ResearchApplicationService:
             max_trials=max_trials,
             time_budget_seconds=time_budget_seconds,
             stopping_conditions=tuple(stopping_conditions),
+            proposal_id=proposal_id,
+            candidate_version_id=candidate_version_id,
+            search_strategy=search_strategy,  # type: ignore[arg-type]
+            random_seed=random_seed,
             status="draft",
             approved_by=None,
             created_at=utc_now(),
@@ -832,6 +943,11 @@ class ResearchApplicationService:
         status: str = "queued",
         metrics: Mapping[str, float] | None = None,
         log_artifact_key: str | None = None,
+        candidate_version_id: str | None = None,
+        parameter_signature: str | None = None,
+        split: str = "train_validation",
+        cost_model: Mapping[str, Any] | None = None,
+        seed: int = 0,
     ) -> Trial:
         trial = Trial(
             id=new_id("trial"),
@@ -841,6 +957,11 @@ class ResearchApplicationService:
             status=status,  # type: ignore[arg-type]
             metrics=dict(metrics or {}),
             log_artifact_key=log_artifact_key,
+            candidate_version_id=candidate_version_id,
+            parameter_signature=parameter_signature,
+            split=split,
+            cost_model=dict(cost_model or {}),
+            seed=seed,
             created_at=utc_now(),
         )
         created = self.repository.create_trial(trial)
@@ -860,6 +981,11 @@ class ResearchApplicationService:
         status: str,
         metrics: Mapping[str, float],
         log_artifact_key: str | None,
+        error: str | None = None,
+        elapsed_seconds: float | None = None,
+        peak_rss_mb: float | None = None,
+        result_artifact_key: str | None = None,
+        metrics_artifact_key: str | None = None,
     ) -> Trial:
         if status not in {"running", "succeeded", "failed", "cancelled"}:
             raise ValueError("invalid trial status")
@@ -868,6 +994,11 @@ class ResearchApplicationService:
             status=status,
             metrics=metrics,
             log_artifact_key=log_artifact_key,
+            error=error,
+            elapsed_seconds=elapsed_seconds,
+            peak_rss_mb=peak_rss_mb,
+            result_artifact_key=result_artifact_key,
+            metrics_artifact_key=metrics_artifact_key,
         )
         self._audit(
             event_type="trial.status_changed",

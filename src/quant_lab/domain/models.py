@@ -22,6 +22,16 @@ JobStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 AgentRunMode = Literal["supervised", "guided", "bounded_autonomous"]
 GateStatus = Literal["passed", "failed", "blocked", "not_evaluated"]
 RegimeMode = Literal["regime_diagnostic", "regime_validation"]
+ProposalStatus = Literal[
+    "draft",
+    "waiting_approval",
+    "approved",
+    "executing",
+    "evaluated",
+    "accepted",
+    "rejected",
+    "expired",
+]
 
 
 class AgentProviderKind(StrEnum):
@@ -139,7 +149,43 @@ class Proposal:
     draft_id: str
     proposal_type: str
     content: Mapping[str, Any]
-    status: Literal["draft", "accepted", "rejected"] = "draft"
+    status: ProposalStatus = "draft"
+    baseline_version_id: str | None = None
+    subject_id: str | None = None
+    hypothesis: str = ""
+    rule_diff: Mapping[str, Any] = field(default_factory=dict)
+    evidence_refs: tuple[str, ...] = ()
+    parameter_space: tuple["ParameterSpace", ...] = ()
+    data_splits: Mapping[str, str] = field(default_factory=dict)
+    cost_model: Mapping[str, Any] = field(default_factory=dict)
+    objectives: tuple["Objective", ...] = ()
+    constraints: tuple["Constraint", ...] = ()
+    estimated_trials: int | None = None
+    estimated_minutes: int | None = None
+    failure_conditions: tuple[str, ...] = ()
+    stopping_conditions: tuple[str, ...] = ()
+    rollback_plan: str = ""
+    candidate_version_id: str | None = None
+    created_at: str = ""
+
+    def transition(self, target: ProposalStatus) -> "Proposal":
+        from .errors import ConflictError
+
+        allowed: dict[ProposalStatus, frozenset[ProposalStatus]] = {
+            "draft": frozenset({"waiting_approval", "expired"}),
+            "waiting_approval": frozenset({"approved", "rejected", "expired"}),
+            "approved": frozenset({"executing", "expired"}),
+            "executing": frozenset({"evaluated"}),
+            "evaluated": frozenset({"accepted", "rejected", "expired"}),
+            "accepted": frozenset(),
+            "rejected": frozenset(),
+            "expired": frozenset(),
+        }
+        if target not in allowed[self.status]:
+            raise ConflictError(
+                f"proposal transition is not allowed: {self.status} -> {target}"
+            )
+        return replace(self, status=target)
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,15 +300,18 @@ class ParameterSpace:
     values: tuple[Any, ...] = ()
     lower: float | None = None
     upper: float | None = None
+    step: float | None = None
 
     def __post_init__(self) -> None:
         if self.kind == "categorical" and not self.values:
             raise ValueError("categorical parameter space requires values")
         if self.kind in {"integer", "float"}:
-            if self.lower is None or self.upper is None:
+            if not self.values and (self.lower is None or self.upper is None):
                 raise ValueError("numeric parameter space requires lower and upper")
-            if self.lower > self.upper:
+            if self.lower is not None and self.upper is not None and self.lower > self.upper:
                 raise ValueError("parameter space lower must be <= upper")
+            if self.step is not None and self.step <= 0:
+                raise ValueError("parameter space step must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,6 +340,10 @@ class ExperimentPlan:
     max_trials: int | None
     time_budget_seconds: int | None
     stopping_conditions: tuple[str, ...]
+    proposal_id: str | None = None
+    candidate_version_id: str | None = None
+    search_strategy: Literal["grid", "random"] = "grid"
+    random_seed: int = 0
     status: Literal["draft", "approved", "rejected"] = "draft"
     approved_by: str | None = None
     created_at: str = ""
@@ -322,6 +375,10 @@ class ExperimentPlan:
             missing.append("max_trials or time_budget_seconds")
         if not self.stopping_conditions:
             missing.append("stopping_conditions")
+        if self.search_strategy not in {"grid", "random"}:
+            missing.append("search_strategy(grid or random)")
+        if self.search_strategy == "random" and self.random_seed < 0:
+            missing.append("non-negative random_seed")
         if missing:
             raise ExperimentPlanValidationError(
                 "experiment plan cannot be approved; missing: " + ", ".join(missing)
@@ -338,11 +395,26 @@ class Trial:
     status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
     metrics: Mapping[str, float] = field(default_factory=dict)
     log_artifact_key: str | None = None
+    candidate_version_id: str | None = None
+    parameter_signature: str | None = None
+    split: str = "train_validation"
+    cost_model: Mapping[str, Any] = field(default_factory=dict)
+    seed: int = 0
+    error: str | None = None
+    elapsed_seconds: float | None = None
+    peak_rss_mb: float | None = None
+    result_artifact_key: str | None = None
+    metrics_artifact_key: str | None = None
     created_at: str = ""
 
     def __post_init__(self) -> None:
-        if self.log_artifact_key is not None:
-            validate_artifact_key(self.log_artifact_key)
+        for artifact_key in (
+            self.log_artifact_key,
+            self.result_artifact_key,
+            self.metrics_artifact_key,
+        ):
+            if artifact_key is not None:
+                validate_artifact_key(artifact_key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -415,6 +487,16 @@ class ComponentEvidence:
     ]
     failure_conditions: tuple[Mapping[str, Any], ...]
     created_at: str
+    logic_signature: str = ""
+    timeframe: str = ""
+    source_experiment_plan_id: str | None = None
+    source_trial_ids: tuple[str, ...] = ()
+    stable_parameter_ranges: Mapping[str, Any] = field(default_factory=dict)
+    failed_parameter_ranges: Mapping[str, Any] = field(default_factory=dict)
+    regimes: tuple[str, ...] = ()
+    evidence_level: Literal[
+        "fixture", "diagnostic", "screening", "insufficient_history", "validated"
+    ] = "diagnostic"
 
 
 @dataclass(frozen=True, slots=True)
@@ -424,6 +506,25 @@ class ComponentCandidate:
     name: str
     status: Literal["diagnostic_improvement", "component_candidate", "rejected"]
     created_at: str
+    logic_signature: str = ""
+    target_market_profile: str = ""
+    timeframe: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class BatchProgress:
+    experiment_plan_id: str
+    total_trials: int
+    completed_trials: int
+    succeeded_trials: int
+    failed_trials: int
+    cancelled_trials: int
+    running_trials: int
+    queued_trials: int
+    concurrency: int
+    elapsed_seconds: float
+    peak_rss_mb: float
+    stop_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

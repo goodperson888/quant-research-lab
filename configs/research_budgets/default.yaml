@@ -1,5 +1,11 @@
 schema_version: 1
 policy_id: personal_guided_research_v1
+guided_defaults:
+  max_directions: 3
+  max_trials_per_direction: 20
+  recommended_trials_total: 60
+  recommended_compute_minutes: 45
+  recommended_locked_test_uses: 1
 limits:
   max_hypotheses: 8
   max_trials_total: 200

@@ -100,6 +100,7 @@ class ParameterSpaceRequest(StrictModel):
     values: tuple[Any, ...] = ()
     lower: float | None = None
     upper: float | None = None
+    step: float | None = None
 
 
 class ObjectiveRequest(StrictModel):
@@ -124,6 +125,10 @@ class CreateExperimentPlanRequest(StrictModel):
     max_trials: int | None = Field(default=None, gt=0)
     time_budget_seconds: int | None = Field(default=None, gt=0)
     stopping_conditions: list[str]
+    proposal_id: str | None = None
+    candidate_version_id: str | None = None
+    search_strategy: Literal["grid", "random"] = "grid"
+    random_seed: int = 0
 
 
 class ExperimentPlanResponse(StrictModel):
@@ -138,6 +143,10 @@ class ExperimentPlanResponse(StrictModel):
     max_trials: int | None
     time_budget_seconds: int | None
     stopping_conditions: list[str]
+    proposal_id: str | None
+    candidate_version_id: str | None
+    search_strategy: str
+    random_seed: int
     status: str
     approved_by: str | None
     created_at: str
@@ -239,6 +248,9 @@ class ComponentCandidateResponse(StrictModel):
     name: str
     status: str
     created_at: str
+    logic_signature: str
+    target_market_profile: str
+    timeframe: str
 
 
 class ComponentEvidenceResponse(StrictModel):
@@ -251,6 +263,14 @@ class ComponentEvidenceResponse(StrictModel):
     out_of_sample_status: str
     failure_conditions: list[dict[str, Any]]
     created_at: str
+    logic_signature: str
+    timeframe: str
+    source_experiment_plan_id: str | None
+    source_trial_ids: list[str]
+    stable_parameter_ranges: dict[str, Any]
+    failed_parameter_ranges: dict[str, Any]
+    regimes: list[str]
+    evidence_level: str
 
 
 class ComponentTriageResponse(StrictModel):
@@ -321,3 +341,104 @@ class CreateCorrectnessDiagnosticJobRequest(StrictModel):
     config_artifact_key: str = Field(min_length=1)
     timerange: str | None = Field(default=None, pattern=r"^[0-9]{8}-[0-9]{8}$")
     agent_run_id: str | None = None
+
+
+class CreateImprovementDirectionRequest(StrictModel):
+    baseline_version_id: str
+    subject_id: str
+    hypothesis: str
+    rule_diff: dict[str, Any]
+    evidence_refs: list[str] = []
+    parameter_space: list[ParameterSpaceRequest]
+    data_splits: dict[str, str]
+    cost_model: dict[str, Any]
+    objectives: list[ObjectiveRequest]
+    constraints: list[ConstraintRequest]
+    estimated_trials: int
+    estimated_minutes: int
+    failure_conditions: list[str]
+    stopping_conditions: list[str]
+    rollback_plan: str
+    source: Literal["manual", "external_agent"] = "external_agent"
+
+
+class ImprovementDirectionResponse(StrictModel):
+    id: str
+    draft_id: str
+    proposal_type: str
+    content: dict[str, Any]
+    status: str
+    baseline_version_id: str | None
+    subject_id: str | None
+    hypothesis: str
+    rule_diff: dict[str, Any]
+    evidence_refs: list[str]
+    parameter_space: list[ParameterSpaceRequest]
+    data_splits: dict[str, str]
+    cost_model: dict[str, Any]
+    objectives: list[ObjectiveRequest]
+    constraints: list[ConstraintRequest]
+    estimated_trials: int | None
+    estimated_minutes: int | None
+    failure_conditions: list[str]
+    stopping_conditions: list[str]
+    rollback_plan: str
+    candidate_version_id: str | None
+    created_at: str
+
+
+class ProposalTransitionRequest(StrictModel):
+    subject_id: str
+    target: Literal["executing", "evaluated", "accepted", "rejected", "expired"]
+    confirmed_by_user: bool = False
+
+
+class ProposalBudgetRequest(StrictModel):
+    subject_id: str
+    estimated_trials: int = Field(gt=0)
+    estimated_minutes: int = Field(gt=0)
+
+
+class JobActionRequest(StrictModel):
+    subject_id: str
+    confirmed_by_user: bool
+
+
+class TrialResponse(StrictModel):
+    id: str
+    experiment_plan_id: str
+    parameters: dict[str, Any]
+    data_version: str
+    status: str
+    metrics: dict[str, float]
+    log_artifact_key: str | None
+    candidate_version_id: str | None
+    parameter_signature: str | None
+    split: str
+    cost_model: dict[str, Any]
+    seed: int
+    error: str | None
+    elapsed_seconds: float | None
+    peak_rss_mb: float | None
+    result_artifact_key: str | None
+    metrics_artifact_key: str | None
+    created_at: str
+
+
+class ComponentAggregationRequest(StrictModel):
+    experiment_plan_id: str
+    name: str
+    component_type: Literal["entry", "filter", "exit", "risk", "execution"]
+    logic: dict[str, Any]
+    market_profile: str
+    timeframe: str
+    out_of_sample_status: Literal[
+        "not_tested", "screening", "insufficient_history", "passed", "failed"
+    ]
+    evidence_level: Literal[
+        "fixture", "diagnostic", "screening", "insufficient_history", "validated"
+    ]
+    min_incremental_net_return: float
+    min_validation_trades: int
+    failure_conditions: list[dict[str, Any]] = []
+    regimes: list[str] = []

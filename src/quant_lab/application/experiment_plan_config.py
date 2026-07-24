@@ -13,6 +13,7 @@ PARAMETER_OPTIMIZATION_DOCS = (
     "docs/15-产品需求规格-v1.md",
     "docs/16-产品化目标架构-v1.md",
     "docs/18-Agent与Skill执行架构.md",
+    "docs/25-批量策略研究闭环.md",
 )
 
 PARAMETER_OPTIMIZATION_PRECONDITIONS = (

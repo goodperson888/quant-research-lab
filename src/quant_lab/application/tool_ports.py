@@ -16,6 +16,8 @@ ALLOWED_RESEARCH_TOOLS = frozenset(
         "freeze_baseline",
         "create_experiment_plan",
         "approve_experiment_plan",
+        "create_improvement_direction",
+        "approve_proposal",
         "run_backtest",
         "run_correctness_diagnostic",
         "run_parameter_search",
@@ -33,6 +35,7 @@ ALLOWED_RESEARCH_TOOLS = frozenset(
         "create_strategy_outcome",
         "create_component_candidate",
         "record_regime_validation",
+        "list_component_evidence",
     }
 )
 
@@ -65,6 +68,10 @@ class ResearchToolGateway(Protocol):
     def create_experiment_plan(self, payload: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
     def approve_experiment_plan(self, plan_id: str) -> Mapping[str, Any]: ...
+
+    def create_improvement_direction(self, payload: Mapping[str, Any]) -> Mapping[str, Any]: ...
+
+    def approve_proposal(self, proposal_id: str) -> Mapping[str, Any]: ...
 
     def run_backtest(self, plan_id: str) -> Mapping[str, Any]: ...
 
@@ -99,3 +106,5 @@ class ResearchToolGateway(Protocol):
     def create_component_candidate(self, payload: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
     def record_regime_validation(self, payload: Mapping[str, Any]) -> Mapping[str, Any]: ...
+
+    def list_component_evidence(self, payload: Mapping[str, Any]) -> list[Mapping[str, Any]]: ...

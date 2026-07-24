@@ -77,6 +77,17 @@ class ProductRepository(Protocol):
 
     def list_proposals(self, draft_id: str | None = None) -> Sequence[Proposal]: ...
 
+    def update_proposal(self, proposal: Proposal) -> Proposal: ...
+
+    def approve_proposal_candidate(
+        self,
+        proposal: Proposal,
+        *,
+        version_id: str,
+        approval_id: str,
+        created_at: str,
+    ) -> StrategyVersion: ...
+
     def accept_proposal(
         self,
         proposal: Proposal,
@@ -151,7 +162,16 @@ class ProductRepository(Protocol):
         status: str,
         metrics: Mapping[str, float],
         log_artifact_key: str | None,
+        error: str | None = None,
+        elapsed_seconds: float | None = None,
+        peak_rss_mb: float | None = None,
+        result_artifact_key: str | None = None,
+        metrics_artifact_key: str | None = None,
     ) -> Trial: ...
+
+    def get_trial_by_signature(
+        self, plan_id: str, parameter_signature: str
+    ) -> Trial | None: ...
 
     def list_trials(self, plan_id: str) -> Sequence[Trial]: ...
 

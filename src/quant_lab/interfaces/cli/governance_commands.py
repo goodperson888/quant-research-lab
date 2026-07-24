@@ -10,6 +10,8 @@ import yaml
 from quant_lab.application.backtest_engines import BacktestEngineRegistry
 from quant_lab.application.pipeline import PipelineApplicationService, PipelineProfileCatalog
 from quant_lab.application.services import ResearchApplicationService
+from quant_lab.application.guided_research import GuidedResearchService
+from quant_lab.domain.models import Constraint, Objective, ParameterSpace
 from quant_lab.infrastructure.artifact_store import LocalArtifactStore
 from quant_lab.infrastructure.backtest_engines import (
     FreqtradeBacktestEngineAdapter,
@@ -47,6 +49,41 @@ def add_governance_parsers(subparsers: argparse._SubParsersAction) -> None:
     )
     triage.add_argument("--config", required=True)
 
+    direction = subparsers.add_parser(
+        "create-improvement-direction",
+        help="Create a structured Proposal draft from a project-relative YAML config.",
+    )
+    direction.add_argument("--config", required=True)
+
+    list_directions = subparsers.add_parser(
+        "list-improvement-directions", help="List structured improvement Proposals."
+    )
+    list_directions.add_argument("--baseline-version-id")
+
+    submit = subparsers.add_parser(
+        "submit-improvement-direction", help="Move a complete Proposal to waiting approval."
+    )
+    submit.add_argument("--proposal-id", required=True)
+
+    approve = subparsers.add_parser(
+        "approve-improvement-direction",
+        help="Approve an exact Proposal subject and create an immutable Candidate.",
+    )
+    approve.add_argument("--proposal-id", required=True)
+    approve.add_argument("--subject-id", required=True)
+    approve.add_argument("--confirmed-by-user", action="store_true")
+
+    batch = subparsers.add_parser(
+        "create-batch-search-job",
+        help="Queue an approved, locked-test-excluding batch parameter Job.",
+    )
+    batch.add_argument("--plan-id", required=True)
+    batch.add_argument("--data-version", required=True)
+    batch.add_argument("--max-trials", type=int, required=True)
+    batch.add_argument("--max-concurrent-trials", type=int, default=1)
+    batch.add_argument("--evaluator-id", required=True)
+    batch.add_argument("--evidence-mode", choices=["research", "fixture"], default="research")
+
 
 def handle_governance_command(
     args: argparse.Namespace, *, root: Path, database_path: Path
@@ -68,6 +105,63 @@ def handle_governance_command(
         return 0
 
     repository = SQLiteProductRepository(database_path)
+    if args.command == "list-improvement-directions":
+        items = GuidedResearchService(repository).list_directions(
+            baseline_version_id=args.baseline_version_id
+        )
+        print(json.dumps([asdict(item) for item in items], ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "create-improvement-direction":
+        raw = yaml.safe_load(LocalArtifactStore(root).get(str(args.config)))
+        if not isinstance(raw, dict):
+            raise ValueError("improvement direction config must be a YAML mapping")
+        raw["parameter_space"] = tuple(
+            ParameterSpace(**item) for item in raw["parameter_space"]
+        )
+        raw["objectives"] = tuple(Objective(**item) for item in raw["objectives"])
+        raw["constraints"] = tuple(Constraint(**item) for item in raw["constraints"])
+        proposal = GuidedResearchService(repository).create_direction(**raw)
+        print(json.dumps(asdict(proposal), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "submit-improvement-direction":
+        proposal = GuidedResearchService(repository).submit_for_approval(args.proposal_id)
+        print(json.dumps(asdict(proposal), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "approve-improvement-direction":
+        proposal, candidate = GuidedResearchService(repository).approve(
+            proposal_id=args.proposal_id,
+            subject_id=args.subject_id,
+            confirmed_by_user=args.confirmed_by_user,
+        )
+        print(
+            json.dumps(
+                {"proposal": asdict(proposal), "candidate": asdict(candidate)},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+
+    if args.command == "create-batch-search-job":
+        job = ResearchApplicationService(repository).create_job(
+            job_type="parameter_search",
+            payload={
+                "experiment_plan_id": args.plan_id,
+                "batch_mode": True,
+                "locked_test_used": False,
+                "data_version": args.data_version,
+                "max_trials": args.max_trials,
+                "max_concurrent_trials": args.max_concurrent_trials,
+                "evaluator_id": args.evaluator_id,
+                "evidence_mode": args.evidence_mode,
+            },
+        )
+        print(json.dumps(asdict(job), ensure_ascii=False, indent=2))
+        return 0
+
     if args.command == "create-regime-validation-job":
         payload = {
             "intent": args.mode,

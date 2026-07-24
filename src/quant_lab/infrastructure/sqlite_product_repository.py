@@ -35,7 +35,7 @@ from quant_lab.domain.models import (
 )
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class SQLiteProductRepository:
@@ -121,6 +121,23 @@ class SQLiteProductRepository:
                     proposal_type TEXT NOT NULL,
                     content_json TEXT NOT NULL,
                     status TEXT NOT NULL,
+                    baseline_version_id TEXT,
+                    subject_id TEXT,
+                    hypothesis TEXT NOT NULL DEFAULT '',
+                    rule_diff_json TEXT NOT NULL DEFAULT '{}',
+                    evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+                    parameter_space_json TEXT NOT NULL DEFAULT '[]',
+                    data_splits_json TEXT NOT NULL DEFAULT '{}',
+                    cost_model_json TEXT NOT NULL DEFAULT '{}',
+                    objectives_json TEXT NOT NULL DEFAULT '[]',
+                    constraints_json TEXT NOT NULL DEFAULT '[]',
+                    estimated_trials INTEGER,
+                    estimated_minutes INTEGER,
+                    failure_conditions_json TEXT NOT NULL DEFAULT '[]',
+                    stopping_conditions_json TEXT NOT NULL DEFAULT '[]',
+                    rollback_plan TEXT NOT NULL DEFAULT '',
+                    candidate_version_id TEXT,
+                    created_at TEXT NOT NULL DEFAULT '',
                     FOREIGN KEY (draft_id) REFERENCES strategy_drafts(id)
                 );
 
@@ -213,6 +230,10 @@ class SQLiteProductRepository:
                     max_trials INTEGER,
                     time_budget_seconds INTEGER,
                     stopping_conditions_json TEXT NOT NULL,
+                    proposal_id TEXT,
+                    candidate_version_id TEXT,
+                    search_strategy TEXT NOT NULL DEFAULT 'grid',
+                    random_seed INTEGER NOT NULL DEFAULT 0,
                     status TEXT NOT NULL,
                     approved_by TEXT,
                     created_at TEXT NOT NULL
@@ -226,6 +247,16 @@ class SQLiteProductRepository:
                     status TEXT NOT NULL,
                     metrics_json TEXT NOT NULL,
                     log_artifact_key TEXT,
+                    candidate_version_id TEXT,
+                    parameter_signature TEXT,
+                    split TEXT NOT NULL DEFAULT 'train_validation',
+                    cost_model_json TEXT NOT NULL DEFAULT '{}',
+                    seed INTEGER NOT NULL DEFAULT 0,
+                    error TEXT,
+                    elapsed_seconds REAL,
+                    peak_rss_mb REAL,
+                    result_artifact_key TEXT,
+                    metrics_artifact_key TEXT,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (experiment_plan_id) REFERENCES experiment_plans(id)
                 );
@@ -303,6 +334,14 @@ class SQLiteProductRepository:
                     incremental_metrics_json TEXT NOT NULL,
                     out_of_sample_status TEXT NOT NULL,
                     failure_conditions_json TEXT NOT NULL,
+                    logic_signature TEXT NOT NULL DEFAULT '',
+                    timeframe TEXT NOT NULL DEFAULT '',
+                    source_experiment_plan_id TEXT,
+                    source_trial_ids_json TEXT NOT NULL DEFAULT '[]',
+                    stable_parameter_ranges_json TEXT NOT NULL DEFAULT '{}',
+                    failed_parameter_ranges_json TEXT NOT NULL DEFAULT '{}',
+                    regimes_json TEXT NOT NULL DEFAULT '[]',
+                    evidence_level TEXT NOT NULL DEFAULT 'diagnostic',
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (source_strategy_version_id) REFERENCES strategy_versions(id)
                 );
@@ -312,6 +351,9 @@ class SQLiteProductRepository:
                     evidence_id TEXT NOT NULL,
                     name TEXT NOT NULL,
                     status TEXT NOT NULL,
+                    logic_signature TEXT NOT NULL DEFAULT '',
+                    target_market_profile TEXT NOT NULL DEFAULT '',
+                    timeframe TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (evidence_id) REFERENCES component_evidence(id)
                 );
@@ -336,6 +378,7 @@ class SQLiteProductRepository:
                     viability_gate_result_id TEXT,
                     created_at TEXT NOT NULL
                 );
+
                 """
             )
             regime_columns = {
@@ -354,6 +397,82 @@ class SQLiteProductRepository:
                     "ALTER TABLE regime_validations "
                     "ADD COLUMN viability_gate_result_id TEXT"
                 )
+            migrations = {
+                "proposals": {
+                    "baseline_version_id": "TEXT",
+                    "subject_id": "TEXT",
+                    "hypothesis": "TEXT NOT NULL DEFAULT ''",
+                    "rule_diff_json": "TEXT NOT NULL DEFAULT '{}'",
+                    "evidence_refs_json": "TEXT NOT NULL DEFAULT '[]'",
+                    "parameter_space_json": "TEXT NOT NULL DEFAULT '[]'",
+                    "data_splits_json": "TEXT NOT NULL DEFAULT '{}'",
+                    "cost_model_json": "TEXT NOT NULL DEFAULT '{}'",
+                    "objectives_json": "TEXT NOT NULL DEFAULT '[]'",
+                    "constraints_json": "TEXT NOT NULL DEFAULT '[]'",
+                    "estimated_trials": "INTEGER",
+                    "estimated_minutes": "INTEGER",
+                    "failure_conditions_json": "TEXT NOT NULL DEFAULT '[]'",
+                    "stopping_conditions_json": "TEXT NOT NULL DEFAULT '[]'",
+                    "rollback_plan": "TEXT NOT NULL DEFAULT ''",
+                    "candidate_version_id": "TEXT",
+                    "created_at": "TEXT NOT NULL DEFAULT ''",
+                },
+                "experiment_plans": {
+                    "proposal_id": "TEXT",
+                    "candidate_version_id": "TEXT",
+                    "search_strategy": "TEXT NOT NULL DEFAULT 'grid'",
+                    "random_seed": "INTEGER NOT NULL DEFAULT 0",
+                },
+                "trials": {
+                    "candidate_version_id": "TEXT",
+                    "parameter_signature": "TEXT",
+                    "split": "TEXT NOT NULL DEFAULT 'train_validation'",
+                    "cost_model_json": "TEXT NOT NULL DEFAULT '{}'",
+                    "seed": "INTEGER NOT NULL DEFAULT 0",
+                    "error": "TEXT",
+                    "elapsed_seconds": "REAL",
+                    "peak_rss_mb": "REAL",
+                    "result_artifact_key": "TEXT",
+                    "metrics_artifact_key": "TEXT",
+                },
+                "component_evidence": {
+                    "logic_signature": "TEXT NOT NULL DEFAULT ''",
+                    "timeframe": "TEXT NOT NULL DEFAULT ''",
+                    "source_experiment_plan_id": "TEXT",
+                    "source_trial_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+                    "stable_parameter_ranges_json": "TEXT NOT NULL DEFAULT '{}'",
+                    "failed_parameter_ranges_json": "TEXT NOT NULL DEFAULT '{}'",
+                    "regimes_json": "TEXT NOT NULL DEFAULT '[]'",
+                    "evidence_level": "TEXT NOT NULL DEFAULT 'diagnostic'",
+                },
+                "component_candidates": {
+                    "logic_signature": "TEXT NOT NULL DEFAULT ''",
+                    "target_market_profile": "TEXT NOT NULL DEFAULT ''",
+                    "timeframe": "TEXT NOT NULL DEFAULT ''",
+                },
+            }
+            for table, columns in migrations.items():
+                existing = {
+                    row[1]
+                    for row in connection.execute(
+                        f"PRAGMA table_info({table})"
+                    ).fetchall()
+                }
+                for column, definition in columns.items():
+                    if column not in existing:
+                        connection.execute(
+                            f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+                        )
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS one_trial_per_parameter_signature "
+                "ON trials(experiment_plan_id, parameter_signature) "
+                "WHERE parameter_signature IS NOT NULL"
+            )
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS one_component_candidate_per_logic_scope "
+                "ON component_candidates(logic_signature, target_market_profile, timeframe) "
+                "WHERE logic_signature != ''"
+            )
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def create_session(self, session: ResearchSession) -> ResearchSession:
@@ -653,8 +772,14 @@ class SQLiteProductRepository:
             connection.execute(
                 """
                 INSERT INTO proposals (
-                    id, draft_id, proposal_type, content_json, status
-                ) VALUES (?, ?, ?, ?, ?)
+                    id, draft_id, proposal_type, content_json, status,
+                    baseline_version_id, subject_id, hypothesis, rule_diff_json,
+                    evidence_refs_json, parameter_space_json, data_splits_json,
+                    cost_model_json, objectives_json, constraints_json,
+                    estimated_trials, estimated_minutes, failure_conditions_json,
+                    stopping_conditions_json, rollback_plan, candidate_version_id,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     proposal.id,
@@ -662,6 +787,23 @@ class SQLiteProductRepository:
                     proposal.proposal_type,
                     json.dumps(proposal.content, ensure_ascii=False, sort_keys=True),
                     proposal.status,
+                    proposal.baseline_version_id,
+                    proposal.subject_id,
+                    proposal.hypothesis,
+                    json.dumps(proposal.rule_diff, ensure_ascii=False, sort_keys=True),
+                    json.dumps(proposal.evidence_refs, ensure_ascii=False),
+                    json.dumps([asdict(item) for item in proposal.parameter_space]),
+                    json.dumps(proposal.data_splits, sort_keys=True),
+                    json.dumps(proposal.cost_model, sort_keys=True),
+                    json.dumps([asdict(item) for item in proposal.objectives]),
+                    json.dumps([asdict(item) for item in proposal.constraints]),
+                    proposal.estimated_trials,
+                    proposal.estimated_minutes,
+                    json.dumps(proposal.failure_conditions, ensure_ascii=False),
+                    json.dumps(proposal.stopping_conditions, ensure_ascii=False),
+                    proposal.rollback_plan,
+                    proposal.candidate_version_id,
+                    proposal.created_at,
                 ),
             )
         return proposal
@@ -673,13 +815,7 @@ class SQLiteProductRepository:
             ).fetchone()
         if row is None:
             raise NotFoundError(f"proposal not found: {proposal_id}")
-        return Proposal(
-            id=row["id"],
-            draft_id=row["draft_id"],
-            proposal_type=row["proposal_type"],
-            content=json.loads(row["content_json"]),
-            status=row["status"],
-        )
+        return self._proposal(row)
 
     def list_proposals(self, draft_id: str | None = None) -> Sequence[Proposal]:
         query = "SELECT * FROM proposals"
@@ -690,16 +826,112 @@ class SQLiteProductRepository:
         query += " ORDER BY rowid DESC"
         with self._connect() as connection:
             rows = connection.execute(query, parameters).fetchall()
-        return [
-            Proposal(
-                id=row["id"],
-                draft_id=row["draft_id"],
-                proposal_type=row["proposal_type"],
-                content=json.loads(row["content_json"]),
-                status=row["status"],
+        return [self._proposal(row) for row in rows]
+
+    def update_proposal(self, proposal: Proposal) -> Proposal:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE proposals
+                SET status = ?, candidate_version_id = ?, content_json = ?,
+                    estimated_trials = ?, estimated_minutes = ?
+                WHERE id = ?
+                """,
+                (
+                    proposal.status,
+                    proposal.candidate_version_id,
+                    json.dumps(proposal.content, ensure_ascii=False, sort_keys=True),
+                    proposal.estimated_trials,
+                    proposal.estimated_minutes,
+                    proposal.id,
+                ),
             )
-            for row in rows
-        ]
+            if cursor.rowcount != 1:
+                raise NotFoundError(f"proposal not found: {proposal.id}")
+        return proposal
+
+    def approve_proposal_candidate(
+        self,
+        proposal: Proposal,
+        *,
+        version_id: str,
+        approval_id: str,
+        created_at: str,
+    ) -> StrategyVersion:
+        if proposal.status != "approved":
+            raise ApprovalRequiredError("proposal approval must come from the user")
+        if not proposal.baseline_version_id:
+            raise ConflictError("proposal is missing its baseline identity")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute(
+                "SELECT * FROM proposals WHERE id = ?", (proposal.id,)
+            ).fetchone()
+            if current is None:
+                raise NotFoundError(f"proposal not found: {proposal.id}")
+            if current["status"] != "waiting_approval":
+                raise ConflictError("proposal is not waiting for approval")
+            baseline = connection.execute(
+                """
+                SELECT * FROM strategy_versions
+                WHERE id = ? AND strategy_id = ?
+                  AND status = 'baseline' AND immutable = 1
+                """,
+                (proposal.baseline_version_id, proposal.draft_id),
+            ).fetchone()
+            if baseline is None:
+                raise NotFoundError("proposal requires its original immutable baseline")
+            latest = connection.execute(
+                "SELECT COALESCE(MAX(version), 0) AS value FROM strategy_versions WHERE strategy_id = ?",
+                (proposal.draft_id,),
+            ).fetchone()
+            version = StrategyVersion(
+                id=version_id,
+                strategy_id=proposal.draft_id,
+                version=int(latest["value"]) + 1,
+                status="candidate",
+                content_snapshot={
+                    "baseline_version_id": proposal.baseline_version_id,
+                    "proposal_id": proposal.id,
+                    "hypothesis": proposal.hypothesis,
+                    "rule_diff": dict(proposal.rule_diff),
+                    "automatic_validation": False,
+                    "locked_test_used": False,
+                    "production_enabled": False,
+                },
+                source_snapshot=baseline["source_snapshot"],
+                created_at=created_at,
+                immutable=True,
+            )
+            connection.execute(
+                """
+                INSERT INTO strategy_versions (
+                    id, strategy_id, version, status, content_json,
+                    source_snapshot, immutable, created_at
+                ) VALUES (?, ?, ?, 'candidate', ?, ?, 1, ?)
+                """,
+                (
+                    version.id,
+                    version.strategy_id,
+                    version.version,
+                    json.dumps(version.content_snapshot, ensure_ascii=False, sort_keys=True),
+                    version.source_snapshot,
+                    version.created_at,
+                ),
+            )
+            connection.execute(
+                "UPDATE proposals SET status = 'approved', candidate_version_id = ? WHERE id = ?",
+                (version.id, proposal.id),
+            )
+            connection.execute(
+                """
+                INSERT INTO approvals (
+                    id, subject_type, subject_id, decision, actor, created_at
+                ) VALUES (?, 'improvement_proposal', ?, 'approved', 'user', ?)
+                """,
+                (approval_id, proposal.id, created_at),
+            )
+        return version
 
     def accept_proposal(
         self,
@@ -1062,8 +1294,9 @@ class SQLiteProductRepository:
                     id, baseline_version_id, hypothesis, parameter_space_json,
                     objectives_json, constraints_json, data_splits_json,
                     cost_model_json, max_trials, time_budget_seconds,
-                    stopping_conditions_json, status, approved_by, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    stopping_conditions_json, proposal_id, candidate_version_id,
+                    search_strategy, random_seed, status, approved_by, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     plan.id,
@@ -1077,6 +1310,10 @@ class SQLiteProductRepository:
                     plan.max_trials,
                     plan.time_budget_seconds,
                     json.dumps(plan.stopping_conditions),
+                    plan.proposal_id,
+                    plan.candidate_version_id,
+                    plan.search_strategy,
+                    plan.random_seed,
                     plan.status,
                     plan.approved_by,
                     plan.created_at,
@@ -1154,8 +1391,11 @@ class SQLiteProductRepository:
                 """
                 INSERT INTO trials (
                     id, experiment_plan_id, parameters_json, data_version,
-                    status, metrics_json, log_artifact_key, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    status, metrics_json, log_artifact_key, candidate_version_id,
+                    parameter_signature, split, cost_model_json, seed, error,
+                    elapsed_seconds, peak_rss_mb, result_artifact_key,
+                    metrics_artifact_key, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     trial.id,
@@ -1165,6 +1405,16 @@ class SQLiteProductRepository:
                     trial.status,
                     json.dumps(trial.metrics, sort_keys=True),
                     trial.log_artifact_key,
+                    trial.candidate_version_id,
+                    trial.parameter_signature,
+                    trial.split,
+                    json.dumps(trial.cost_model, sort_keys=True),
+                    trial.seed,
+                    trial.error,
+                    trial.elapsed_seconds,
+                    trial.peak_rss_mb,
+                    trial.result_artifact_key,
+                    trial.metrics_artifact_key,
                     trial.created_at,
                 ),
             )
@@ -1185,18 +1435,30 @@ class SQLiteProductRepository:
         status: str,
         metrics: Mapping[str, float],
         log_artifact_key: str | None,
+        error: str | None = None,
+        elapsed_seconds: float | None = None,
+        peak_rss_mb: float | None = None,
+        result_artifact_key: str | None = None,
+        metrics_artifact_key: str | None = None,
     ) -> Trial:
         with self._connect() as connection:
             cursor = connection.execute(
                 """
                 UPDATE trials
-                SET status = ?, metrics_json = ?, log_artifact_key = ?
+                SET status = ?, metrics_json = ?, log_artifact_key = ?,
+                    error = ?, elapsed_seconds = ?, peak_rss_mb = ?,
+                    result_artifact_key = ?, metrics_artifact_key = ?
                 WHERE id = ?
                 """,
                 (
                     status,
                     json.dumps(metrics, sort_keys=True),
                     log_artifact_key,
+                    error,
+                    elapsed_seconds,
+                    peak_rss_mb,
+                    result_artifact_key,
+                    metrics_artifact_key,
                     trial_id,
                 ),
             )
@@ -1208,6 +1470,19 @@ class SQLiteProductRepository:
         if row is None:
             raise NotFoundError(f"trial not found: {trial_id}")
         return self._trial(row)
+
+    def get_trial_by_signature(
+        self, plan_id: str, parameter_signature: str
+    ) -> Trial | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM trials
+                WHERE experiment_plan_id = ? AND parameter_signature = ?
+                """,
+                (plan_id, parameter_signature),
+            ).fetchone()
+        return self._trial(row) if row is not None else None
 
     def create_agent_run(self, agent_run: AgentRun) -> AgentRun:
         with self._connect() as connection:
@@ -1407,8 +1682,11 @@ class SQLiteProductRepository:
                 INSERT INTO component_evidence (
                     id, source_strategy_version_id, lineage_json, component_type,
                     target_market_profile, incremental_metrics_json,
-                    out_of_sample_status, failure_conditions_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    out_of_sample_status, failure_conditions_json, logic_signature,
+                    timeframe, source_experiment_plan_id, source_trial_ids_json,
+                    stable_parameter_ranges_json, failed_parameter_ranges_json,
+                    regimes_json, evidence_level, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     evidence.id,
@@ -1419,6 +1697,14 @@ class SQLiteProductRepository:
                     json.dumps(evidence.incremental_metrics, sort_keys=True),
                     evidence.out_of_sample_status,
                     json.dumps(evidence.failure_conditions, ensure_ascii=False),
+                    evidence.logic_signature,
+                    evidence.timeframe,
+                    evidence.source_experiment_plan_id,
+                    json.dumps(evidence.source_trial_ids),
+                    json.dumps(evidence.stable_parameter_ranges, sort_keys=True),
+                    json.dumps(evidence.failed_parameter_ranges, sort_keys=True),
+                    json.dumps(evidence.regimes),
+                    evidence.evidence_level,
                     evidence.created_at,
                 ),
             )
@@ -1446,14 +1732,19 @@ class SQLiteProductRepository:
         with self._connect() as connection:
             connection.execute(
                 """
-                INSERT INTO component_candidates (id, evidence_id, name, status, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO component_candidates (
+                    id, evidence_id, name, status, logic_signature,
+                    target_market_profile, timeframe, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     candidate.id,
                     candidate.evidence_id,
                     candidate.name,
                     candidate.status,
+                    candidate.logic_signature,
+                    candidate.target_market_profile,
+                    candidate.timeframe,
                     candidate.created_at,
                 ),
             )
@@ -1576,6 +1867,48 @@ class SQLiteProductRepository:
         )
 
     @staticmethod
+    def _proposal(row: sqlite3.Row) -> Proposal:
+        items = json.loads(row["parameter_space_json"])
+        return Proposal(
+            id=row["id"],
+            draft_id=row["draft_id"],
+            proposal_type=row["proposal_type"],
+            content=json.loads(row["content_json"]),
+            status=row["status"],
+            baseline_version_id=row["baseline_version_id"],
+            subject_id=row["subject_id"],
+            hypothesis=row["hypothesis"],
+            rule_diff=json.loads(row["rule_diff_json"]),
+            evidence_refs=tuple(json.loads(row["evidence_refs_json"])),
+            parameter_space=tuple(
+                ParameterSpace(
+                    name=item["name"],
+                    kind=item["kind"],
+                    values=tuple(item.get("values", ())),
+                    lower=item.get("lower"),
+                    upper=item.get("upper"),
+                    step=item.get("step"),
+                )
+                for item in items
+            ),
+            data_splits=json.loads(row["data_splits_json"]),
+            cost_model=json.loads(row["cost_model_json"]),
+            objectives=tuple(
+                Objective(**item) for item in json.loads(row["objectives_json"])
+            ),
+            constraints=tuple(
+                Constraint(**item) for item in json.loads(row["constraints_json"])
+            ),
+            estimated_trials=row["estimated_trials"],
+            estimated_minutes=row["estimated_minutes"],
+            failure_conditions=tuple(json.loads(row["failure_conditions_json"])),
+            stopping_conditions=tuple(json.loads(row["stopping_conditions_json"])),
+            rollback_plan=row["rollback_plan"],
+            candidate_version_id=row["candidate_version_id"],
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
     def _gate_evaluation(row: sqlite3.Row) -> GateEvaluation:
         return GateEvaluation(
             id=row["id"],
@@ -1619,6 +1952,14 @@ class SQLiteProductRepository:
             out_of_sample_status=row["out_of_sample_status"],
             failure_conditions=tuple(json.loads(row["failure_conditions_json"])),
             created_at=row["created_at"],
+            logic_signature=row["logic_signature"],
+            timeframe=row["timeframe"],
+            source_experiment_plan_id=row["source_experiment_plan_id"],
+            source_trial_ids=tuple(json.loads(row["source_trial_ids_json"])),
+            stable_parameter_ranges=json.loads(row["stable_parameter_ranges_json"]),
+            failed_parameter_ranges=json.loads(row["failed_parameter_ranges_json"]),
+            regimes=tuple(json.loads(row["regimes_json"])),
+            evidence_level=row["evidence_level"],
         )
 
     @staticmethod
@@ -1629,6 +1970,9 @@ class SQLiteProductRepository:
             name=row["name"],
             status=row["status"],
             created_at=row["created_at"],
+            logic_signature=row["logic_signature"],
+            target_market_profile=row["target_market_profile"],
+            timeframe=row["timeframe"],
         )
 
     @staticmethod
@@ -1690,6 +2034,7 @@ class SQLiteProductRepository:
                     values=tuple(item.get("values", ())),
                     lower=item.get("lower"),
                     upper=item.get("upper"),
+                    step=item.get("step"),
                 )
                 for item in json.loads(row["parameter_space_json"])
             ),
@@ -1704,6 +2049,10 @@ class SQLiteProductRepository:
             max_trials=row["max_trials"],
             time_budget_seconds=row["time_budget_seconds"],
             stopping_conditions=tuple(json.loads(row["stopping_conditions_json"])),
+            proposal_id=row["proposal_id"],
+            candidate_version_id=row["candidate_version_id"],
+            search_strategy=row["search_strategy"],
+            random_seed=row["random_seed"],
             status=row["status"],
             approved_by=row["approved_by"],
             created_at=row["created_at"],
@@ -1719,6 +2068,16 @@ class SQLiteProductRepository:
             status=row["status"],
             metrics=json.loads(row["metrics_json"]),
             log_artifact_key=row["log_artifact_key"],
+            candidate_version_id=row["candidate_version_id"],
+            parameter_signature=row["parameter_signature"],
+            split=row["split"],
+            cost_model=json.loads(row["cost_model_json"]),
+            seed=row["seed"],
+            error=row["error"],
+            elapsed_seconds=row["elapsed_seconds"],
+            peak_rss_mb=row["peak_rss_mb"],
+            result_artifact_key=row["result_artifact_key"],
+            metrics_artifact_key=row["metrics_artifact_key"],
             created_at=row["created_at"],
         )
 

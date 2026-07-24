@@ -1,0 +1,37 @@
+baseline_version_id: REPLACE_WITH_BASELINE_VERSION_ID
+subject_id: REPLACE_WITH_SAME_BASELINE_VERSION_ID
+hypothesis: "One explicit, falsifiable improvement hypothesis."
+rule_diff:
+  add_filter: "Describe the rule change without changing the baseline."
+evidence_refs: []
+parameter_space:
+  - name: window
+    kind: integer
+    values: [10, 15, 20]
+data_splits:
+  train: REPLACE_WITH_TRAIN_RANGE
+  validation: REPLACE_WITH_VALIDATION_RANGE
+  locked_test: REPLACE_WITH_LOCKED_RANGE_NOT_USED_IN_SEARCH
+cost_model:
+  taker_fee_per_side: 0.0005
+  slippage_per_side: 0.0002
+  funding_policy: explicit_dataset_or_adverse_missing_data_assumption
+objectives:
+  - metric: validation_net_return
+    direction: maximize
+constraints:
+  - metric: validation_trade_count
+    operator: gte
+    value: 30
+  - metric: validation_max_drawdown_abs
+    operator: lte
+    value: 0.2
+estimated_trials: 3
+estimated_minutes: 10
+failure_conditions:
+  - no stable validation parameter range
+  - incremental result disappears after costs
+stopping_conditions:
+  - stop after the approved Trial/time budget
+rollback_plan: "Reject the Candidate and keep the immutable Baseline unchanged."
+source: external_agent

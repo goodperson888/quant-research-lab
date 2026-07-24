@@ -10,6 +10,9 @@ from fastapi.responses import JSONResponse
 
 from quant_lab import __version__
 from quant_lab.application.services import ResearchApplicationService
+from quant_lab.application.guided_research import GuidedResearchService
+from quant_lab.application.component_attribution import DefaultComponentEvidenceAggregator
+from quant_lab.application.batch_trials import summarize_stable_ranges
 from quant_lab.application.backtest_engines import BacktestEngineRegistry
 from quant_lab.application.pipeline import (
     PipelineApplicationService,
@@ -50,6 +53,7 @@ from .schemas import (
     ComponentCandidateResponse,
     ComponentEvidenceResponse,
     ComponentTriageResponse,
+    ComponentAggregationRequest,
     CreateComponentCandidateRequest,
     CreateRegimeValidationRequest,
     CreateRegimeValidationJobRequest,
@@ -60,19 +64,25 @@ from .schemas import (
     CreateJobRequest,
     CreateMessageRequest,
     CreateSessionRequest,
+    CreateImprovementDirectionRequest,
     FreezeBaselineRequest,
     ExperimentPlanResponse,
     EvaluateGateRequest,
     GateEvaluationResponse,
     JobResponse,
+    JobActionRequest,
     MessageResponse,
     PipelineProfileResponse,
     RegimeValidationResponse,
+    ImprovementDirectionResponse,
+    ProposalTransitionRequest,
+    ProposalBudgetRequest,
     SessionDetailResponse,
     SessionResponse,
     StrategyDraftResponse,
     StrategyOutcomeResponse,
     StrategyVersionResponse,
+    TrialResponse,
 )
 
 
@@ -92,10 +102,23 @@ def create_app(
     repository = SQLiteProductRepository(resolved_database)
     budget_policy_path = resolved_root / "configs/research_budgets/default.yaml"
     budget_policy_data: dict[str, Any] | None = None
+    budget_policy = None
     if budget_policy_path.is_file():
-        budget_policy_data = asdict(ResearchBudgetPolicyReader(resolved_root).read())
-        budget_policy_data.pop("policy_id", None)
+        budget_policy = ResearchBudgetPolicyReader(resolved_root).read()
+        budget_policy_data = {
+            "max_hypotheses": budget_policy.max_hypotheses,
+            "max_trials_total": budget_policy.max_trials_total,
+            "max_compute_minutes": budget_policy.max_compute_minutes,
+            "max_locked_test_uses": budget_policy.max_locked_test_uses,
+            "require_user_approval_for_new_hypothesis": (
+                budget_policy.require_user_approval_for_new_hypothesis
+            ),
+        }
     service = ResearchApplicationService(repository, budget_policy=budget_policy_data)
+    guided_service = GuidedResearchService(
+        repository, max_directions=budget_policy.max_directions if budget_policy else 3
+    )
+    component_aggregator = DefaultComponentEvidenceAggregator(repository)
     pipeline_service = PipelineApplicationService(
         repository, PipelineProfileCatalog(resolved_root)
     )
@@ -129,6 +152,7 @@ def create_app(
     application.state.repository = repository
     application.state.research_service = service
     application.state.pipeline_service = pipeline_service
+    application.state.guided_research_service = guided_service
     application.state.llm_provider = provider
 
     @application.exception_handler(NotFoundError)
@@ -315,6 +339,10 @@ def create_app(
             max_trials=body.max_trials,
             time_budget_seconds=body.time_budget_seconds,
             stopping_conditions=body.stopping_conditions,
+            proposal_id=body.proposal_id,
+            candidate_version_id=body.candidate_version_id,
+            search_strategy=body.search_strategy,
+            random_seed=body.random_seed,
         )
 
     @application.post(
@@ -337,6 +365,31 @@ def create_app(
     )
     def create_job(body: CreateJobRequest) -> Any:
         return service.create_job(job_type=body.job_type, payload=body.payload)
+
+    @application.post(
+        "/api/jobs/{job_id}/cancel",
+        response_model=JobResponse,
+        tags=["jobs"],
+    )
+    def cancel_job(job_id: str, body: JobActionRequest) -> Any:
+        return service.cancel_job(
+            job_id=job_id,
+            subject_id=body.subject_id,
+            confirmed_by_user=body.confirmed_by_user,
+        )
+
+    @application.post(
+        "/api/jobs/{job_id}/retry",
+        response_model=JobResponse,
+        status_code=status.HTTP_201_CREATED,
+        tags=["jobs"],
+    )
+    def retry_job(job_id: str, body: JobActionRequest) -> Any:
+        return service.retry_job(
+            job_id=job_id,
+            subject_id=body.subject_id,
+            confirmed_by_user=body.confirmed_by_user,
+        )
 
     @application.get("/api/jobs/{job_id}/logs", tags=["jobs"])
     def list_job_logs(job_id: str) -> Any:
@@ -468,8 +521,43 @@ def create_app(
         response_model=list[ComponentEvidenceResponse],
         tags=["research-components"],
     )
-    def component_evidence() -> Any:
-        return pipeline_service.list_component_evidence()
+    def component_evidence(
+        market_profile: str | None = Query(default=None),
+        timeframe: str | None = Query(default=None),
+        regime: str | None = Query(default=None),
+        evidence_level: str | None = Query(default=None),
+        sort_by: str = Query(default="created_at", pattern="^(created_at|incremental_net_return)$"),
+    ) -> Any:
+        evidence = list(pipeline_service.list_component_evidence())
+        if market_profile is not None:
+            evidence = [item for item in evidence if item.target_market_profile == market_profile]
+        if timeframe is not None:
+            evidence = [item for item in evidence if item.timeframe == timeframe]
+        if regime is not None:
+            evidence = [item for item in evidence if regime in item.regimes]
+        if evidence_level is not None:
+            evidence = [item for item in evidence if item.evidence_level == evidence_level]
+        if sort_by == "incremental_net_return":
+            evidence.sort(
+                key=lambda item: item.incremental_metrics.get(
+                    "best_incremental_net_return",
+                    item.incremental_metrics.get("incremental_net_return", float("-inf")),
+                ),
+                reverse=True,
+            )
+        return evidence
+
+    @application.post(
+        "/api/component-evidence/aggregate",
+        status_code=status.HTTP_201_CREATED,
+        tags=["research-components"],
+    )
+    def aggregate_component_evidence(body: ComponentAggregationRequest) -> Any:
+        values = body.model_dump()
+        plan_id = values.pop("experiment_plan_id")
+        return component_aggregator.aggregate(
+            experiment_plan_id=plan_id, attribution=values
+        )
 
     @application.post(
         "/api/component-candidates",
@@ -557,6 +645,130 @@ def create_app(
         return {
             "available": True,
             **asdict(WorkerResourcePolicyReader(resolved_root).read()),
+        }
+
+    @application.get(
+        "/api/improvement-directions",
+        response_model=list[ImprovementDirectionResponse],
+        tags=["guided-research"],
+    )
+    def improvement_directions(
+        baseline_version_id: str | None = Query(default=None),
+    ) -> Any:
+        return guided_service.list_directions(
+            baseline_version_id=baseline_version_id
+        )
+
+    @application.post(
+        "/api/improvement-directions",
+        response_model=ImprovementDirectionResponse,
+        status_code=status.HTTP_201_CREATED,
+        tags=["guided-research"],
+    )
+    def create_improvement_direction(body: CreateImprovementDirectionRequest) -> Any:
+        values = body.model_dump()
+        values["parameter_space"] = tuple(
+            ParameterSpace(**item) for item in values["parameter_space"]
+        )
+        values["objectives"] = tuple(Objective(**item) for item in values["objectives"])
+        values["constraints"] = tuple(
+            Constraint(**item) for item in values["constraints"]
+        )
+        return guided_service.create_direction(**values)
+
+    @application.post(
+        "/api/improvement-directions/{proposal_id}/submit",
+        response_model=ImprovementDirectionResponse,
+        tags=["guided-research"],
+    )
+    def submit_improvement_direction(proposal_id: str) -> Any:
+        return guided_service.submit_for_approval(proposal_id)
+
+    @application.post(
+        "/api/improvement-directions/{proposal_id}/budget",
+        response_model=ImprovementDirectionResponse,
+        tags=["guided-research"],
+    )
+    def revise_improvement_direction_budget(
+        proposal_id: str, body: ProposalBudgetRequest
+    ) -> Any:
+        return guided_service.revise_budget(
+            proposal_id=proposal_id,
+            subject_id=body.subject_id,
+            estimated_trials=body.estimated_trials,
+            estimated_minutes=body.estimated_minutes,
+        )
+
+    @application.post(
+        "/api/improvement-directions/{proposal_id}/approve",
+        tags=["guided-research"],
+    )
+    def approve_improvement_direction(
+        proposal_id: str, body: JobActionRequest
+    ) -> Any:
+        proposal, candidate = guided_service.approve(
+            proposal_id=proposal_id,
+            subject_id=body.subject_id,
+            confirmed_by_user=body.confirmed_by_user,
+        )
+        return {"proposal": proposal, "candidate": candidate}
+
+    @application.post(
+        "/api/improvement-directions/{proposal_id}/transition",
+        response_model=ImprovementDirectionResponse,
+        tags=["guided-research"],
+    )
+    def transition_improvement_direction(
+        proposal_id: str, body: ProposalTransitionRequest
+    ) -> Any:
+        return guided_service.transition(
+            proposal_id=proposal_id,
+            target=body.target,
+            subject_id=body.subject_id,
+            confirmed_by_user=body.confirmed_by_user,
+        )
+
+    @application.get(
+        "/api/experiment-plans/{plan_id}/trials",
+        response_model=list[TrialResponse],
+        tags=["experiments"],
+    )
+    def plan_trials(plan_id: str) -> Any:
+        repository.get_experiment_plan(plan_id)
+        return repository.list_trials(plan_id)
+
+    @application.get(
+        "/api/experiment-plans/{plan_id}/batch-summary",
+        tags=["experiments"],
+    )
+    def batch_summary(plan_id: str) -> Any:
+        plan = repository.get_experiment_plan(plan_id)
+        trials = repository.list_trials(plan_id)
+        batch_job = next(
+            (
+                job
+                for job in repository.list_jobs()
+                if job.job_type == "parameter_search"
+                and job.payload.get("batch_mode") is True
+                and job.payload.get("experiment_plan_id") == plan_id
+            ),
+            None,
+        )
+        evidence_mode = (
+            str(batch_job.payload.get("evidence_mode", "research"))
+            if batch_job is not None
+            else "unavailable"
+        )
+        return {
+            "experiment_plan_id": plan_id,
+            "baseline_version_id": plan.baseline_version_id,
+            "candidate_version_id": plan.candidate_version_id,
+            "search_strategy": plan.search_strategy,
+            "cost_model": plan.cost_model,
+            "baseline_metrics": None,
+            "evidence_mode": evidence_mode,
+            "research_conclusion_allowed": evidence_mode == "research",
+            **summarize_stable_ranges(trials, plan.constraints),
         }
 
     return application

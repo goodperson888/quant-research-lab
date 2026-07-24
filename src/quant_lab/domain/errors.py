@@ -31,3 +31,7 @@ class ExperimentPlanValidationError(QuantLabError):
 
 class GatePolicyError(QuantLabError):
     """A configured research gate or pipeline precondition was not satisfied."""
+
+
+class JobCancelledError(QuantLabError):
+    """A queued or running research job was explicitly cancelled."""
