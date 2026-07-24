@@ -1,0 +1,169 @@
+strategy_id: "trend-follow-selective-reentry-x50-20260724"
+title: "趋势跟随日内择机再入（50倍杠杆请求）"
+intake_date: "2026-07-24"
+
+source:
+  type: "natural_language"
+  author: "user"
+  title: null
+  url_or_reference: null
+  license_or_usage_note: "用户直接提供的研究想法"
+  captured_at: "2026-07-24T10:40:04Z"
+
+original_description: |
+  趋势跟随 日内交易 看准再入 x50的杠杆
+
+market_profile: "configs/market_profiles/crypto_perpetual.okx.eth.yaml"
+
+market:
+  exchange: "okx"
+  market_type: "usdt_margined_perpetual"
+  symbols:
+    - "ETH/USDT:USDT"
+  quote_currency: "USDT"
+  timeframes:
+    - "15m"
+    - "1h"
+    - "4h"
+  direction: "pending_long_short_confirmation"
+
+data_availability:
+  confirmed: true
+  available_datasets:
+    - "binance_futures_ohlcv_reference"
+  missing_datasets:
+    - "okx_primary_ohlcv"
+    - "complete_funding_rates"
+    - "complete_mark_prices"
+    - "complete_index_prices"
+    - "complete_open_interest"
+    - "verified_leverage_tiers_and_liquidation_rules"
+  earliest_reliable_timestamp: "2025-07-20T00:00:00Z"
+  point_in_time_semantics_checked: true
+  data_manifest_paths:
+    - "data/manifests/binance_ethusdt_perpetual_20250720_20260720_v2.json"
+
+market_adaptation_check:
+  confirmed: false
+  baseline_source_market: "user_natural_language"
+  target_market: "okx_eth_usdt_perpetual"
+  required_changes:
+    - "formalize_trend_definition"
+    - "formalize_selective_reentry_trigger"
+    - "define_intraday_session_boundary_for_24x7_market"
+    - "define_margin_mode_position_sizing_and_liquidation_buffer"
+    - "verify_venue_leverage_tiers_and_minimum_order_constraints"
+  venue_specific_rules_checked: false
+  cost_model_checked: false
+  validation_status_isolated_from_other_markets: true
+
+cost_model:
+  maker_fee: 0.0002
+  taker_fee: 0.0005
+  slippage_bps: 2.0
+  funding_enabled: true
+  execution_constraints:
+    - "baseline assumes taker execution until limit-fill evidence exists"
+    - "funding must never be silently set to zero"
+    - "50x leverage request is not approved for live or dry-run use"
+
+ambiguities:
+  - question: "趋势如何定义，并且只使用当时已确认的数据？"
+    adopted_interpretation: null
+    alternatives:
+      - "15m高点和低点持续上移做多、持续下移做空"
+      - "1h已收盘趋势过滤，15m执行"
+      - "均线或通道突破趋势"
+  - question: "“看准再入”是首次入场条件，还是止损/离场后的重新入场条件？"
+    adopted_interpretation: null
+    alternatives:
+      - "趋势成立后等待回踩，再由确认K线突破入场"
+      - "趋势突破后直接入场"
+      - "止损后仅在形成新的完整趋势结构时再入"
+  - question: "策略是否同时允许做多和做空？"
+    adopted_interpretation: null
+    alternatives:
+      - "双向趋势跟随"
+      - "仅做多"
+      - "仅做空"
+  - question: "24/7加密市场中的“日内”如何定义？"
+    adopted_interpretation: null
+    alternatives:
+      - "UTC自然日结束前平仓"
+      - "最长持仓不超过固定小时数"
+      - "仅限制入场时段，不强制日终平仓"
+  - question: "50倍是固定名义杠杆、最大允许杠杆，还是交易所界面设置？"
+    adopted_interpretation: null
+    alternatives:
+      - "研究压力场景中的最大杠杆上限"
+      - "逐仓固定50倍，但按止损距离限制实际账户风险"
+      - "先用1倍验证信号，再单独评估杠杆和强平风险"
+  - question: "使用逐仓还是全仓，单笔风险、最大名义仓位和强平缓冲是多少？"
+    adopted_interpretation: null
+    alternatives: []
+  - question: "止损、止盈、趋势失效、追踪退出和同K线冲突规则是什么？"
+    adopted_interpretation: null
+    alternatives: []
+  - question: "连续亏损后的冷却期、每日最大亏损和最多再入次数是多少？"
+    adopted_interpretation: null
+    alternatives: []
+
+formalized_rules:
+  data_available_at: "signals may use only closed candles"
+  entry: []
+  exit: []
+  stop_loss: null
+  take_profit: null
+  position_sizing: null
+  invalidation: null
+  same_bar_conflict_rule: "conservative"
+
+requested_risk_parameters:
+  leverage: 50.0
+  leverage_status: "unapproved_high_risk_research_request"
+  margin_mode: null
+  live_trading_enabled: false
+  automatic_leverage_increase: false
+
+baseline:
+  version: "v0-original"
+  frozen: false
+  frozen_at: null
+  code_path: null
+  experiment_run_id: null
+
+research_hypothesis:
+  statement: null
+  single_change: null
+  rationale: null
+  ablation_required: false
+  search_budget: null
+  stopping_rule: null
+
+acceptance_gates:
+  out_of_sample: null
+  walk_forward: null
+  max_drawdown: null
+  min_trades: null
+  cost_stress: null
+  parameter_sensitivity: null
+  liquidation_and_margin_stress: "required_before_any_leverage_conclusion"
+  dry_run_required: true
+
+status: "inbox"
+allowed_statuses:
+  - inbox
+  - formalized
+  - baseline
+  - candidate
+  - validated
+  - dry_run
+  - production
+  - degraded
+  - retired
+  - rejected
+
+notes:
+  - "50倍杠杆不会自动进入baseline、dry-run或live配置。"
+  - "未定义止损和仓位风险前不得开始杠杆回测。"
+  - "当前仅完成原始策略收录与歧义登记。"
