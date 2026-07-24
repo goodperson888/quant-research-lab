@@ -11,6 +11,11 @@ import {
   ComponentCandidate,
   ComponentEvidence,
   GateEvaluation,
+  ImprovementDirection,
+  ExperimentPlan,
+  Trial,
+  BatchSummary,
+  Job,
   PipelineProfile,
   ProjectStatus,
   RegimeValidation,
@@ -90,6 +95,34 @@ export function StudioWorkspace() {
     queryKey: ["research-budget-policy"],
     queryFn: () => apiFetch<ResearchBudgetPolicy>("/api/research-budget/default"),
   });
+  const directions = useQuery({
+    queryKey: ["improvement-directions"],
+    queryFn: () => apiFetch<ImprovementDirection[]>("/api/improvement-directions"),
+  });
+  const plans = useQuery({
+    queryKey: ["experiment-plans"],
+    queryFn: () => apiFetch<ExperimentPlan[]>("/api/experiment-plans"),
+  });
+  const jobs = useQuery({
+    queryKey: ["jobs"],
+    queryFn: () => apiFetch<Job[]>("/api/jobs"),
+    refetchInterval: 3000,
+  });
+  const activePlan = plans.data?.find((plan) => plan.proposal_id) ?? plans.data?.[0];
+  const trials = useQuery({
+    queryKey: ["trials", activePlan?.id],
+    queryFn: () =>
+      apiFetch<Trial[]>(`/api/experiment-plans/${activePlan?.id}/trials`),
+    enabled: Boolean(activePlan?.id),
+    refetchInterval: 3000,
+  });
+  const batchSummary = useQuery({
+    queryKey: ["batch-summary", activePlan?.id],
+    queryFn: () =>
+      apiFetch<BatchSummary>(`/api/experiment-plans/${activePlan?.id}/batch-summary`),
+    enabled: Boolean(activePlan?.id),
+    refetchInterval: 3000,
+  });
   const sessionBudget = useQuery({
     queryKey: ["research-budget", session?.id],
     queryFn: () =>
@@ -99,6 +132,66 @@ export function StudioWorkspace() {
   const selectedProfile = profiles.data?.find((profile) => profile.id === pipelineProfileId);
   const latestViability = gates.data?.find((gate) => gate.gate_name === "viability");
   const latestOutcome = outcomes.data?.[0];
+  const activeBatchJob = jobs.data?.find(
+    (job) =>
+      job.job_type === "parameter_search" &&
+      job.payload.experiment_plan_id === activePlan?.id,
+  );
+
+  const approveDirection = useMutation({
+    mutationFn: (proposalId: string) =>
+      apiFetch(`/api/improvement-directions/${proposalId}/approve`, {
+        method: "POST",
+        body: JSON.stringify({
+          subject_id: proposalId,
+          confirmed_by_user: true,
+        }),
+      }),
+    onSuccess: () => {
+      setNotice("已按明确 subject_id 批准方向，并创建不可变 Candidate snapshot；Baseline 未覆盖。");
+      queryClient.invalidateQueries({ queryKey: ["improvement-directions"] });
+      queryClient.invalidateQueries({ queryKey: ["audit-events"] });
+    },
+  });
+  const submitDirection = useMutation({
+    mutationFn: (proposalId: string) =>
+      apiFetch(`/api/improvement-directions/${proposalId}/submit`, {
+        method: "POST",
+      }),
+    onSuccess: () => {
+      setNotice("方向已提交等待审批；批准按钮将始终携带该 Proposal 的精确 subject_id。");
+      queryClient.invalidateQueries({ queryKey: ["improvement-directions"] });
+      queryClient.invalidateQueries({ queryKey: ["audit-events"] });
+    },
+  });
+  const reviseDirectionBudget = useMutation({
+    mutationFn: ({ proposalId, trials, minutes }: { proposalId: string; trials: number; minutes: number }) =>
+      apiFetch(`/api/improvement-directions/${proposalId}/budget`, {
+        method: "POST",
+        body: JSON.stringify({
+          subject_id: proposalId,
+          estimated_trials: trials,
+          estimated_minutes: minutes,
+        }),
+      }),
+    onSuccess: () => {
+      setNotice("预算已按明确 subject_id 调整；如原来等待审批，状态已退回 draft 以便重新审阅。");
+      queryClient.invalidateQueries({ queryKey: ["improvement-directions"] });
+      queryClient.invalidateQueries({ queryKey: ["audit-events"] });
+    },
+  });
+  const cancelBatchJob = useMutation({
+    mutationFn: (jobId: string) =>
+      apiFetch(`/api/jobs/${jobId}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({ subject_id: jobId, confirmed_by_user: true }),
+      }),
+    onSuccess: () => {
+      setNotice("已记录精确 Job subject 的取消请求；当前 Trial 证据保留，Runner 在安全批次边界停止。");
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["audit-events"] });
+    },
+  });
 
   const saveIntake = useMutation({
     mutationFn: async () => {
@@ -155,10 +248,10 @@ export function StudioWorkspace() {
   });
 
   const formError = useMemo(() => {
-    const error = saveIntake.error ?? freeze.error;
+    const error = saveIntake.error ?? freeze.error ?? submitDirection.error ?? approveDirection.error ?? reviseDirectionBudget.error ?? cancelBatchJob.error;
     if (error instanceof z.ZodError) return error.issues[0]?.message;
     return error instanceof Error ? error.message : null;
-  }, [freeze.error, saveIntake.error]);
+  }, [approveDirection.error, cancelBatchJob.error, freeze.error, reviseDirectionBudget.error, saveIntake.error, submitDirection.error]);
 
   return (
     <div className="min-h-screen p-4 md:p-6">
@@ -228,6 +321,41 @@ export function StudioWorkspace() {
               <Empty>
                 默认预算：{budgetPolicy.data?.max_hypotheses ?? "—"} hypotheses / {budgetPolicy.data?.max_trials_total ?? "—"} trials；创建会话后显示已用与剩余。
               </Empty>
+            )}
+          </Panel>
+          <Panel title="Batch Progress">
+            {activePlan ? (
+              <div className="space-y-2 text-xs">
+                <Meta label="Job" value={activeBatchJob?.status ?? "not queued"} />
+                <Meta
+                  label="Trials"
+                  value={`${trials.data?.filter((item) => ["succeeded", "failed", "cancelled"].includes(item.status)).length ?? 0} / ${activePlan.max_trials ?? 0}`}
+                />
+                <Meta
+                  label="Concurrency"
+                  value={String(activeBatchJob?.payload.max_concurrent_trials ?? "policy/auto")}
+                />
+                <Meta
+                  label="Peak RSS"
+                  value={`${Math.max(0, ...(trials.data ?? []).map((item) => item.peak_rss_mb ?? 0)).toFixed(1)} MB`}
+                />
+                <Meta
+                  label="Stop reason"
+                  value={activeBatchJob?.error ?? "—"}
+                />
+                {activeBatchJob && ["queued", "running"].includes(activeBatchJob.status) ? (
+                  <button
+                    type="button"
+                    onClick={() => cancelBatchJob.mutate(activeBatchJob.id)}
+                    disabled={cancelBatchJob.isPending}
+                    className="w-full rounded-lg border border-rose-300/25 bg-rose-300/10 px-2 py-2 text-rose-100 disabled:opacity-40"
+                  >
+                    取消 subject {activeBatchJob.id.slice(0, 14)}
+                  </button>
+                ) : null}
+              </div>
+            ) : (
+              <Empty>批准具体方向和预算后才会出现批量 Trial；页面只轮询结构化进度。</Empty>
             )}
           </Panel>
           <Panel title="Audit Timeline">
@@ -319,18 +447,94 @@ export function StudioWorkspace() {
               <Meta label="AI形式化" value="未运行" />
             </div>
           </Panel>
-          <Panel title="歧义与 Proposal">
-            <div className="rounded-lg border border-amber-300/15 bg-amber-300/[0.05] p-3 text-xs leading-5 text-amber-100/80">
-              Embedded Provider 未配置，因此不生成假歧义或假建议。后续 External Agent 的输出必须作为 draft/proposal 写入控制平面。
-            </div>
+          <Panel title="改进方向（最多 3 个）">
+            {directions.data?.length ? (
+              directions.data.slice(0, 3).map((direction) => (
+                <div key={direction.id} className="mb-3 rounded-xl border border-white/10 p-3 text-xs last:mb-0">
+                  <div className="font-medium leading-5 text-slate-100">{direction.hypothesis}</div>
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-slate-400">
+                    <span>{direction.estimated_trials ?? "—"} Trials</span>
+                    <span>{direction.estimated_minutes ?? "—"} min</span>
+                    <span>{direction.parameter_space.length} parameters</span>
+                    <span>{direction.evidence_refs.length} evidence refs</span>
+                  </div>
+                  <div className="mt-2 rounded-lg bg-white/[0.03] p-2 text-slate-500">
+                    状态：{direction.status} · subject {direction.id.slice(0, 14)}
+                  </div>
+                  {direction.status === "waiting_approval" ? (
+                    <button
+                      type="button"
+                      onClick={() => approveDirection.mutate(direction.id)}
+                      disabled={approveDirection.isPending}
+                      className="mt-2 w-full rounded-lg border border-emerald-300/30 bg-emerald-300/10 px-2 py-2 text-emerald-100 disabled:opacity-40"
+                    >
+                      批准 subject {direction.id.slice(0, 14)} 与预算
+                    </button>
+                  ) : null}
+                  {direction.status === "draft" ? (
+                    <button
+                      type="button"
+                      onClick={() => submitDirection.mutate(direction.id)}
+                      disabled={submitDirection.isPending}
+                      className="mt-2 w-full rounded-lg border border-sky-300/25 bg-sky-300/10 px-2 py-2 text-sky-100 disabled:opacity-40"
+                    >
+                      提交 subject {direction.id.slice(0, 14)} 审批
+                    </button>
+                  ) : null}
+                  {direction.status === "draft" || direction.status === "waiting_approval" ? (
+                    <form
+                      className="mt-2 grid grid-cols-[1fr_1fr_auto] gap-1"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        const form = new FormData(event.currentTarget);
+                        reviseDirectionBudget.mutate({
+                          proposalId: direction.id,
+                          trials: Number(form.get("trials")),
+                          minutes: Number(form.get("minutes")),
+                        });
+                      }}
+                    >
+                      <input
+                        name="trials"
+                        type="number"
+                        min={1}
+                        defaultValue={direction.estimated_trials ?? 20}
+                        aria-label="Trial budget"
+                        className="min-w-0 rounded-md border border-white/10 bg-[#071017] px-2 py-1.5 text-slate-200"
+                      />
+                      <input
+                        name="minutes"
+                        type="number"
+                        min={1}
+                        defaultValue={direction.estimated_minutes ?? 45}
+                        aria-label="Time budget minutes"
+                        className="min-w-0 rounded-md border border-white/10 bg-[#071017] px-2 py-1.5 text-slate-200"
+                      />
+                      <button type="submit" className="rounded-md border border-white/10 px-2 text-slate-300">
+                        调整
+                      </button>
+                    </form>
+                  ) : null}
+                </div>
+              ))
+            ) : (
+              <Empty>
+                Provider 未配置，不伪造 AI 建议。人工或 External Agent 可通过同一 API 创建结构化方向。
+              </Empty>
+            )}
           </Panel>
           <Panel title="Experiment Plan">
-            <ul className="space-y-2 text-xs text-slate-400">
-              <li>• 单一研究假设：待定义</li>
-              <li>• 参数范围 / 目标 / 约束：待定义</li>
-              <li>• Train / Validation / Locked test：待定义</li>
-              <li>• Trials / 时间预算 / 停止条件：待审批</li>
-            </ul>
+            {activePlan ? (
+              <div className="space-y-2 text-xs">
+                <Meta label="Status" value={activePlan.status} />
+                <Meta label="Search" value={`${activePlan.search_strategy} / seed ${activePlan.random_seed}`} />
+                <Meta label="Budget" value={`${activePlan.max_trials ?? "—"} Trials / ${Math.ceil((activePlan.time_budget_seconds ?? 0) / 60)} min`} />
+                <Meta label="Split" value="train + validation only" />
+                <div className="leading-5 text-slate-500">Locked test 仅保留给少量候选，禁止参与参数搜索。</div>
+              </div>
+            ) : (
+              <Empty>方向批准后创建计划；预算、切分、成本、目标和停止条件缺一不可。</Empty>
+            )}
           </Panel>
           <Panel title="Research Pipeline">
             <label className="mb-2 block text-xs text-slate-500" htmlFor="pipeline-profile">
@@ -378,6 +582,43 @@ export function StudioWorkspace() {
             <div className="mt-3 border-t border-white/[0.06] pt-3 text-xs text-slate-400">
               Strategy outcome：<span className="text-slate-200">{latestOutcome?.outcome_type ?? "未记录"}</span>
             </div>
+          </Panel>
+          <Panel title="Batch Result Summary">
+            {batchSummary.data?.trial_count ? (
+              <div className="space-y-2 text-xs">
+                <Meta
+                  label="Evidence"
+                  value={batchSummary.data.evidence_mode}
+                />
+                <Meta label="Succeeded" value={`${batchSummary.data.succeeded_count}/${batchSummary.data.trial_count}`} />
+                <Meta label="Stable Trials" value={String(batchSummary.data.stable_count)} />
+                <Meta
+                  label="Val Net"
+                  value={String(batchSummary.data.representative_stable_metrics.validation_net_return ?? "—")}
+                />
+                <Meta
+                  label="PF / Expectancy"
+                  value={`${batchSummary.data.representative_stable_metrics.validation_profit_factor ?? "—"} / ${batchSummary.data.representative_stable_metrics.validation_expectancy ?? "—"}`}
+                />
+                <Meta
+                  label="Trades / Drawdown"
+                  value={`${batchSummary.data.representative_stable_metrics.validation_trade_count ?? "—"} / ${batchSummary.data.representative_stable_metrics.validation_max_drawdown_abs ?? "—"}`}
+                />
+                <div className="rounded-lg bg-white/[0.03] p-2 leading-5 text-slate-400">
+                  稳定区间：{JSON.stringify(batchSummary.data.stable_parameter_ranges)}
+                </div>
+                <div className="text-slate-500">
+                  Baseline 指标尚未连接时明确显示缺失；成本模型、Regime 与失败原因从 Plan/Evidence 读取，不静默补造。孤立最高点不会自动成为 Candidate。
+                </div>
+                {!batchSummary.data.research_conclusion_allowed ? (
+                  <div className="rounded-lg border border-amber-300/20 bg-amber-300/10 p-2 leading-5 text-amber-100">
+                    当前是 fixture/不可用证据，只验证批量执行连线；这些数值不能形成 Candidate、收益或稳定性结论。
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <Empty>尚无真实批量结果。测试 fixture 必须明确标记，不能伪装成盈利候选。</Empty>
+            )}
           </Panel>
           <Panel title="Failure → Component Branch">
             {components.data?.length ? (

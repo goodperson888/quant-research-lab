@@ -173,6 +173,9 @@ export type ComponentCandidate = {
   name: string;
   status: "diagnostic_improvement" | "component_candidate" | "rejected";
   created_at: string;
+  logic_signature: string;
+  target_market_profile: string;
+  timeframe: string;
 };
 
 export type ComponentEvidence = {
@@ -185,6 +188,110 @@ export type ComponentEvidence = {
   out_of_sample_status: string;
   failure_conditions: Array<Record<string, unknown>>;
   created_at: string;
+  logic_signature: string;
+  timeframe: string;
+  source_experiment_plan_id: string | null;
+  source_trial_ids: string[];
+  stable_parameter_ranges: Record<string, unknown>;
+  failed_parameter_ranges: Record<string, unknown>;
+  regimes: string[];
+  evidence_level: string;
+};
+
+export type ImprovementDirection = {
+  id: string;
+  draft_id: string;
+  proposal_type: string;
+  content: Record<string, unknown>;
+  status:
+    | "draft"
+    | "waiting_approval"
+    | "approved"
+    | "executing"
+    | "evaluated"
+    | "accepted"
+    | "rejected"
+    | "expired";
+  baseline_version_id: string | null;
+  subject_id: string | null;
+  hypothesis: string;
+  rule_diff: Record<string, unknown>;
+  evidence_refs: string[];
+  parameter_space: Array<{
+    name: string;
+    kind: string;
+    values: unknown[];
+    lower: number | null;
+    upper: number | null;
+    step: number | null;
+  }>;
+  data_splits: Record<string, string>;
+  cost_model: Record<string, unknown>;
+  objectives: Array<{ metric: string; direction: string }>;
+  constraints: Array<{ metric: string; operator: string; value: number }>;
+  estimated_trials: number | null;
+  estimated_minutes: number | null;
+  failure_conditions: string[];
+  stopping_conditions: string[];
+  rollback_plan: string;
+  candidate_version_id: string | null;
+  created_at: string;
+};
+
+export type ExperimentPlan = {
+  id: string;
+  baseline_version_id: string;
+  hypothesis: string;
+  parameter_space: ImprovementDirection["parameter_space"];
+  objectives: Array<{ metric: string; direction: string }>;
+  constraints: Array<{ metric: string; operator: string; value: number }>;
+  data_splits: Record<string, string>;
+  cost_model: Record<string, unknown>;
+  max_trials: number | null;
+  time_budget_seconds: number | null;
+  stopping_conditions: string[];
+  proposal_id: string | null;
+  candidate_version_id: string | null;
+  search_strategy: "grid" | "random";
+  random_seed: number;
+  status: string;
+  approved_by: string | null;
+  created_at: string;
+};
+
+export type Trial = {
+  id: string;
+  experiment_plan_id: string;
+  parameters: Record<string, unknown>;
+  data_version: string;
+  status: string;
+  metrics: Record<string, number>;
+  candidate_version_id: string | null;
+  parameter_signature: string | null;
+  split: string;
+  seed: number;
+  error: string | null;
+  elapsed_seconds: number | null;
+  peak_rss_mb: number | null;
+  metrics_artifact_key: string | null;
+};
+
+export type BatchSummary = {
+  experiment_plan_id: string;
+  baseline_version_id: string;
+  candidate_version_id: string | null;
+  search_strategy: string;
+  trial_count: number;
+  succeeded_count: number;
+  stable_count: number;
+  stable_parameter_ranges: Record<string, unknown>;
+  failed_parameter_ranges: Record<string, unknown>;
+  representative_stable_metrics: Record<string, number>;
+  cost_model: Record<string, unknown>;
+  baseline_metrics: Record<string, number> | null;
+  evidence_mode: "research" | "fixture" | "unavailable";
+  research_conclusion_allowed: boolean;
+  locked_test_used: boolean;
 };
 
 export type RegimeValidation = {
