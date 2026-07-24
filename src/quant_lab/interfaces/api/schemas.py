@@ -51,6 +51,12 @@ class StrategyDraftResponse(StrictModel):
     created_at: str
 
 
+class FormalizeStrategyRequest(StrictModel):
+    subject_id: str = Field(min_length=1)
+    confirmed_by_user: bool
+    structured_content: dict[str, Any]
+
+
 class FreezeBaselineRequest(StrictModel):
     confirmed_by_user: bool
     subject_id: str | None = Field(default=None, min_length=1)

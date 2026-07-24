@@ -676,6 +676,44 @@ class SQLiteProductRepository:
             raise NotFoundError(f"strategy draft not found: {draft_id}")
         return self._draft(row)
 
+    def update_draft_formalization(
+        self,
+        *,
+        draft_id: str,
+        structured_content: Mapping[str, Any],
+    ) -> StrategyDraft:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM strategy_drafts WHERE id = ?", (draft_id,)
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"strategy draft not found: {draft_id}")
+            if row["baseline_version_id"] is not None or row["status"] == "baseline_frozen":
+                raise ConflictError(
+                    "baseline is immutable; a frozen draft cannot be formalized again"
+                )
+            if row["status"] not in {"draft", "awaiting_confirmation"}:
+                raise ConflictError(
+                    f"strategy draft cannot be formalized from status: {row['status']}"
+                )
+            connection.execute(
+                """
+                UPDATE strategy_drafts
+                SET structured_json = ?, status = 'awaiting_confirmation'
+                WHERE id = ?
+                """,
+                (
+                    json.dumps(structured_content, ensure_ascii=False, sort_keys=True),
+                    draft_id,
+                ),
+            )
+            updated = connection.execute(
+                "SELECT * FROM strategy_drafts WHERE id = ?", (draft_id,)
+            ).fetchone()
+        assert updated is not None
+        return self._draft(updated)
+
     def freeze_baseline(
         self,
         *,

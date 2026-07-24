@@ -206,6 +206,36 @@ class ResearchApplicationService:
     ) -> Sequence[StrategyDraft]:
         return self.repository.list_drafts(session_id)
 
+    def formalize_strategy(
+        self,
+        *,
+        draft_id: str,
+        structured_content: Mapping[str, Any],
+        confirmed_by_user: bool,
+    ) -> StrategyDraft:
+        if not confirmed_by_user:
+            raise ApprovalRequiredError(
+                "strategy formalization requires explicit user confirmation"
+            )
+        if not structured_content:
+            raise ConflictError("confirmed strategy formalization cannot be empty")
+        draft = self.repository.update_draft_formalization(
+            draft_id=draft_id,
+            structured_content=structured_content,
+        )
+        self._audit(
+            event_type="strategy_formalization.confirmed",
+            aggregate_type="strategy_draft",
+            aggregate_id=draft.id,
+            payload={
+                "draft_id": draft.id,
+                "status": draft.status,
+                "baseline_frozen": False,
+                "confirmed_by": "user",
+            },
+        )
+        return draft
+
     def freeze_baseline(
         self, *, draft_id: str, confirmed_by_user: bool
     ) -> StrategyVersion:

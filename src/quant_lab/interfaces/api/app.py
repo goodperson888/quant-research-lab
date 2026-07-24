@@ -68,6 +68,7 @@ from .schemas import (
     FreezeBaselineRequest,
     ExperimentPlanResponse,
     EvaluateGateRequest,
+    FormalizeStrategyRequest,
     GateEvaluationResponse,
     JobResponse,
     JobActionRequest,
@@ -289,6 +290,20 @@ def create_app(
     )
     def list_drafts(session_id: str | None = Query(default=None)) -> Any:
         return service.list_strategy_drafts(session_id)
+
+    @application.post(
+        "/api/strategy-drafts/{draft_id}/formalize",
+        response_model=StrategyDraftResponse,
+        tags=["strategies"],
+    )
+    def formalize_strategy(draft_id: str, body: FormalizeStrategyRequest) -> Any:
+        if body.subject_id != draft_id:
+            raise GatePolicyError("approval subject_id does not match the draft")
+        return service.formalize_strategy(
+            draft_id=draft_id,
+            structured_content=body.structured_content,
+            confirmed_by_user=body.confirmed_by_user,
+        )
 
     @application.post(
         "/api/strategy-drafts/{draft_id}/freeze-baseline",

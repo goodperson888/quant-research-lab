@@ -27,13 +27,33 @@ def test_baseline_is_frozen_once_and_never_overwritten(tmp_path: Path) -> None:
         raw_content="Buy when condition A is true.",
     )
 
+    formalized = service.formalize_strategy(
+        draft_id=draft.id,
+        structured_content={
+            "version": "v0.1",
+            "entry": {"rule": "confirmed condition A"},
+        },
+        confirmed_by_user=True,
+    )
+
     baseline = service.freeze_baseline(draft_id=draft.id, confirmed_by_user=True)
 
+    assert formalized.status == "awaiting_confirmation"
     assert baseline.version == 0
     assert baseline.immutable is True
     assert baseline.source_snapshot == "Buy when condition A is true."
+    assert baseline.content_snapshot == {
+        "version": "v0.1",
+        "entry": {"rule": "confirmed condition A"},
+    }
     with pytest.raises(ConflictError, match="immutable"):
         service.freeze_baseline(draft_id=draft.id, confirmed_by_user=True)
+    with pytest.raises(ConflictError, match="immutable"):
+        service.formalize_strategy(
+            draft_id=draft.id,
+            structured_content={"version": "v0.2"},
+            confirmed_by_user=True,
+        )
 
 
 def test_experiment_plan_requires_budget_splits_cost_and_objective_before_approval() -> None:
@@ -112,12 +132,37 @@ def test_api_smoke_and_agent_first_status(tmp_path: Path) -> None:
     assert draft.status_code == 201
     draft_id = draft.json()["id"]
 
+    mismatched = client.post(
+        f"/api/strategy-drafts/{draft_id}/formalize",
+        json={
+            "subject_id": "draft_wrong",
+            "confirmed_by_user": True,
+            "structured_content": {"version": "v0.1"},
+        },
+    )
+    assert mismatched.status_code == 400
+    formalized = client.post(
+        f"/api/strategy-drafts/{draft_id}/formalize",
+        json={
+            "subject_id": draft_id,
+            "confirmed_by_user": True,
+            "structured_content": {"version": "v0.1", "source": "confirmed"},
+        },
+    )
+    assert formalized.status_code == 200
+    assert formalized.json()["raw_content"] == "//@version=6"
+    assert formalized.json()["status"] == "awaiting_confirmation"
+
     frozen = client.post(
         f"/api/strategy-drafts/{draft_id}/freeze-baseline",
-        json={"confirmed_by_user": True},
+        json={"subject_id": draft_id, "confirmed_by_user": True},
     )
     assert frozen.status_code == 201
     assert frozen.json()["immutable"] is True
+    assert frozen.json()["content_snapshot"] == {
+        "version": "v0.1",
+        "source": "confirmed",
+    }
     baseline_id = frozen.json()["id"]
     repeated = client.post(
         f"/api/strategy-drafts/{draft_id}/freeze-baseline",

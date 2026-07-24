@@ -60,6 +60,13 @@ class ProductRepository(Protocol):
 
     def get_draft(self, draft_id: str) -> StrategyDraft: ...
 
+    def update_draft_formalization(
+        self,
+        *,
+        draft_id: str,
+        structured_content: Mapping[str, Any],
+    ) -> StrategyDraft: ...
+
     def freeze_baseline(
         self,
         *,
