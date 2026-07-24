@@ -1,0 +1,193 @@
+schema_version: 1
+strategy_id: "trend-follow-selective-reentry-x50-20260724"
+title: "趋势跟随日内择机再入"
+baseline:
+  label: "v0.1"
+  ordinal: 0
+  status: "baseline"
+  immutable: true
+  frozen_at: "2026-07-24T14:49:29Z"
+  approval:
+    actor: "user"
+    decision: "approved"
+    text: "按 v0.1 冻结"
+    subject_id: "draft_e35acacbd00a4ec98f1b7633d2fcc468"
+
+lineage:
+  research_session_id: "session_e13f9aa36145450896ecca47e7cdc723"
+  message_id: "message_18cd2e440d6d4efeba886c0bc4e74524"
+  draft_id: "draft_e35acacbd00a4ec98f1b7633d2fcc468"
+  original_intake_artifact: "strategies/inbox/trend-follow-selective-reentry-x50-20260724.yaml"
+  source_type: "natural_language"
+  original_text: "趋势跟随 日内交易 看准再入 x50的杠杆"
+
+research_scope:
+  purpose: "historical_research_only"
+  pipeline_profile: "smoke"
+  market_profile: "configs/market_profiles/crypto_perpetual.okx.eth.yaml"
+  reference_data_manifest: "data/manifests/binance_ethusdt_perpetual_20250720_20260720_v2.json"
+  locked_test_used: false
+  backtest_started: false
+  dry_run_enabled: false
+  live_trading_enabled: false
+
+market:
+  asset: "ETH"
+  instrument: "USDT-margined perpetual"
+  primary_venue: "OKX"
+  reference_data_venue: "Binance"
+  symbol: "ETH/USDT:USDT"
+  directions:
+    - "long"
+    - "short"
+  timezone: "UTC"
+  timeframes:
+    trend: "1h"
+    setup: "15m"
+    trigger_and_exit: "5m"
+  intraday_definition:
+    max_holding_minutes: 90
+    force_close_at_utc_midnight: false
+
+signal_timing:
+  closed_candles_only: true
+  future_data_forbidden: true
+  higher_timeframe_values_available_only_after_close: true
+
+trend:
+  detector: "confirmed_swing_pivots"
+  timeframe: "1h"
+  pivot_left_bars: 2
+  pivot_right_bars: 2
+  pivot_known_after_right_bars_close: true
+  long_condition:
+    - "the latest two confirmed swing highs are successively higher"
+    - "the latest two confirmed swing lows are successively higher"
+  short_condition:
+    - "the latest two confirmed swing highs are successively lower"
+    - "the latest two confirmed swing lows are successively lower"
+  neutral_condition: "otherwise no trade"
+  invalidation:
+    - "1h candle closes beyond the latest structural swing against the position"
+    - "a confirmed opposite 1h structure forms"
+
+setup:
+  timeframe: "15m"
+  pullback_bars:
+    min: 2
+    max: 5
+  requirements:
+    - "pullback must not close beyond the 1h invalidation level"
+    - "confirmation candle resumes the 1h trend direction"
+    - "long confirmation closes above the previous 15m high; short confirmation closes below the previous 15m low"
+    - "confirmation close is in the trend-side 40 percent of its candle range"
+    - "confirmation candle range is at most 1.8 times 15m ATR(14)"
+
+entry:
+  chase_immediately: false
+  long_trigger: "confirmation high plus one venue tick"
+  short_trigger: "confirmation low minus one venue tick"
+  trigger_valid_for_5m_bars: 3
+  execution_assumption: "taker plus configured slippage"
+  cancel_conditions:
+    - "trigger is not filled within the next three complete 5m bars"
+    - "1h trend invalidates before fill"
+    - "eligible stop-distance rule fails"
+
+stop_loss:
+  anchor: "beyond the 15m pullback swing"
+  buffer: "max(one venue tick, 0.1 * 5m ATR(14))"
+  eligible_price_distance:
+    min_fraction: 0.0025
+    max_fraction: 0.0060
+  outside_eligible_distance: "skip trade"
+  same_bar_stop_target_conflict: "stop_first"
+
+position_and_leverage:
+  requested_exchange_leverage: 50
+  margin_mode: "isolated_only"
+  cross_margin_forbidden: true
+  max_margin_fraction_of_equity: 0.01
+  max_notional_fraction_of_equity: 0.50
+  max_estimated_account_risk_fraction: 0.0030
+  estimated_risk_includes:
+    - "fees"
+    - "slippage"
+  sizing_formula: "min(risk_amount / stop_distance_fraction, equity * 0.01 * 50)"
+  max_open_positions: 1
+  pyramiding: false
+  averaging: false
+  leverage_recovery_increase_forbidden: true
+  restriction: "50x is a historical-research setting only until mark price, funding, leverage tiers and liquidation rules are verified"
+
+exit:
+  partial_take_profit:
+    at_r_multiple: 1.0
+    close_fraction: 0.50
+  remaining_stop_after_partial: "entry price plus estimated round-trip costs"
+  remaining_target_r_multiple: 1.8
+  remaining_structure_exit: "opposite confirmed 5m structure"
+  time_stop:
+    after_minutes: 30
+    condition: "maximum favorable excursion is below +0.5R"
+    action: "exit all"
+  max_holding_minutes: 90
+  immediate_exit_conditions:
+    - "opposite 15m confirmation"
+    - "1h trend invalidation"
+
+reentry:
+  after_stop_wait_complete_5m_bars: 3
+  requires_new_full_15m_pullback_and_confirmation: true
+  max_reentries_per_1h_trend_leg: 1
+  stop_after_first_entry_and_reentry_both_fail: true
+  after_profit_requires_new_pullback: true
+  chasing_after_profit_forbidden: true
+
+daily_controls:
+  accounting_timezone: "UTC"
+  max_entries_including_reentry: 3
+  stop_after_consecutive_losses: 2
+  stop_after_daily_net_loss_fraction_of_equity: 0.0075
+  increase_leverage_to_recover_losses: false
+
+cost_model:
+  maker_fee_per_side: 0.0002
+  taker_fee_per_side: 0.0005
+  baseline_execution: "taker"
+  baseline_slippage_bps_per_side: 2
+  stress_slippage_bps_per_side: 5
+  approximate_baseline_round_trip_fee_and_slippage_fraction_of_notional: 0.0014
+  funding:
+    required: true
+    silent_zero_forbidden: true
+
+known_data_and_model_gaps:
+  - "OKX primary OHLCV is not yet the stored annual authoritative dataset"
+  - "funding history is incomplete and must not be silently filled with zero"
+  - "mark and index price history is incomplete"
+  - "open-interest history is incomplete"
+  - "OKX leverage tiers, liquidation mechanics, precision and minimum-notional constraints are not fully verified"
+  - "50x liquidation distance and mark-price execution are not yet modeled sufficiently for a leverage conclusion"
+
+acceptance_boundary:
+  claim: "This frozen baseline is a testable rule specification, not evidence of profitability or safety."
+  next_allowed_stage: "correctness review and smoke backtest only after a separate explicit action"
+  production_promotion_allowed: false
+
+agent_routing_record:
+  intent: "strategy_intake_and_formalization"
+  required_docs_read:
+    - "docs/07-个人量化策略研究工作法.md"
+    - "docs/10-市场适配与因子适用性.md"
+    - "docs/15-产品需求规格-v1.md"
+    - "docs/18-Agent与Skill执行架构.md"
+  approval_subject_id: "draft_e35acacbd00a4ec98f1b7633d2fcc468"
+  approval_decision: "approved"
+  tools_used:
+    - "ResearchApplicationService.formalize_strategy"
+    - "ResearchApplicationService.freeze_baseline"
+  required_outputs:
+    - "immutable original intake"
+    - "confirmed structured baseline v0.1"
+    - "approval and append-only audit events"
