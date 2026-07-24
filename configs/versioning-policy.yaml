@@ -1,0 +1,42 @@
+schema_version: 1
+policy_id: local_authoritative_manual_git_v1
+
+authoritative_strategy_state:
+  - sqlite_product_state
+  - project_relative_artifact
+  - artifact_checksum
+  - append_only_audit
+
+git:
+  role: manual_backup_and_release_transport
+  required_for_local_product: false
+  remote_required: false
+  auto_commit_on_intake: false
+  auto_commit_on_formalization: false
+  auto_commit_on_freeze: false
+  auto_push: false
+  allowed_events:
+    - explicit_user_backup_or_publish_request
+    - explicit_research_session_export_after_completion
+    - project_code_release_milestone
+  forbidden_as_authority:
+    - baseline_immutability
+    - approval_state
+    - experiment_status
+    - latest_research_handoff
+
+artifact_lifecycle:
+  local_authoritative_roots:
+    - runtime/app
+    - experiments/runs
+    - reports
+    - strategies/research
+  existing_tracked_strategy_history_policy: preserve_without_rewrite
+  future_local_artifacts_may_remain_uncommitted: true
+  versioned_export_requires_explicit_user_action: true
+  versioned_export_root: exports/research
+
+customer_product:
+  default_remote_git_dependency: false
+  research_actions_must_not_invoke_git: true
+  license_expiry_data_access: read_only_and_exportable

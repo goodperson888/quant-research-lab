@@ -14,6 +14,7 @@ from .models import (
     Report,
     ResearchSession,
     ResearchBudget,
+    ResearchHandoff,
     StrategyDraft,
     StrategyOutcome,
     StrategyVersion,
@@ -145,6 +146,14 @@ class ProductRepository(Protocol):
     def append_event(self, event: AuditEvent) -> AuditEvent: ...
 
     def list_events(self, *, limit: int = 100) -> Sequence[AuditEvent]: ...
+
+    def create_research_handoff(
+        self, handoff: ResearchHandoff
+    ) -> ResearchHandoff: ...
+
+    def get_latest_session_handoff(self, session_id: str) -> ResearchHandoff: ...
+
+    def get_latest_agent_run_handoff(self, agent_run_id: str) -> ResearchHandoff: ...
 
     def create_experiment_plan(self, plan: ExperimentPlan) -> ExperimentPlan: ...
 

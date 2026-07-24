@@ -15,7 +15,7 @@ from quant_lab.domain.models import (
 )
 from quant_lab.domain.repositories import ProductRepository
 
-from .services import new_id, utc_now
+from .services import ResearchApplicationService, new_id, utc_now
 
 
 TERMINAL_PROPOSAL_STATUSES = frozenset({"accepted", "rejected", "expired"})
@@ -162,6 +162,24 @@ class GuidedResearchService:
         submitted = proposal.transition("waiting_approval")
         saved = self.repository.update_proposal(submitted)
         self._audit("improvement_direction.waiting_approval", saved, {"status": saved.status})
+        if saved.baseline_version_id is not None:
+            session_id = self.repository.get_session_id_for_strategy_version(
+                saved.baseline_version_id
+            )
+            ResearchApplicationService(self.repository).record_handoff(
+                session_id=session_id,
+                subject_id=saved.id,
+                status="waiting_user_approval",
+                stop_reason_code="proposal_waiting_user_approval",
+                stop_reason_text="改进方向已结构化，等待用户批准精确 Proposal 和预算。",
+                completed_actions=("创建单一假设 Proposal", "校验预算、切分、成本与停止条件"),
+                not_started_actions=("创建不可变 Candidate", "创建 Batch Job", "运行 Trials"),
+                user_action_required=True,
+                required_user_action=f"批准或拒绝 Proposal {saved.id}。",
+                next_recommended_action=f"审阅 subject {saved.id} 的规则 diff 与研究预算。",
+                approval_subject_id=saved.id,
+                safe_to_continue=False,
+            )
         return saved
 
     def revise_budget(

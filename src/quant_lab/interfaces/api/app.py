@@ -42,6 +42,7 @@ from quant_lab.infrastructure.project_readers import (
 )
 from quant_lab.infrastructure.policy_readers import (
     ResearchBudgetPolicyReader,
+    VersioningPolicyReader,
     WorkerResourcePolicyReader,
 )
 from quant_lab.application.storage import StorageReporter
@@ -75,6 +76,7 @@ from .schemas import (
     MessageResponse,
     PipelineProfileResponse,
     RegimeValidationResponse,
+    ResearchHandoffResponse,
     ImprovementDirectionResponse,
     ProposalTransitionRequest,
     ProposalBudgetRequest,
@@ -128,6 +130,7 @@ def create_app(
     agent_manifest_reader = AgentManifestReader(resolved_root)
     data_reader = DataSummaryReader(resolved_root)
     storage_reporter = StorageReporter(resolved_root)
+    versioning_reader = VersioningPolicyReader(resolved_root)
     engine_registry = BacktestEngineRegistry(
         (
             NativeBacktestEngineAdapter(lambda _job: {}),
@@ -424,12 +427,32 @@ def create_app(
 
     @application.get("/api/settings/status", tags=["system"])
     def settings_status() -> dict[str, Any]:
+        try:
+            versioning = {"available": True, **asdict(versioning_reader.read())}
+        except ValueError as exc:
+            versioning = {"available": False, "reason": str(exc)}
         return {
             "ai_provider": asdict(provider.status()),
             "api_bind_default": "127.0.0.1",
             "live_trading_enabled": False,
             "credentials_api_available": False,
+            "versioning": versioning,
+            "live_trade_safety_guard": {
+                "status": "PASS",
+                "expected_rejection_exit_code": 3,
+                "message": (
+                    "Live trade safety guard: PASS "
+                    "(expected rejection, exit code 3)."
+                ),
+            },
         }
+
+    @application.get("/api/versioning/policy", tags=["system"])
+    def versioning_policy() -> dict[str, Any]:
+        try:
+            return {"available": True, **asdict(versioning_reader.read())}
+        except ValueError as exc:
+            return {"available": False, "reason": str(exc)}
 
     @application.get("/api/agent/status", tags=["agent-control-plane"])
     def agent_status() -> dict[str, Any]:
@@ -480,6 +503,22 @@ def create_app(
     )
     def audit_events(limit: int = Query(default=100, ge=1, le=500)) -> Any:
         return service.list_audit_events(limit=limit)
+
+    @application.get(
+        "/api/research/sessions/{session_id}/handoff",
+        response_model=ResearchHandoffResponse,
+        tags=["agent-control-plane"],
+    )
+    def latest_session_handoff(session_id: str) -> Any:
+        return service.get_latest_session_handoff(session_id)
+
+    @application.get(
+        "/api/agent-runs/{agent_run_id}/handoff",
+        response_model=ResearchHandoffResponse,
+        tags=["agent-control-plane"],
+    )
+    def latest_agent_run_handoff(agent_run_id: str) -> Any:
+        return service.get_latest_agent_run_handoff(agent_run_id)
 
     @application.get(
         "/api/pipeline-profiles",

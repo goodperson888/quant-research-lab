@@ -100,6 +100,33 @@ class AuditEventResponse(StrictModel):
     created_at: str
 
 
+class ResearchHandoffResponse(StrictModel):
+    id: str
+    session_id: str
+    agent_run_id: str | None
+    subject_id: str
+    status: Literal[
+        "completed_scope",
+        "waiting_user_approval",
+        "waiting_required_input",
+        "gate_failed",
+        "budget_exhausted",
+        "blocked_dependency",
+        "safety_refusal",
+        "failed",
+    ]
+    stop_reason_code: str
+    stop_reason_text: str
+    completed_actions: list[str]
+    not_started_actions: list[str]
+    user_action_required: bool
+    required_user_action: str | None
+    next_recommended_action: str
+    approval_subject_id: str | None
+    safe_to_continue: bool
+    created_at: str
+
+
 class ParameterSpaceRequest(StrictModel):
     name: str = Field(min_length=1, max_length=120)
     kind: Literal["integer", "float", "categorical"]

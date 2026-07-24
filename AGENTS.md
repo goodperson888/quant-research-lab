@@ -39,6 +39,10 @@ These rules apply to every automated agent working in this project.
 35. Use deterministic grid or seeded-random search in the first phase. Do not enable Hyperopt/Optuna or use one Agent action per Trial.
 36. Preserve completed Trial records across failure, cancellation and retry. Retry must reference the prior Job, resume only unfinished combinations and must not reserve the same Session budget twice.
 37. Component aggregation must deduplicate by normalized logic, Market Profile and timeframe, not by parameter value. Automated aggregation may create diagnostic or component-candidate evidence, never validated.
+38. Research lifecycle actions are Git-independent. Intake, formalization, baseline freeze, Gate evaluation, Job execution and Handoff recording must not automatically commit or push. A frozen Baseline is authoritative because of SQLite state, project-relative Artifact checksum, Approval and append-only audit—not because of Git history.
+39. Git is manual backup/release transport only. Use it only for an explicit user backup/publish request, an explicit completed-session export, or a project code release milestone. Customer/local product operation must not require a repository or remote. Preserve existing tracked strategy history; do not rewrite or delete it to enforce this policy.
+40. Every pause, stop, refusal, gate failure, budget exhaustion, dependency block, Job completion or failure must create or report a structured ResearchHandoff/NextAction. It must state why execution stopped, completed and unstarted actions, whether user action is required, the exact approval subject when applicable, and the next recommended action.
+41. Report `scripts/freqtrade.sh trade` exit code 3 as `Live trade safety guard: PASS (expected rejection, exit code 3)`. Preserve the non-zero process exit code; do not present the expected safety refusal as a defect to fix.
 
 ## Instruction priority and enforcement
 
@@ -54,6 +58,10 @@ Apply instructions in this order:
 Lower-priority guidance cannot weaken a higher-priority safety or approval boundary. A user authorization only unlocks an action when the relevant rule explicitly allows that form of authorization; it does not create arbitrary live-trading, secret-handling, filesystem, or shell authority.
 
 Do not rely on prompts alone for critical controls. Baseline immutability, approval gates, job/tool allowlists, artifact path safety, append-only audit records, locked-test isolation, and live-trading prohibition must also be represented in domain rules, schemas, repositories, wrappers, or automated tests as appropriate.
+
+Research versioning follows `configs/versioning-policy.yaml`. Git is not an authority source and is not part of routine research state transitions. Automated agents must not infer permission to stage, commit or push from a strategy approval, baseline freeze, experiment approval or successful Job.
+
+Before yielding after a research action, persist or report the latest Handoff with: current status, stop reason, completed actions, unstarted actions, required user action, exact `subject_id`/approval subject, safety-to-continue and next recommendation. “Done”, “blocked” or a raw exit code alone is insufficient.
 
 ## Mandatory document routing
 

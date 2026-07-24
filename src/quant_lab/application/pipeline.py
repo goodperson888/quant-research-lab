@@ -18,7 +18,7 @@ from quant_lab.domain.models import (
 )
 from quant_lab.domain.repositories import ProductRepository
 
-from .services import new_id, utc_now
+from .services import ResearchApplicationService, new_id, utc_now
 
 
 VIABILITY_METRICS = (
@@ -188,6 +188,32 @@ class PipelineApplicationService:
                 "reasons": created.reasons,
             },
         )
+        if subject_type == "strategy_version" and created.status in {"failed", "blocked"}:
+            session_id = self.repository.get_session_id_for_strategy_version(subject_id)
+            handoff_status = "gate_failed" if created.status == "failed" else "blocked_dependency"
+            ResearchApplicationService(self.repository).record_handoff(
+                session_id=session_id,
+                subject_id=subject_id,
+                status=handoff_status,
+                stop_reason_code=f"pipeline_{gate_name}_{created.status}",
+                stop_reason_text="；".join(created.reasons),
+                completed_actions=(f"评估 {gate_name} gate", "保存 GateEvaluation 与审计证据"),
+                not_started_actions=("后续高成本验证", "locked test", "full stress", "dry-run"),
+                user_action_required=created.status == "blocked",
+                required_user_action=(
+                    "补齐缺失的前置 Gate 或依赖证据。"
+                    if created.status == "blocked"
+                    else None
+                ),
+                next_recommended_action=(
+                    "停止完整策略晋升；仅允许廉价归因或组件候选分流。"
+                    if created.status == "failed"
+                    else "先完成并通过缺失的前置阶段。"
+                ),
+                approval_subject_id=(subject_id if created.status == "blocked" else None),
+                safe_to_continue=created.status == "failed",
+                actor_type="system",
+            )
         return created
 
     def _evaluate_viability(

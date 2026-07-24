@@ -46,6 +46,26 @@ class WorkerResourcePolicy:
         return max(1, min(recommended, self.max_concurrent_trials))
 
 
+@dataclass(frozen=True, slots=True)
+class VersioningPolicy:
+    policy_id: str
+    authoritative_strategy_state: tuple[str, ...]
+    git_role: str
+    git_required_for_local_product: bool
+    remote_required: bool
+    auto_commit_on_intake: bool
+    auto_commit_on_formalization: bool
+    auto_commit_on_freeze: bool
+    auto_push: bool
+    git_allowed_events: tuple[str, ...]
+    local_authoritative_roots: tuple[str, ...]
+    existing_tracked_strategy_history_policy: str
+    future_local_artifacts_may_remain_uncommitted: bool
+    versioned_export_requires_explicit_user_action: bool
+    versioned_export_root: str
+    research_actions_must_not_invoke_git: bool
+
+
 class _FixedYamlPolicyReader:
     relative_path: str
 
@@ -133,4 +153,69 @@ class WorkerResourcePolicyReader(_FixedYamlPolicyReader):
             raise ValueError("worker default concurrency must be within the hard limit")
         if any(value > policy.max_concurrent_trials for _, value in policy.auto_concurrency_by_memory_gb):
             raise ValueError("auto concurrency recommendation exceeds the hard limit")
+        return policy
+
+
+class VersioningPolicyReader:
+    relative_path = "configs/versioning-policy.yaml"
+
+    def __init__(self, root: Path) -> None:
+        self.root = root.resolve()
+        self.path = self.root / self.relative_path
+
+    def read(self) -> VersioningPolicy:
+        if not self.path.is_file():
+            raise ValueError(f"required policy file not found: {self.relative_path}")
+        raw = yaml.safe_load(self.path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict) or raw.get("schema_version") != 1:
+            raise ValueError(f"invalid policy file: {self.relative_path}")
+        git = raw.get("git")
+        lifecycle = raw.get("artifact_lifecycle")
+        customer = raw.get("customer_product")
+        authority = raw.get("authoritative_strategy_state")
+        if not all(isinstance(item, dict) for item in (git, lifecycle, customer)):
+            raise ValueError("versioning policy sections are incomplete")
+        if not isinstance(authority, list) or not authority:
+            raise ValueError("authoritative_strategy_state is required")
+        policy = VersioningPolicy(
+            policy_id=str(raw["policy_id"]),
+            authoritative_strategy_state=tuple(str(item) for item in authority),
+            git_role=str(git["role"]),
+            git_required_for_local_product=bool(git["required_for_local_product"]),
+            remote_required=bool(git["remote_required"]),
+            auto_commit_on_intake=bool(git["auto_commit_on_intake"]),
+            auto_commit_on_formalization=bool(git["auto_commit_on_formalization"]),
+            auto_commit_on_freeze=bool(git["auto_commit_on_freeze"]),
+            auto_push=bool(git["auto_push"]),
+            git_allowed_events=tuple(str(item) for item in git["allowed_events"]),
+            local_authoritative_roots=tuple(
+                str(item) for item in lifecycle["local_authoritative_roots"]
+            ),
+            existing_tracked_strategy_history_policy=str(
+                lifecycle["existing_tracked_strategy_history_policy"]
+            ),
+            future_local_artifacts_may_remain_uncommitted=bool(
+                lifecycle["future_local_artifacts_may_remain_uncommitted"]
+            ),
+            versioned_export_requires_explicit_user_action=bool(
+                lifecycle["versioned_export_requires_explicit_user_action"]
+            ),
+            versioned_export_root=str(lifecycle["versioned_export_root"]),
+            research_actions_must_not_invoke_git=bool(
+                customer["research_actions_must_not_invoke_git"]
+            ),
+        )
+        if any(
+            (
+                policy.auto_commit_on_intake,
+                policy.auto_commit_on_formalization,
+                policy.auto_commit_on_freeze,
+                policy.auto_push,
+                policy.git_required_for_local_product,
+                policy.remote_required,
+            )
+        ):
+            raise ValueError("local versioning policy must keep research actions Git-independent")
+        if not policy.research_actions_must_not_invoke_git:
+            raise ValueError("research actions must not invoke Git")
         return policy

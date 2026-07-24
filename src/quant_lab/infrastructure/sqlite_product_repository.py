@@ -26,6 +26,7 @@ from quant_lab.domain.models import (
     Report,
     ResearchSession,
     ResearchBudget,
+    ResearchHandoff,
     StrategyDraft,
     StrategyOutcome,
     StrategyVersion,
@@ -35,7 +36,7 @@ from quant_lab.domain.models import (
 )
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class SQLiteProductRepository:
@@ -216,6 +217,44 @@ class SQLiteProductRepository:
                 BEFORE DELETE ON audit_events
                 BEGIN
                     SELECT RAISE(ABORT, 'audit events are append-only');
+                END;
+
+                CREATE TABLE IF NOT EXISTS research_handoffs (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    agent_run_id TEXT,
+                    subject_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    stop_reason_code TEXT NOT NULL,
+                    stop_reason_text TEXT NOT NULL,
+                    completed_actions_json TEXT NOT NULL,
+                    not_started_actions_json TEXT NOT NULL,
+                    user_action_required INTEGER NOT NULL,
+                    required_user_action TEXT,
+                    next_recommended_action TEXT NOT NULL,
+                    approval_subject_id TEXT,
+                    safe_to_continue INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (session_id) REFERENCES research_sessions(id),
+                    FOREIGN KEY (agent_run_id) REFERENCES agent_runs(id)
+                );
+
+                CREATE INDEX IF NOT EXISTS research_handoffs_session_created
+                    ON research_handoffs(session_id, created_at DESC);
+
+                CREATE INDEX IF NOT EXISTS research_handoffs_agent_run_created
+                    ON research_handoffs(agent_run_id, created_at DESC);
+
+                CREATE TRIGGER IF NOT EXISTS research_handoffs_no_update
+                BEFORE UPDATE ON research_handoffs
+                BEGIN
+                    SELECT RAISE(ABORT, 'research handoffs are append-only');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS research_handoffs_no_delete
+                BEFORE DELETE ON research_handoffs
+                BEGIN
+                    SELECT RAISE(ABORT, 'research handoffs are append-only');
                 END;
 
                 CREATE TABLE IF NOT EXISTS experiment_plans (
@@ -1313,6 +1352,86 @@ class SQLiteProductRepository:
             for row in rows
         ]
 
+    def create_research_handoff(
+        self, handoff: ResearchHandoff
+    ) -> ResearchHandoff:
+        with self._connect() as connection:
+            session = connection.execute(
+                "SELECT id FROM research_sessions WHERE id = ?", (handoff.session_id,)
+            ).fetchone()
+            if session is None:
+                raise NotFoundError(f"research session not found: {handoff.session_id}")
+            if handoff.agent_run_id is not None:
+                agent_run = connection.execute(
+                    "SELECT session_id FROM agent_runs WHERE id = ?",
+                    (handoff.agent_run_id,),
+                ).fetchone()
+                if agent_run is None:
+                    raise NotFoundError(
+                        f"agent run not found: {handoff.agent_run_id}"
+                    )
+                if agent_run["session_id"] != handoff.session_id:
+                    raise ConflictError("handoff agent run belongs to another session")
+            connection.execute(
+                """
+                INSERT INTO research_handoffs (
+                    id, session_id, agent_run_id, subject_id, status,
+                    stop_reason_code, stop_reason_text, completed_actions_json,
+                    not_started_actions_json, user_action_required,
+                    required_user_action, next_recommended_action,
+                    approval_subject_id, safe_to_continue, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    handoff.id,
+                    handoff.session_id,
+                    handoff.agent_run_id,
+                    handoff.subject_id,
+                    handoff.status,
+                    handoff.stop_reason_code,
+                    handoff.stop_reason_text,
+                    json.dumps(handoff.completed_actions, ensure_ascii=False),
+                    json.dumps(handoff.not_started_actions, ensure_ascii=False),
+                    int(handoff.user_action_required),
+                    handoff.required_user_action,
+                    handoff.next_recommended_action,
+                    handoff.approval_subject_id,
+                    int(handoff.safe_to_continue),
+                    handoff.created_at,
+                ),
+            )
+        return handoff
+
+    def get_latest_session_handoff(self, session_id: str) -> ResearchHandoff:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM research_handoffs
+                WHERE session_id = ?
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"research handoff not found for session: {session_id}")
+        return self._research_handoff(row)
+
+    def get_latest_agent_run_handoff(self, agent_run_id: str) -> ResearchHandoff:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM research_handoffs
+                WHERE agent_run_id = ?
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (agent_run_id,),
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"research handoff not found for agent run: {agent_run_id}")
+        return self._research_handoff(row)
+
     def create_experiment_plan(self, plan: ExperimentPlan) -> ExperimentPlan:
         with self._connect() as connection:
             baseline = connection.execute(
@@ -2056,6 +2175,26 @@ class SQLiteProductRepository:
             report_type=row["report_type"],
             artifact_key=row["path"],
             summary=json.loads(row["summary_json"]),
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _research_handoff(row: sqlite3.Row) -> ResearchHandoff:
+        return ResearchHandoff(
+            id=row["id"],
+            session_id=row["session_id"],
+            agent_run_id=row["agent_run_id"],
+            subject_id=row["subject_id"],
+            status=row["status"],
+            stop_reason_code=row["stop_reason_code"],
+            stop_reason_text=row["stop_reason_text"],
+            completed_actions=tuple(json.loads(row["completed_actions_json"])),
+            not_started_actions=tuple(json.loads(row["not_started_actions_json"])),
+            user_action_required=bool(row["user_action_required"]),
+            required_user_action=row["required_user_action"],
+            next_recommended_action=row["next_recommended_action"],
+            approval_subject_id=row["approval_subject_id"],
+            safe_to_continue=bool(row["safe_to_continue"]),
             created_at=row["created_at"],
         )
 

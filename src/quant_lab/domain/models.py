@@ -32,6 +32,16 @@ ProposalStatus = Literal[
     "rejected",
     "expired",
 ]
+ResearchHandoffStatus = Literal[
+    "completed_scope",
+    "waiting_user_approval",
+    "waiting_required_input",
+    "gate_failed",
+    "budget_exhausted",
+    "blocked_dependency",
+    "safety_refusal",
+    "failed",
+]
 
 
 class AgentProviderKind(StrEnum):
@@ -426,6 +436,37 @@ class AuditEvent:
     actor_type: Literal["user", "external_agent", "embedded_provider", "system"]
     payload: Mapping[str, Any]
     created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchHandoff:
+    id: str
+    session_id: str
+    subject_id: str
+    status: ResearchHandoffStatus
+    stop_reason_code: str
+    stop_reason_text: str
+    completed_actions: tuple[str, ...]
+    not_started_actions: tuple[str, ...]
+    user_action_required: bool
+    required_user_action: str | None
+    next_recommended_action: str
+    safe_to_continue: bool
+    created_at: str
+    agent_run_id: str | None = None
+    approval_subject_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.session_id or not self.subject_id:
+            raise ValueError("research handoff requires session_id and subject_id")
+        if not self.stop_reason_code.strip() or not self.stop_reason_text.strip():
+            raise ValueError("research handoff requires an explicit stop reason")
+        if not self.next_recommended_action.strip():
+            raise ValueError("research handoff requires a next recommended action")
+        if self.user_action_required and not self.required_user_action:
+            raise ValueError("required_user_action is required when user action is needed")
+        if self.status == "waiting_user_approval" and not self.approval_subject_id:
+            raise ValueError("waiting approval handoff requires approval_subject_id")
 
 
 @dataclass(frozen=True, slots=True)

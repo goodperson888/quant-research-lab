@@ -39,6 +39,14 @@ Read [references/pipeline-gates.md](references/pipeline-gates.md) whenever evalu
 - Never optimize solely for maximum historical profit or inspect locked test repeatedly.
 - Never treat validation in one Market Profile as validation in another.
 
+## Keep research state independent from Git
+
+- Load `configs/versioning-policy.yaml` before deciding whether an Artifact should be exported.
+- Treat SQLite product state, project-relative Artifact checksums, Approval and append-only audit as authoritative.
+- Never commit or push because intake, formalization, baseline freeze, Gate evaluation or a Job succeeded.
+- Use Git only when the user explicitly requests backup/publish, explicitly exports a completed session, or authorizes a project code release milestone.
+- Keep existing tracked strategy history; do not rewrite or delete it. Local customer operation must work without `.git` or a remote.
+
 ## Select storage and backtest engines explicitly
 
 - Read `docs/21-存储治理与保留策略.md` for storage inventory or retention work. Preserve permanent Trial metrics, manifests and failure reasons; never auto-delete evidence.
@@ -99,3 +107,21 @@ Store only project-relative `artifact_key` values. Reject absolute paths, `file:
 - Do not expose or call live trade, credential, arbitrary path, arbitrary Shell, or automatic production-promotion capabilities.
 - Use `scripts/freqtrade.sh`; it must reject `trade`.
 - Leave long work as a white-listed Job; do not execute it inside an HTTP request.
+
+## Always finish with a Stop/Handoff
+
+Create or retrieve the latest `ResearchHandoff` whenever work pauses, completes its approved scope,
+waits for input/approval, fails a Gate, exhausts budget, hits an optional dependency, is refused for
+safety, or finishes/fails a Job. Include the exact `subject_id` and `approval_subject_id` when needed.
+
+Use this final response shape; never return only “done”, “blocked” or a raw exit code:
+
+- Current status
+- Why execution stopped
+- Completed actions
+- Not started actions
+- User action required (yes/no and exact action)
+- Next recommended action (exact subject/button/command)
+
+Normalize the wrapper result as `Live trade safety guard: PASS (expected rejection, exit code 3)`
+while preserving process exit code 3. Do not describe the expected refusal as a product failure.

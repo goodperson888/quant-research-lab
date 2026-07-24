@@ -21,6 +21,39 @@ from quant_lab.infrastructure.sqlite_product_repository import SQLiteProductRepo
 
 
 def add_governance_parsers(subparsers: argparse._SubParsersAction) -> None:
+    intake = subparsers.add_parser(
+        "intake-strategy",
+        help="Save a local strategy Draft without invoking Git or creating a Job.",
+    )
+    intake.add_argument("--session-id", required=True)
+    intake.add_argument(
+        "--source-type", choices=["natural_language", "pine", "file"], required=True
+    )
+    intake.add_argument("--raw-content", required=True)
+    intake.add_argument("--source-name")
+
+    formalize = subparsers.add_parser(
+        "formalize-strategy",
+        help="Confirm structured YAML for an exact Draft subject without invoking Git.",
+    )
+    formalize.add_argument("--draft-id", required=True)
+    formalize.add_argument("--subject-id", required=True)
+    formalize.add_argument("--structured-artifact-key", required=True)
+    formalize.add_argument("--confirmed-by-user", action="store_true")
+
+    freeze = subparsers.add_parser(
+        "freeze-baseline",
+        help="Freeze an exact Draft as immutable Baseline; does not commit or push Git.",
+    )
+    freeze.add_argument("--draft-id", required=True)
+    freeze.add_argument("--subject-id", required=True)
+    freeze.add_argument("--confirmed-by-user", action="store_true")
+
+    handoff = subparsers.add_parser(
+        "show-session-handoff", help="Show the latest structured stop/next action."
+    )
+    handoff.add_argument("--session-id", required=True)
+
     subparsers.add_parser(
         "list-backtest-engines", help="List declared engine capabilities; runs nothing."
     )
@@ -105,6 +138,48 @@ def handle_governance_command(
         return 0
 
     repository = SQLiteProductRepository(database_path)
+    service = ResearchApplicationService(repository)
+    if args.command == "intake-strategy":
+        draft = service.create_strategy_intake(
+            session_id=args.session_id,
+            source_type=args.source_type,
+            source_name=args.source_name,
+            raw_content=args.raw_content,
+        )
+        print(json.dumps(asdict(draft), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "formalize-strategy":
+        if args.subject_id != args.draft_id:
+            raise ValueError("subject_id must exactly match draft_id")
+        structured = yaml.safe_load(
+            LocalArtifactStore(root).get(args.structured_artifact_key)
+        )
+        if not isinstance(structured, dict):
+            raise ValueError("structured strategy artifact must be a YAML mapping")
+        draft = service.formalize_strategy(
+            draft_id=args.draft_id,
+            structured_content=structured,
+            confirmed_by_user=args.confirmed_by_user,
+        )
+        print(json.dumps(asdict(draft), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "freeze-baseline":
+        if args.subject_id != args.draft_id:
+            raise ValueError("subject_id must exactly match draft_id")
+        baseline = service.freeze_baseline(
+            draft_id=args.draft_id,
+            confirmed_by_user=args.confirmed_by_user,
+        )
+        print(json.dumps(asdict(baseline), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "show-session-handoff":
+        handoff = service.get_latest_session_handoff(args.session_id)
+        print(json.dumps(asdict(handoff), ensure_ascii=False, indent=2))
+        return 0
+
     if args.command == "list-improvement-directions":
         items = GuidedResearchService(repository).list_directions(
             baseline_version_id=args.baseline_version_id

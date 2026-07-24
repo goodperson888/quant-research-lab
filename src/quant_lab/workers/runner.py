@@ -87,6 +87,37 @@ class LocalWorker:
         if proposal.status == "executing":
             self.repository.update_proposal(proposal.transition("evaluated"))
 
+    def _session_id_for_job(self, job: Job) -> str | None:
+        session_id = job.payload.get("session_id")
+        if isinstance(session_id, str):
+            return session_id
+        agent_run_id = job.payload.get("agent_run_id")
+        if isinstance(agent_run_id, str):
+            return self.repository.get_agent_run(agent_run_id).session_id
+        for key in ("strategy_version_id", "candidate_version_id"):
+            version_id = job.payload.get(key)
+            if isinstance(version_id, str):
+                return self.repository.get_session_id_for_strategy_version(version_id)
+        plan_id = job.payload.get("experiment_plan_id")
+        if isinstance(plan_id, str):
+            plan = self.repository.get_experiment_plan(plan_id)
+            return self.repository.get_session_id_for_strategy_version(
+                plan.baseline_version_id
+            )
+        return None
+
+    def _record_job_handoff(self, job: Job, **handoff: Any) -> None:
+        """Best-effort handoff recording that never masks the Job outcome."""
+        try:
+            session_id = self._session_id_for_job(job)
+            if session_id is None:
+                return
+            self.service.record_handoff(session_id=session_id, **handoff)
+        except Exception:
+            # The Job status, result, and original failure remain authoritative even
+            # if an optional handoff cannot be linked or persisted.
+            return
+
     def run(self, job_id: str) -> Mapping[str, Any]:
         job = self.repository.get_job(job_id)
         if job.status != "queued":
@@ -197,6 +228,21 @@ class LocalWorker:
                     created_at=cancelled_at,
                 )
             )
+            self._record_job_handoff(
+                job,
+                agent_run_id=agent_run_id if isinstance(agent_run_id, str) else None,
+                subject_id=job.id,
+                status="completed_scope",
+                stop_reason_code="job_cancelled_at_safe_boundary",
+                stop_reason_text=str(exc),
+                completed_actions=("停止 Job", "保留已完成 Trial 与失败证据"),
+                not_started_actions=("恢复未完成 Trial", "候选晋升"),
+                user_action_required=False,
+                required_user_action=None,
+                next_recommended_action=f"如需继续，显式重试 Job {job.id} 的未完成组合。",
+                safe_to_continue=True,
+                actor_type="system",
+            )
             raise
         except Exception as exc:
             failed_at = _utc_now()
@@ -248,6 +294,30 @@ class LocalWorker:
                     },
                     created_at=failed_at,
                 )
+            )
+            dependency_blocked = job.job_type == "correctness_diagnostic"
+            self._record_job_handoff(
+                job,
+                agent_run_id=agent_run_id if isinstance(agent_run_id, str) else None,
+                subject_id=job.id,
+                status="blocked_dependency" if dependency_blocked else "failed",
+                stop_reason_code=(
+                    "optional_freqtrade_unavailable"
+                    if dependency_blocked
+                    else "worker_job_failed"
+                ),
+                stop_reason_text=str(exc),
+                completed_actions=("保存 Job 失败状态", "保留日志、manifest 与已有 Trial"),
+                not_started_actions=("依赖该 Job 的后续 Gate", "候选晋升"),
+                user_action_required=False,
+                required_user_action=None,
+                next_recommended_action=(
+                    "继续使用 Native correctness 能力，或稍后安装/修复可选 Freqtrade external engine。"
+                    if dependency_blocked
+                    else "审阅失败证据后决定修复依赖或停止当前研究分支。"
+                ),
+                safe_to_continue=dependency_blocked,
+                actor_type="system",
             )
             raise
 
@@ -309,6 +379,21 @@ class LocalWorker:
                 },
                 created_at=completed_at,
             )
+        )
+        self._record_job_handoff(
+            job,
+            agent_run_id=agent_run_id if isinstance(agent_run_id, str) else None,
+            subject_id=job.id,
+            status="completed_scope",
+            stop_reason_code="worker_job_scope_completed",
+            stop_reason_text=f"Job {job.id} 已完成已批准范围，未自动启动后续阶段。",
+            completed_actions=(f"完成 {job.job_type} Job", "保存结果、资源指标与审计事件"),
+            not_started_actions=("自动接受策略修改", "自动晋升", "live trade"),
+            user_action_required=False,
+            required_user_action=None,
+            next_recommended_action="审阅结果和 Gate 证据，再决定是否批准下一阶段。",
+            safe_to_continue=True,
+            actor_type="system",
         )
         return result
 

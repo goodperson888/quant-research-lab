@@ -27,6 +27,7 @@ from quant_lab.domain.models import (
     ParameterSpace,
     Proposal,
     ResearchBudget,
+    ResearchHandoff,
     ResearchSession,
     StrategyDraft,
     StrategyVersion,
@@ -199,6 +200,20 @@ class ResearchApplicationService:
                 "source_name": created.source_name,
             },
         )
+        self.record_handoff(
+            session_id=session_id,
+            subject_id=created.id,
+            status="waiting_required_input",
+            stop_reason_code="strategy_intake_requires_formalization",
+            stop_reason_text="原始策略已保存，但形式化规则与歧义尚未由用户确认。",
+            completed_actions=("保存不可覆盖的原始策略来源", "创建 StrategyDraft"),
+            not_started_actions=("形式化规则", "冻结 Baseline", "创建研究 Job"),
+            user_action_required=True,
+            required_user_action="审阅歧义并确认结构化策略规则。",
+            next_recommended_action=f"为 Draft {created.id} 完成形式化并确认。",
+            approval_subject_id=created.id,
+            safe_to_continue=False,
+        )
         return created
 
     def list_strategy_drafts(
@@ -234,6 +249,20 @@ class ResearchApplicationService:
                 "confirmed_by": "user",
             },
         )
+        self.record_handoff(
+            session_id=draft.session_id,
+            subject_id=draft.id,
+            status="waiting_user_approval",
+            stop_reason_code="formalization_confirmed_baseline_not_frozen",
+            stop_reason_text="结构化规则已确认，但 Baseline 冻结仍需要独立明确批准。",
+            completed_actions=("保留原始来源", "确认结构化规则"),
+            not_started_actions=("冻结 Baseline", "创建 correctness/fast-screen Job"),
+            user_action_required=True,
+            required_user_action=f"批准冻结 Draft {draft.id} 的 Baseline v0。",
+            next_recommended_action=f"使用精确 subject_id {draft.id} 冻结 Baseline。",
+            approval_subject_id=draft.id,
+            safe_to_continue=False,
+        )
         return draft
 
     def freeze_baseline(
@@ -261,9 +290,59 @@ class ResearchApplicationService:
                 "approved_by": "user",
             },
         )
+        session_id = self.repository.get_session_id_for_strategy_version(version.id)
+        self.record_handoff(
+            session_id=session_id,
+            subject_id=version.id,
+            status="completed_scope",
+            stop_reason_code="baseline_frozen_scope_complete",
+            stop_reason_text=(
+                "Baseline v0 已冻结。当前授权范围仅包含冻结，因此没有创建或运行回测 Job。"
+            ),
+            completed_actions=(
+                "保存并确认结构化策略规则",
+                "冻结不可覆盖的 Baseline v0",
+                "记录用户 Approval 与审计事件",
+            ),
+            not_started_actions=(
+                "correctness 检查",
+                "fast-screen 基准回测",
+                "viability 与后续验证",
+            ),
+            user_action_required=True,
+            required_user_action=f"批准为 Baseline {version.id} 创建 correctness/fast-screen 研究。",
+            next_recommended_action=f"批准 subject {version.id} 的 correctness/fast-screen 研究计划。",
+            approval_subject_id=version.id,
+            safe_to_continue=False,
+        )
         return version
 
     def create_job(self, *, job_type: str, payload: Mapping[str, Any]) -> Job:
+        if job_type in {"trade", "live_trade"}:
+            session_id = payload.get("session_id")
+            if isinstance(session_id, str):
+                try:
+                    self.repository.get_session(session_id)
+                except NotFoundError:
+                    pass
+                else:
+                    self.record_handoff(
+                        session_id=session_id,
+                        subject_id=str(payload.get("subject_id") or session_id),
+                        status="safety_refusal",
+                        stop_reason_code="live_trade_safety_guard",
+                        stop_reason_text=(
+                            "Live trade safety guard: PASS (expected rejection, exit code 3)."
+                        ),
+                        completed_actions=("拒绝 live trade 请求", "保留研究安全边界"),
+                        not_started_actions=("启动交易循环", "连接真实账户"),
+                        user_action_required=False,
+                        required_user_action=None,
+                        next_recommended_action="继续历史研究；安全拒绝不是待修复错误。",
+                        safe_to_continue=True,
+                        actor_type="system",
+                    )
+            raise InvalidJobError("live trade is forbidden and has no Job capability")
         if job_type not in ALLOWED_JOB_TYPES:
             allowed = ", ".join(sorted(ALLOWED_JOB_TYPES))
             raise InvalidJobError(f"job type must be one of: {allowed}")
@@ -353,6 +432,25 @@ class ResearchApplicationService:
                             "experiment_plan_id": plan.id,
                             "reason": str(exc),
                         },
+                        actor_type="system",
+                    )
+                    self.record_handoff(
+                        session_id=session_id,
+                        subject_id=plan.id,
+                        status="budget_exhausted",
+                        stop_reason_code="trial_or_compute_budget_exhausted",
+                        stop_reason_text=str(exc),
+                        completed_actions=(
+                            "校验已批准的 ExperimentPlan",
+                            "检查会话 Trial 与计算分钟预算",
+                            "保留 blocked 审计证据",
+                        ),
+                        not_started_actions=("创建 parameter-search Job", "运行 Trials"),
+                        user_action_required=True,
+                        required_user_action="审阅预算与停止条件；不得通过提示词绕过硬上限。",
+                        next_recommended_action="缩小已批准研究范围或结束当前研究会话。",
+                        approval_subject_id=plan.id,
+                        safe_to_continue=False,
                         actor_type="system",
                     )
                     raise
@@ -504,6 +602,21 @@ class ResearchApplicationService:
                     aggregate_type="research_session",
                     aggregate_id=session_id,
                     payload={"job_type": job_type, "reason": str(exc)},
+                    actor_type="system",
+                )
+                self.record_handoff(
+                    session_id=session_id,
+                    subject_id=str(payload.get("subject_id") or session_id),
+                    status="budget_exhausted",
+                    stop_reason_code="locked_test_budget_exhausted",
+                    stop_reason_text=str(exc),
+                    completed_actions=("检查 locked-test 使用预算", "保留 blocked 审计证据"),
+                    not_started_actions=("创建使用 locked-test 的 Job",),
+                    user_action_required=True,
+                    required_user_action="审阅 locked-test 使用记录与研究范围。",
+                    next_recommended_action="停止重复查看锁定测试，或建立新的未污染锁定区间。",
+                    approval_subject_id=str(payload.get("subject_id") or session_id),
+                    safe_to_continue=False,
                     actor_type="system",
                 )
                 raise
@@ -723,6 +836,69 @@ class ResearchApplicationService:
     def list_audit_events(self, *, limit: int = 100) -> Sequence[AuditEvent]:
         return self.repository.list_events(limit=limit)
 
+    def record_handoff(
+        self,
+        *,
+        session_id: str,
+        subject_id: str,
+        status: str,
+        stop_reason_code: str,
+        stop_reason_text: str,
+        completed_actions: Sequence[str],
+        not_started_actions: Sequence[str],
+        user_action_required: bool,
+        required_user_action: str | None,
+        next_recommended_action: str,
+        safe_to_continue: bool,
+        agent_run_id: str | None = None,
+        approval_subject_id: str | None = None,
+        actor_type: str = "external_agent",
+    ) -> ResearchHandoff:
+        self.repository.get_session(session_id)
+        handoff = ResearchHandoff(
+            id=new_id("handoff"),
+            session_id=session_id,
+            agent_run_id=agent_run_id,
+            subject_id=subject_id,
+            status=status,  # type: ignore[arg-type]
+            stop_reason_code=stop_reason_code,
+            stop_reason_text=stop_reason_text,
+            completed_actions=tuple(completed_actions),
+            not_started_actions=tuple(not_started_actions),
+            user_action_required=user_action_required,
+            required_user_action=required_user_action,
+            next_recommended_action=next_recommended_action,
+            approval_subject_id=approval_subject_id,
+            safe_to_continue=safe_to_continue,
+            created_at=utc_now(),
+        )
+        created = self.repository.create_research_handoff(handoff)
+        self._audit(
+            event_type="research_handoff.recorded",
+            aggregate_type="research_handoff",
+            aggregate_id=created.id,
+            payload={
+                "session_id": created.session_id,
+                "agent_run_id": created.agent_run_id,
+                "subject_id": created.subject_id,
+                "status": created.status,
+                "stop_reason_code": created.stop_reason_code,
+                "user_action_required": created.user_action_required,
+                "approval_subject_id": created.approval_subject_id,
+                "safe_to_continue": created.safe_to_continue,
+            },
+            actor_type=actor_type,
+        )
+        return created
+
+    def get_latest_session_handoff(self, session_id: str) -> ResearchHandoff:
+        self.repository.get_session(session_id)
+        return self.repository.get_latest_session_handoff(session_id)
+
+    def get_latest_agent_run_handoff(self, agent_run_id: str) -> ResearchHandoff:
+        self.repository.get_agent_run(agent_run_id)
+        return self.repository.get_latest_agent_run_handoff(agent_run_id)
+
     def create_experiment_plan(
         self,
         *,
@@ -816,6 +992,21 @@ class ResearchApplicationService:
                 aggregate_type="research_session",
                 aggregate_id=session_id,
                 payload={"experiment_plan_id": plan_id, "reason": str(exc)},
+                actor_type="system",
+            )
+            self.record_handoff(
+                session_id=session_id,
+                subject_id=plan_id,
+                status="budget_exhausted",
+                stop_reason_code="hypothesis_budget_exhausted",
+                stop_reason_text=str(exc),
+                completed_actions=("校验 ExperimentPlan", "检查会话 hypothesis 预算"),
+                not_started_actions=("批准 ExperimentPlan", "创建 parameter-search Job"),
+                user_action_required=True,
+                required_user_action="审阅会话预算与已研究假设。",
+                next_recommended_action="停止新增假设或由用户明确建立新的研究会话。",
+                approval_subject_id=plan_id,
+                safe_to_continue=False,
                 actor_type="system",
             )
             raise
