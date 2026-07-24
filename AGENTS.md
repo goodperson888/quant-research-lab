@@ -35,6 +35,10 @@ These rules apply to every automated agent working in this project.
 31. Freqtrade lookahead/recursive diagnostics are correctness evidence only. They must use the safe wrapper, must not use locked-test data or rejected strategies, and cannot be described as strategy performance evidence.
 32. Every ResearchSession is bounded by the configured hypothesis, Trial, compute-minute and locked-test-use budget. Exceeding a budget must create blocked evidence; an Agent cannot override it in a prompt.
 33. The one-shot Worker must enforce and report its configured time, memory, concurrency and Parquet batch limits. Resource failure preserves the Job, manifest/Trial evidence already produced and failure reason.
+34. Batch parameter research requires a structured Proposal with an exact Baseline/subject, explicit approval, immutable Candidate snapshot, ExperimentPlan and Session budget. Locked-test data is forbidden in the search.
+35. Use deterministic grid or seeded-random search in the first phase. Do not enable Hyperopt/Optuna or use one Agent action per Trial.
+36. Preserve completed Trial records across failure, cancellation and retry. Retry must reference the prior Job, resume only unfinished combinations and must not reserve the same Session budget twice.
+37. Component aggregation must deduplicate by normalized logic, Market Profile and timeframe, not by parameter value. Automated aggregation may create diagnostic or component-candidate evidence, never validated.
 
 ## Instruction priority and enforcement
 
@@ -60,9 +64,9 @@ Before taking an action in one of these intents, read the listed documents in fu
 | Strategy intake or formalization | `docs/07-个人量化策略研究工作法.md`, `docs/10-市场适配与因子适用性.md`, `docs/15-产品需求规格-v1.md`, `docs/18-Agent与Skill执行架构.md` |
 | Market-data download or normalization | `docs/01-数据规范.md`, `docs/09-数据存储架构.md`, `docs/10-市场适配与因子适用性.md`, `docs/14-ETH永续第一阶段数据记录.md`, `docs/18-Agent与Skill执行架构.md`, `docs/21-存储治理与保留策略.md`, `docs/22-ETH永续一年数据扩展记录.md` |
 | Baseline backtest | `docs/00-标准研究流程.md`, `docs/02-回测与验收规范.md`, `docs/07-个人量化策略研究工作法.md`, `docs/10-市场适配与因子适用性.md`, `docs/15-产品需求规格-v1.md`, `docs/18-Agent与Skill执行架构.md`, `docs/20-Freqtrade能力边界与融合方案.md` |
-| Parameter optimization/search | `docs/02-回测与验收规范.md`, `docs/04-压力测试清单.md`, `docs/07-个人量化策略研究工作法.md`, `docs/15-产品需求规格-v1.md`, `docs/16-产品化目标架构-v1.md`, `docs/18-Agent与Skill执行架构.md` |
+| Parameter optimization/search | `docs/02-回测与验收规范.md`, `docs/04-压力测试清单.md`, `docs/07-个人量化策略研究工作法.md`, `docs/15-产品需求规格-v1.md`, `docs/16-产品化目标架构-v1.md`, `docs/18-Agent与Skill执行架构.md`, `docs/25-批量策略研究闭环.md` |
 | Stress testing | `docs/02-回测与验收规范.md`, `docs/04-压力测试清单.md`, `docs/07-个人量化策略研究工作法.md`, `docs/18-Agent与Skill执行架构.md`, `docs/20-Freqtrade能力边界与融合方案.md` |
 | Dry-run preparation or start | `docs/02-回测与验收规范.md`, `docs/05-自动化运行规范.md`, `docs/06-安全与实盘门禁.md`, `docs/07-个人量化策略研究工作法.md`, `docs/15-产品需求规格-v1.md`, `docs/18-Agent与Skill执行架构.md` |
-| Pipeline/gate, outcome, component, regime, or Pine validation | `docs/00-标准研究流程.md`, `docs/02-回测与验收规范.md`, `docs/04-压力测试清单.md`, `docs/07-个人量化策略研究工作法.md`, `docs/15-产品需求规格-v1.md`, `docs/16-产品化目标架构-v1.md`, `docs/18-Agent与Skill执行架构.md` |
+| Pipeline/gate, outcome, component, regime, Pine validation, or batch evidence aggregation | `docs/00-标准研究流程.md`, `docs/02-回测与验收规范.md`, `docs/04-压力测试清单.md`, `docs/07-个人量化策略研究工作法.md`, `docs/15-产品需求规格-v1.md`, `docs/16-产品化目标架构-v1.md`, `docs/18-Agent与Skill执行架构.md`, `docs/25-批量策略研究闭环.md` |
 
 If an intent is ambiguous, route to the stricter applicable set. Record the selected intent, documents read, preconditions, approval decision, tools used, and required outputs in the AgentRun or audit trail. Missing preconditions stop execution; they are not warnings to bypass.

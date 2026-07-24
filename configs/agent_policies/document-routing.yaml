@@ -1,5 +1,5 @@
-version: 3
-policy_id: quant_lab_document_routing_v3
+version: 4
+policy_id: quant_lab_document_routing_v4
 default_agent_run_mode: guided
 instruction_precedence:
   - system_developer_runtime_permissions
@@ -27,6 +27,9 @@ enforcement:
     - formal_regime_requires_viability
     - session_research_budget
     - worker_resource_budget
+    - proposal_candidate_immutability
+    - batch_trial_resume_without_overwrite
+    - component_logic_signature_deduplication
 
 intents:
   - intent: strategy_intake
@@ -124,6 +127,7 @@ intents:
       - docs/15-产品需求规格-v1.md
       - docs/16-产品化目标架构-v1.md
       - docs/18-Agent与Skill执行架构.md
+      - docs/25-批量策略研究闭环.md
     required_preconditions:
       - baseline_frozen
       - single_falsifiable_hypothesis
@@ -133,17 +137,26 @@ intents:
       - cost_model_complete
       - max_trials_or_time_budget_defined
       - stopping_conditions_defined
+      - exact_baseline_and_proposal_subject_ids
+      - approved_proposal_and_immutable_candidate_for_research_batch
+      - locked_test_explicitly_excluded_from_search
     allowed_tools:
       - create_experiment_plan
       - approve_experiment_plan
+      - create_improvement_direction
+      - approve_proposal
       - run_parameter_search
       - get_job
       - compare_runs
       - propose_strategy_version
       - accept_proposal
+      - create_component_candidate
+      - list_component_evidence
     required_outputs:
       - approved_experiment_plan
+      - immutable_candidate_snapshot
       - trial_records
+      - batched_parquet_trial_metrics
       - parameter_stability_analysis
       - out_of_sample_comparison
       - proposal_or_rejection
@@ -158,6 +171,7 @@ intents:
       - docs/04-压力测试清单.md
       - docs/07-个人量化策略研究工作法.md
       - docs/18-Agent与Skill执行架构.md
+      - docs/25-批量策略研究闭环.md
       - docs/20-Freqtrade能力边界与融合方案.md
     required_preconditions:
       - candidate_or_baseline_version_selected
@@ -193,6 +207,7 @@ intents:
       - docs/15-产品需求规格-v1.md
       - docs/16-产品化目标架构-v1.md
       - docs/18-Agent与Skill执行架构.md
+      - docs/25-批量策略研究闭环.md
     required_preconditions:
       - pipeline_profile_selected
       - exact_subject_id_selected
@@ -202,6 +217,7 @@ intents:
       - regime_mode_declared
       - passed_same_subject_viability_when_mode_is_regime_validation
       - research_session_budget_available
+      - exact_proposal_subject_when_batch_research_is_requested
     allowed_tools:
       - list_pipeline_profiles
       - evaluate_gate

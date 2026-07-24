@@ -1,6 +1,6 @@
 ---
 name: quant-strategy-research
-description: Orchestrate safe, auditable, fail-fast quantitative strategy research in Quant Research Lab. Use when Codex or another agent intakes or formalizes a natural-language/Pine strategy, selects a pipeline profile, evaluates correctness/viability/robustness gates, downloads market data, runs backtests or bounded parameter research, performs cost or full stress tests, records component/regime evidence, prepares dry-run work, or creates strategy/experiment/report artifacts in this repository.
+description: Orchestrate safe, auditable, fail-fast quantitative strategy research in Quant Research Lab. Use when Codex or another agent intakes or formalizes a natural-language/Pine strategy, selects a pipeline profile, evaluates correctness/viability/robustness gates, downloads market data, runs backtests or approved bounded batch parameter research, manages Proposal/Candidate/Trial evidence, performs cost or full stress tests, records component/regime evidence, prepares dry-run work, or creates strategy/experiment/report artifacts in this repository.
 ---
 
 # Quant Strategy Research
@@ -59,6 +59,9 @@ Do not tune parameters conversationally or one-by-one without a budget. Require 
 
 Only then create a `parameter_search` Job. The deterministic Worker, not the Agent, runs Trials. Analyze stable regions and validation results before using the locked test.
 
+Read [references/batch-research.md](references/batch-research.md) whenever creating, approving,
+executing, retrying, summarizing, or aggregating evidence from a batch parameter search.
+
 Also load the ResearchSession budget before approving a new hypothesis or creating a search Job. Stop and preserve `research_budget.blocked` evidence when max hypotheses, total Trials, compute minutes or locked-test uses are exhausted. A plan-level budget never replaces the session-level budget.
 
 ## Keep regime and Pine claims bounded
@@ -79,7 +82,10 @@ Also load the ResearchSession budget before approving a new hypothesis or creati
 
 ## Respect Worker resources
 
-Load `configs/workers/local.yaml`. Keep the one-shot concurrency at one, report elapsed time and peak RSS, batch Trial metrics using the configured Parquet row target, and fail with preserved evidence when time or memory limits are exceeded.
+Load `configs/workers/local.yaml`. Default one-shot concurrency to one; an automatic memory-based
+recommendation may raise it only within the configured hard cap. Report elapsed time and peak RSS,
+batch Trial metrics using the configured Parquet row target, and fail with preserved evidence when
+time or memory limits are exceeded.
 
 ## Use safe artifact references
 

@@ -161,9 +161,10 @@ strategies/research/strategy_abc/v1.py
 - 停止条件；
 - 用户批准。
 
-`run_parameter_search` Job 必须引用已批准计划。当前 Worker 只有一个为既定入场确认假设
-编写的 bounded single-Trial 兼容 Handler，不是通用参数优化器；未匹配其固定计划的 Job
-会失败，不能执行或伪造成功。
+`run_parameter_search` Job 必须引用已批准计划。当前 Worker 保留既定入场确认
+single-Trial 兼容 Handler，并增加通用 Batch Trial 编排。Batch 仍必须通过
+StrategyEvaluator 端口；没有真实 evaluator 时明确 unsupported，唯一内置 deterministic
+fixture 只能作为连线证据，不能伪造策略收益。
 
 ### 8.3 Trial
 
@@ -207,8 +208,8 @@ Worker 是确定性执行层，不是自主 Agent。它接收已校验的 Job ID
 当前 Worker 是 one-shot：无 `--job-id` 只打印能力/status 并退出，不得在 Web 显示为
 正在常驻消费。Full stress Handler 必须自己复查 passed viability，不信任单独的 Agent 说明。
 
-当前 Handler 限于 baseline、一个有边界的入场确认 Trial、成本压力测试和 ex-ante regime
-validation。新增或现有 Handler 都必须：
+当前 Handler 限于 baseline、一个有边界的入场确认 Trial、通用 Batch router、成本压力测试和
+ex-ante regime validation。新增或现有 Handler 都必须：
 
 - 不使用任意 Shell payload；
 - 创建实验 manifest；
@@ -232,7 +233,9 @@ External Agent 可以通过 CLI/API/未来 MCP 工作；Embedded Agent 由 Worke
 
 ## 12. Phase 0/本轮边界
 
-本轮实现文档路由、项目 Skill、端口、领域验证、SQLite 最小持久化和测试。不实现完整 MCP Server、LLM 调用、参数优化器、Local Connector、Hosted Sandbox、多用户或远程事件总线。
+本轮实现文档路由、项目 Skill、端口、领域验证、SQLite 持久化和有预算 Batch 编排。
+不实现完整 MCP Server、LLM 调用、Hyperopt/Optuna、Local Connector、Hosted Sandbox、
+多用户或远程事件总线。
 
 ## 13. 模型能力与密钥契约
 
@@ -255,3 +258,15 @@ blocked，不得通过新对话或换 Provider 绕过。Regime diagnostic 可在
 Freqtrade correctness 仅映射到 `run_correctness_diagnostic` 白名单工具，Worker 最终执行
 固定命令并记录 Artifact。Worker 的时间/RSS/并发/batch 政策同样由代码执行，不依赖 Agent
 承诺。详见 [阶段2研究门禁与资源预算](24-阶段2研究门禁与资源预算.md)。
+
+## 15. Batch Proposal 与 Trial 执行
+
+External/Embedded Agent 只能创建最多 3 个结构化 Proposal draft。用户批准精确 Proposal
+subject 后，Repository 创建不可变 Candidate；之后 ExperimentPlan 才能进入批量执行。
+Agent 不逐个执行 Trial，不在聊天中盲调。Worker 使用进程 executor 和确定性 evaluator，
+按计划/会话/资源三层预算运行，并把指标批量写入 Parquet。
+
+失败、取消和资源超限保留已完成 Trial。Retry 必须引用原 Job，仅恢复未完成组合，不再次
+预留会话预算，也不覆盖已完成 Trial。组件聚合按规范化逻辑签名去重，不按参数值造因子，
+最高自动状态为 component candidate。完整约束见
+[批量策略研究闭环](25-批量策略研究闭环.md)。

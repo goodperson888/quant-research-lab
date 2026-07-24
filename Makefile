@@ -1,6 +1,6 @@
 PYTHON ?= .venv/bin/python
 
-.PHONY: doctor init test daily weekly dev-api dev-web dev-worker web-build web-lint web-typecheck
+.PHONY: doctor init test daily weekly dev-api dev-web dev-worker web-build web-lint web-typecheck check-fast check-standard check-release
 
 doctor:
 	PYTHONPATH=src $(PYTHON) -m quant_lab.cli doctor
@@ -27,10 +27,19 @@ dev-worker:
 	./scripts/dev-worker.sh
 
 web-build:
-	cd apps/web && npm run build
+	cd apps/web && npm run build -- --webpack
 
 web-lint:
 	cd apps/web && npm run lint
 
 web-typecheck:
 	cd apps/web && npm run typecheck
+
+check-fast:
+	./scripts/check-fast.sh
+
+check-standard:
+	./scripts/check-standard.sh
+
+check-release:
+	./scripts/check-release.sh
