@@ -7,6 +7,7 @@ import {
   AgentStatus,
   apiFetch,
   ProjectStatus,
+  VersioningPolicy,
   WorkerResourcePolicy,
 } from "@/lib/api";
 
@@ -27,9 +28,13 @@ export function SettingsStatus() {
     queryKey: ["worker-resource-policy"],
     queryFn: () => apiFetch<WorkerResourcePolicy>("/api/worker/resource-policy"),
   });
-  if (project.isPending || agent.isPending || manifest.isPending || workerPolicy.isPending)
+  const versioning = useQuery({
+    queryKey: ["versioning-policy"],
+    queryFn: () => apiFetch<VersioningPolicy>("/api/versioning/policy"),
+  });
+  if (project.isPending || agent.isPending || manifest.isPending || workerPolicy.isPending || versioning.isPending)
     return <div className="text-sm text-slate-500">读取本地设置…</div>;
-  if (project.isError || agent.isError || manifest.isError || workerPolicy.isError)
+  if (project.isError || agent.isError || manifest.isError || workerPolicy.isError || versioning.isError)
     return <div className="text-sm text-rose-300">API未连接，无法读取真实状态。</div>;
   return (
     <div className="grid gap-4 lg:grid-cols-2">
@@ -71,8 +76,26 @@ export function SettingsStatus() {
       </Section>
       <Section title="安全边界">
         <Row label="Live trading" value="disabled / endpoint absent" />
+        <Row label="Live trade guard" value="PASS · expected rejection (exit 3)" />
         <Row label="生产晋升" value="API unavailable" />
         <Row label="任意Shell" value="API unavailable" />
+      </Section>
+      <Section title="研究版本策略">
+        {versioning.data.available ? (
+          <>
+            <Row label="权威状态" value="Local authoritative" />
+            <Row label="Git角色" value="Manual backup / release" />
+            <Row label="Remote依赖" value={versioning.data.remote_required ? "required" : "not required"} />
+            <Row label="Intake自动提交" value="disabled" />
+            <Row label="Freeze自动提交" value="disabled" />
+            <Row label="自动Push" value="disabled" />
+            <p className="mt-3 text-xs leading-5 text-slate-500">
+              SQLite、项目相对 Artifact、checksum 与 append-only audit 才是研究事实源；冻结 Baseline 不等于 Git commit。
+            </p>
+          </>
+        ) : (
+          <p className="text-sm text-amber-200/80">版本策略不可用：{versioning.data.reason ?? "unknown"}</p>
+        )}
       </Section>
       <Section title="Worker 资源预算">
         {workerPolicy.data.available ? (

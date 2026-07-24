@@ -46,6 +46,21 @@ external engine，不随商业包捆绑。模型必须满足
 
 项目级 Agent 编排 Skill 位于 `.agents/skills/quant-strategy-research/`。所有研究动作先按 `configs/agent_policies/document-routing.yaml` 选择 intent、读取必需文档、检查前置条件和审批门禁；安全不只依赖提示词，后端状态机、Repository、ArtifactStore、Job 白名单和测试共同执行约束。
 
+### 研究状态与 Git 解耦
+
+研究事实以 SQLite 产品状态、项目相对 Artifact、checksum、Approval 和 append-only audit
+为权威。Intake、形式化、冻结 Baseline、Gate 和 Job 不会自动 commit 或 push；冻结 Baseline
+不等于 Git commit。本地/客户产品不需要 `.git` 或 remote 也能完成研究流程。
+
+Git 只作为人工备份和代码发布通道：仅在用户明确要求备份/发布、显式导出完整研究会话，
+或项目代码 release milestone 时使用。现有已跟踪策略历史继续保留，不重写、不删除。
+机器可读规则见 [`configs/versioning-policy.yaml`](configs/versioning-policy.yaml)。Studio 与
+Settings 显示 `Local authoritative / Git backup manual`。
+
+所有暂停和停止都会生成 `ResearchHandoff`，明确“为什么停在这里、已完成、未执行、需要
+用户做什么、精确 subject ID 和下一步”。`scripts/freqtrade.sh trade` 的退出码 3 在报告中
+归一化为：`Live trade safety guard: PASS (expected rejection, exit code 3)`。
+
 ## 个人轻量策略研究模式
 
 本项目服务个人研究者，采用“策略优先、因子随策略研究自然沉淀”的模式：先把
@@ -96,6 +111,7 @@ JSON/YAML 保存配置与 manifest。Parquet 是可重建分析数据的权威�
 - API 密钥不得写入代码、配置、日志或版本库。
 - 实盘密钥必须关闭提现权限，并设置 IP 白名单。
 - “验证通过”只代表历史和模拟测试合格，不代表未来盈利。
+- Live trade wrapper 返回退出码 3 是预期安全门禁通过，不是待修复故障。
 
 ## 目录
 

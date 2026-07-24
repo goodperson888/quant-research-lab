@@ -21,9 +21,11 @@ import {
   RegimeValidation,
   ResearchBudget,
   ResearchBudgetPolicy,
+  ResearchHandoff,
   Session,
   StrategyOutcome,
   StrategyDraft,
+  VersioningPolicy,
 } from "@/lib/api";
 
 const intakeSchema = z.object({
@@ -66,6 +68,22 @@ export function StudioWorkspace() {
   const events = useQuery({
     queryKey: ["audit-events"],
     queryFn: () => apiFetch<AuditEvent[]>("/api/audit/events?limit=20"),
+  });
+  const sessions = useQuery({
+    queryKey: ["research-sessions"],
+    queryFn: () => apiFetch<Session[]>("/api/research/sessions"),
+  });
+  const activeSession = session ?? sessions.data?.[0] ?? null;
+  const handoff = useQuery({
+    queryKey: ["research-handoff", activeSession?.id],
+    queryFn: () =>
+      apiFetch<ResearchHandoff>(`/api/research/sessions/${activeSession?.id}/handoff`),
+    enabled: Boolean(activeSession?.id),
+    retry: false,
+  });
+  const versioning = useQuery({
+    queryKey: ["versioning-policy"],
+    queryFn: () => apiFetch<VersioningPolicy>("/api/versioning/policy"),
   });
   const profiles = useQuery({
     queryKey: ["pipeline-profiles"],
@@ -124,10 +142,10 @@ export function StudioWorkspace() {
     refetchInterval: 3000,
   });
   const sessionBudget = useQuery({
-    queryKey: ["research-budget", session?.id],
+    queryKey: ["research-budget", activeSession?.id],
     queryFn: () =>
-      apiFetch<ResearchBudget>(`/api/research/sessions/${session?.id}/budget`),
-    enabled: Boolean(session?.id),
+      apiFetch<ResearchBudget>(`/api/research/sessions/${activeSession?.id}/budget`),
+    enabled: Boolean(activeSession?.id),
   });
   const selectedProfile = profiles.data?.find((profile) => profile.id === pipelineProfileId);
   const latestViability = gates.data?.find((gate) => gate.gate_name === "viability");
@@ -151,6 +169,8 @@ export function StudioWorkspace() {
       setNotice("已按明确 subject_id 批准方向，并创建不可变 Candidate snapshot；Baseline 未覆盖。");
       queryClient.invalidateQueries({ queryKey: ["improvement-directions"] });
       queryClient.invalidateQueries({ queryKey: ["audit-events"] });
+      queryClient.invalidateQueries({ queryKey: ["research-sessions"] });
+      queryClient.invalidateQueries({ queryKey: ["research-handoff"] });
     },
   });
   const submitDirection = useMutation({
@@ -162,6 +182,7 @@ export function StudioWorkspace() {
       setNotice("方向已提交等待审批；批准按钮将始终携带该 Proposal 的精确 subject_id。");
       queryClient.invalidateQueries({ queryKey: ["improvement-directions"] });
       queryClient.invalidateQueries({ queryKey: ["audit-events"] });
+      queryClient.invalidateQueries({ queryKey: ["research-handoff"] });
     },
   });
   const reviseDirectionBudget = useMutation({
@@ -226,6 +247,8 @@ export function StudioWorkspace() {
         "原始来源已保存为 draft。未运行AI形式化；请先审阅原文和歧义，再人工冻结 baseline。",
       );
       queryClient.invalidateQueries({ queryKey: ["audit-events"] });
+      queryClient.invalidateQueries({ queryKey: ["research-sessions"] });
+      queryClient.invalidateQueries({ queryKey: ["research-handoff"] });
     },
   });
 
@@ -244,6 +267,8 @@ export function StudioWorkspace() {
       );
       setNotice("baseline v0 已冻结且不可覆盖。后续修改必须创建 Proposal/新版本。");
       queryClient.invalidateQueries({ queryKey: ["audit-events"] });
+      queryClient.invalidateQueries({ queryKey: ["research-sessions"] });
+      queryClient.invalidateQueries({ queryKey: ["research-handoff"] });
     },
   });
 
@@ -283,12 +308,64 @@ export function StudioWorkspace() {
         </div>
       </header>
 
+      <section
+        data-testid="research-handoff-card"
+        className="mb-5 rounded-2xl border border-amber-300/25 bg-amber-300/[0.07] p-4 md:p-5"
+      >
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200">
+              为什么停在这里 / 下一步
+            </div>
+            <div className="mt-2 text-base font-medium text-slate-100">
+              {handoff.data?.stop_reason_text ?? "当前会话尚无结构化 Stop/Handoff。"}
+            </div>
+            <div className="mt-2 text-sm leading-6 text-slate-300">
+              下一步：{handoff.data?.next_recommended_action ?? "保存策略后，系统会明确显示停止原因与下一动作。"}
+            </div>
+          </div>
+          <div className="shrink-0 rounded-lg border border-white/10 bg-black/10 px-3 py-2 text-xs text-slate-300">
+            {handoff.data?.status ?? "not_recorded"}
+          </div>
+        </div>
+        {handoff.data ? (
+          <div className="mt-4 grid gap-4 text-xs md:grid-cols-3">
+            <div>
+              <div className="mb-1 font-medium text-emerald-200">已完成</div>
+              <ul className="space-y-1 text-slate-400">
+                {handoff.data.completed_actions.map((item) => <li key={item}>· {item}</li>)}
+              </ul>
+            </div>
+            <div>
+              <div className="mb-1 font-medium text-slate-200">未执行</div>
+              <ul className="space-y-1 text-slate-500">
+                {handoff.data.not_started_actions.map((item) => <li key={item}>· {item}</li>)}
+              </ul>
+            </div>
+            <div>
+              <div className="mb-1 font-medium text-amber-200">需要用户操作</div>
+              <div className="leading-5 text-slate-400">
+                {handoff.data.user_action_required
+                  ? handoff.data.required_user_action
+                  : "当前不需要用户操作。"}
+              </div>
+              <div className="mt-2 break-all text-slate-500">
+                subject: {handoff.data.approval_subject_id ?? handoff.data.subject_id}
+              </div>
+            </div>
+          </div>
+        ) : null}
+        <div className="mt-4 border-t border-white/10 pt-3 text-xs text-slate-500">
+          Versioning: {versioning.data?.available ? "Local authoritative / Git backup manual" : "policy unavailable"}
+        </div>
+      </section>
+
       <div className="grid gap-4 xl:grid-cols-[240px_minmax(0,1fr)_360px]">
         <aside className="space-y-4">
           <Panel title="Research Session">
             <div className="space-y-2 text-sm">
-              <Meta label="会话" value={session?.title ?? "尚未创建"} />
-              <Meta label="状态" value={session?.status ?? "inbox"} />
+              <Meta label="会话" value={activeSession?.title ?? "尚未创建"} />
+              <Meta label="状态" value={activeSession?.status ?? "inbox"} />
               <Meta label="策略" value={draft ? "1 draft" : "0"} />
             </div>
           </Panel>

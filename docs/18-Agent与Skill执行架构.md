@@ -198,6 +198,7 @@ locked/full stress、dry-run 前进。GateEvaluation 是独立事实；任何前
 - Artifact 创建；
 - 报告；
 - 暂停、取消、失败和审批。
+- ResearchHandoff/NextAction，包括停止原因、未执行动作、用户要求和下一步。
 
 Web 时间线只读这些结构化事件，不从聊天文本反推事实。SQLite Trigger 当前拒绝事件 UPDATE/DELETE；未来即使更换数据库也保留 append-only 语义。
 
@@ -270,3 +271,33 @@ Agent 不逐个执行 Trial，不在聊天中盲调。Worker 使用进程 execut
 预留会话预算，也不覆盖已完成 Trial。组件聚合按规范化逻辑签名去重，不按参数值造因子，
 最高自动状态为 component candidate。完整约束见
 [批量策略研究闭环](25-批量策略研究闭环.md)。
+
+## 16. Git 不是研究状态机
+
+`configs/versioning-policy.yaml` 是版本边界的机器契约。研究权威状态由 SQLite、项目相对
+Artifact、checksum、Approval 和 append-only Audit/Handoff 共同形成。Git 只负责显式备份、
+显式会话 export 和代码 release；Agent 不得因 intake、形式化、freeze、Gate 或 Job 成功而
+自行 stage/commit/push。本地或商业产品没有 remote 时必须完整工作。
+
+现有 `strategies/` 已跟踪历史不删除、不重写。未来 Artifact 可以只保存在本地权威目录；
+需要进入版本化 export 时，用户必须独立明确要求。一次策略批准不能隐含 Git 授权。
+
+## 17. ResearchHandoff 与最终回复
+
+每个研究终点写入 append-only `ResearchHandoff`，并追加 AuditEvent。至少包含 session、可选
+AgentRun、subject、标准状态、stop reason、已完成、未执行、用户动作、审批 subject、下一步、
+safe-to-continue 和 UTC 时间。
+
+状态语义：
+
+- `completed_scope`：已完成本次授权，但未获得下一阶段权限；
+- `waiting_user_approval` / `waiting_required_input`：需要精确批准或必需输入；
+- `gate_failed`：证据判定失败，不等于软件故障；
+- `budget_exhausted`：硬预算阻止继续；
+- `blocked_dependency`：可选依赖或外部条件不可用；
+- `safety_refusal`：禁止能力被正确拒绝；
+- `failed`：实际执行或系统失败。
+
+Skill 最终回复必须说明当前状态、停止原因、已完成、未执行、用户是否需要操作和精确下一步。
+Freqtrade `trade` 的 exit code 3 报告为 `Live trade safety guard: PASS (expected rejection,
+exit code 3)`，但不得把底层退出码改成 0。

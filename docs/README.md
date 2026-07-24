@@ -68,6 +68,8 @@
 - 策略收录：[`configs/strategy-intake.example.yaml`](../configs/strategy-intake.example.yaml)
 - Market Profiles：[`configs/market_profiles/README.md`](../configs/market_profiles/README.md)
 - 当前研究配置：[`configs/lab.json`](../configs/lab.json)
+- 研究版本策略：[`configs/versioning-policy.yaml`](../configs/versioning-policy.yaml)，定义本地权威状态、Git 手工备份边界和禁止自动提交/推送；
+- Agent 文档路由：[`configs/agent_policies/document-routing.yaml`](../configs/agent_policies/document-routing.yaml)，所有 intent 的必需输出都包含 ResearchHandoff；
 - 数据 manifest：[`data/manifests/`](../data/manifests/)
 - 数据质量报告：[`reports/data_quality/`](../reports/data_quality/)
 - 因子 schema：[`factor_library/schema.example.json`](../factor_library/schema.example.json)
@@ -75,3 +77,6 @@
 文档中的状态和数字以当前 Git 版本、数据 manifest、catalog summary 和测试输出为准。
 若文档与机器记录不一致，应先停止研究任务、核对来源并修正文档，不能选择性使用对自己
 有利的数字。
+
+注意：Git 版本只描述已发布的代码/显式导出，不是运行时研究状态的权威来源。未导出的
+本地 Artifact、SQLite 状态和最新 Handoff 可以比 Git 更新；冻结 Baseline 也不会自动提交。

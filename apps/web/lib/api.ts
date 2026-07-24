@@ -70,6 +70,27 @@ export type AgentManifest = {
   adapter_priority?: string[];
 };
 
+export type VersioningPolicy = {
+  available: boolean;
+  reason?: string;
+  policy_id?: string;
+  authoritative_strategy_state?: string[];
+  git_role?: string;
+  git_required_for_local_product?: boolean;
+  remote_required?: boolean;
+  auto_commit_on_intake?: boolean;
+  auto_commit_on_formalization?: boolean;
+  auto_commit_on_freeze?: boolean;
+  auto_push?: boolean;
+  git_allowed_events?: string[];
+  local_authoritative_roots?: string[];
+  existing_tracked_strategy_history_policy?: string;
+  future_local_artifacts_may_remain_uncommitted?: boolean;
+  versioned_export_requires_explicit_user_action?: boolean;
+  versioned_export_root?: string;
+  research_actions_must_not_invoke_git?: boolean;
+};
+
 export type WorkerResourcePolicy = {
   available: boolean;
   reason?: string;
@@ -118,6 +139,32 @@ export type AuditEvent = {
   aggregate_id: string;
   actor_type: string;
   payload: Record<string, unknown>;
+  created_at: string;
+};
+
+export type ResearchHandoff = {
+  id: string;
+  session_id: string;
+  agent_run_id: string | null;
+  subject_id: string;
+  status:
+    | "completed_scope"
+    | "waiting_user_approval"
+    | "waiting_required_input"
+    | "gate_failed"
+    | "budget_exhausted"
+    | "blocked_dependency"
+    | "safety_refusal"
+    | "failed";
+  stop_reason_code: string;
+  stop_reason_text: string;
+  completed_actions: string[];
+  not_started_actions: string[];
+  user_action_required: boolean;
+  required_user_action: string | null;
+  next_recommended_action: string;
+  approval_subject_id: string | null;
+  safe_to_continue: boolean;
   created_at: string;
 };
 
