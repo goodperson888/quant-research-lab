@@ -145,8 +145,13 @@ def summarize_trades_by_regime(
     if not required.issubset(trades.columns):
         raise ValueError("trade evidence requires entry_time and net_return")
     trade_frame = trades.copy()
-    trade_frame["entry_time"] = pd.to_datetime(trade_frame["entry_time"], utc=True)
+    trade_frame["entry_time"] = pd.to_datetime(
+        trade_frame["entry_time"], utc=True
+    ).astype("datetime64[ns, UTC]")
     label_frame = labels.loc[:, ["effective_from", "regime"]].copy()
+    label_frame["effective_from"] = pd.to_datetime(
+        label_frame["effective_from"], utc=True
+    ).astype("datetime64[ns, UTC]")
     label_frame = label_frame.sort_values("effective_from")
     joined = pd.merge_asof(
         trade_frame.sort_values("entry_time"),

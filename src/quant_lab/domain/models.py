@@ -42,6 +42,14 @@ ResearchHandoffStatus = Literal[
     "safety_refusal",
     "failed",
 ]
+ResearchAuthorizationStatus = Literal[
+    "active",
+    "completed",
+    "stopped",
+    "expired",
+    "revoked",
+]
+ResearchStageStatus = Literal["pending", "running", "passed", "failed", "blocked", "skipped"]
 
 
 class AgentProviderKind(StrEnum):
@@ -61,6 +69,8 @@ ALLOWED_JOB_TYPES = frozenset(
         "correctness_diagnostic",
         "data_quality",
         "parameter_search",
+        "pipeline_execution",
+        "research_diagnostic",
         "regime_validation",
         "report",
         "stress_test",
@@ -120,6 +130,61 @@ class ResearchBudget:
     @property
     def remaining_locked_test_uses(self) -> int:
         return max(0, self.max_locked_test_uses - self.used_locked_test_uses)
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchAuthorization:
+    id: str
+    subject_id: str
+    session_id: str
+    allowed_stages: tuple[str, ...]
+    auto_continue: bool
+    max_cost_usdt: float
+    max_time_minutes: int
+    max_trials: int
+    locked_test_allowed: bool
+    stop_conditions: tuple[str, ...]
+    expires_at: str
+    approved_by: Literal["user"]
+    status: ResearchAuthorizationStatus
+    created_at: str
+    used_cost_usdt: float = 0.0
+    used_time_minutes: float = 0.0
+    used_trials: int = 0
+
+    def __post_init__(self) -> None:
+        if not self.subject_id or not self.session_id:
+            raise ValueError("research authorization requires subject_id and session_id")
+        if not self.allowed_stages:
+            raise ValueError("research authorization requires at least one allowed stage")
+        if len(self.allowed_stages) != len(set(self.allowed_stages)):
+            raise ValueError("research authorization stages must be unique")
+        if self.max_cost_usdt < 0 or self.max_time_minutes <= 0 or self.max_trials < 0:
+            raise ValueError("research authorization budgets must be non-negative")
+        if self.locked_test_allowed:
+            raise ValueError("guided research-to-viability authorization forbids locked test")
+        if not self.stop_conditions:
+            raise ValueError("research authorization requires explicit stop conditions")
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchAuthorizationStage:
+    id: str
+    authorization_id: str
+    stage: str
+    status: ResearchStageStatus
+    evidence_refs: tuple[str, ...]
+    reason: str
+    elapsed_minutes: float
+    cost_usdt: float
+    trials_used: int
+    created_at: str
+
+    def __post_init__(self) -> None:
+        for artifact_key in self.evidence_refs:
+            validate_artifact_key(artifact_key)
+        if self.elapsed_minutes < 0 or self.cost_usdt < 0 or self.trials_used < 0:
+            raise ValueError("stage resource usage must be non-negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -550,6 +615,38 @@ class ComponentCandidate:
     logic_signature: str = ""
     target_market_profile: str = ""
     timeframe: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ComponentHypothesis:
+    id: str
+    session_id: str
+    subject_id: str
+    title: str
+    hypothesis: str
+    component_type: Literal["entry", "filter", "exit", "risk", "execution"]
+    source: Literal["deterministic_rule_analyzer", "external_agent", "manual"]
+    evidence_refs: tuple[str, ...]
+    expected_improvement: str
+    parameter_space: Mapping[str, Any]
+    suggested_trials: int
+    failure_conditions: tuple[str, ...]
+    evidence_level: Literal["diagnostic", "screening"]
+    contamination_status: Literal[
+        "train_only", "validation_observed", "screening_contaminated"
+    ]
+    status: Literal["draft", "approved", "rejected"]
+    created_at: str
+
+    def __post_init__(self) -> None:
+        if not self.title.strip() or not self.hypothesis.strip():
+            raise ValueError("component hypothesis requires title and hypothesis")
+        if not 3 <= self.suggested_trials <= 5:
+            raise ValueError("component hypothesis must suggest 3 to 5 Trials")
+        if not self.failure_conditions:
+            raise ValueError("component hypothesis requires failure conditions")
+        for artifact_key in self.evidence_refs:
+            validate_artifact_key(artifact_key)
 
 
 @dataclass(frozen=True, slots=True)

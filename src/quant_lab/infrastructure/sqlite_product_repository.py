@@ -15,6 +15,7 @@ from quant_lab.domain.models import (
     Constraint,
     ComponentCandidate,
     ComponentEvidence,
+    ComponentHypothesis,
     ExecutionTargetKind,
     ExperimentPlan,
     GateEvaluation,
@@ -26,6 +27,8 @@ from quant_lab.domain.models import (
     Report,
     ResearchSession,
     ResearchBudget,
+    ResearchAuthorization,
+    ResearchAuthorizationStage,
     ResearchHandoff,
     StrategyDraft,
     StrategyOutcome,
@@ -36,7 +39,7 @@ from quant_lab.domain.models import (
 )
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 class SQLiteProductRepository:
@@ -84,6 +87,47 @@ class SQLiteProductRepository:
                     used_locked_test_uses INTEGER NOT NULL DEFAULT 0,
                     FOREIGN KEY (session_id) REFERENCES research_sessions(id)
                 );
+
+                CREATE TABLE IF NOT EXISTS research_authorizations (
+                    id TEXT PRIMARY KEY,
+                    subject_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    allowed_stages_json TEXT NOT NULL,
+                    auto_continue INTEGER NOT NULL,
+                    max_cost_usdt REAL NOT NULL,
+                    max_time_minutes INTEGER NOT NULL,
+                    max_trials INTEGER NOT NULL,
+                    locked_test_allowed INTEGER NOT NULL,
+                    stop_conditions_json TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    approved_by TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    used_cost_usdt REAL NOT NULL DEFAULT 0,
+                    used_time_minutes REAL NOT NULL DEFAULT 0,
+                    used_trials INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (session_id) REFERENCES research_sessions(id)
+                );
+
+                CREATE INDEX IF NOT EXISTS research_authorizations_subject_created
+                    ON research_authorizations(subject_id, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS research_authorization_stages (
+                    id TEXT PRIMARY KEY,
+                    authorization_id TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    evidence_refs_json TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    elapsed_minutes REAL NOT NULL,
+                    cost_usdt REAL NOT NULL,
+                    trials_used INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (authorization_id) REFERENCES research_authorizations(id)
+                );
+
+                CREATE INDEX IF NOT EXISTS research_authorization_stages_created
+                    ON research_authorization_stages(authorization_id, created_at);
 
                 CREATE TABLE IF NOT EXISTS messages (
                     id TEXT PRIMARY KEY,
@@ -397,6 +441,26 @@ class SQLiteProductRepository:
                     FOREIGN KEY (evidence_id) REFERENCES component_evidence(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS component_hypotheses (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    subject_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    hypothesis TEXT NOT NULL,
+                    component_type TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    evidence_refs_json TEXT NOT NULL,
+                    expected_improvement TEXT NOT NULL,
+                    parameter_space_json TEXT NOT NULL,
+                    suggested_trials INTEGER NOT NULL,
+                    failure_conditions_json TEXT NOT NULL,
+                    evidence_level TEXT NOT NULL,
+                    contamination_status TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (session_id) REFERENCES research_sessions(id)
+                );
+
                 CREATE TABLE IF NOT EXISTS regime_validations (
                     id TEXT PRIMARY KEY,
                     subject_type TEXT NOT NULL,
@@ -581,6 +645,162 @@ class SQLiteProductRepository:
         if row is None:
             raise NotFoundError(f"research budget not found for session: {session_id}")
         return self._research_budget(row)
+
+    def create_research_authorization(
+        self, authorization: ResearchAuthorization
+    ) -> ResearchAuthorization:
+        with self._connect() as connection:
+            session = connection.execute(
+                "SELECT id FROM research_sessions WHERE id = ?",
+                (authorization.session_id,),
+            ).fetchone()
+            if session is None:
+                raise NotFoundError(
+                    f"research session not found: {authorization.session_id}"
+                )
+            connection.execute(
+                """
+                INSERT INTO research_authorizations (
+                    id, subject_id, session_id, allowed_stages_json, auto_continue,
+                    max_cost_usdt, max_time_minutes, max_trials, locked_test_allowed,
+                    stop_conditions_json, expires_at, approved_by, status,
+                    used_cost_usdt, used_time_minutes, used_trials, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    authorization.id,
+                    authorization.subject_id,
+                    authorization.session_id,
+                    json.dumps(authorization.allowed_stages, ensure_ascii=False),
+                    int(authorization.auto_continue),
+                    authorization.max_cost_usdt,
+                    authorization.max_time_minutes,
+                    authorization.max_trials,
+                    int(authorization.locked_test_allowed),
+                    json.dumps(authorization.stop_conditions, ensure_ascii=False),
+                    authorization.expires_at,
+                    authorization.approved_by,
+                    authorization.status,
+                    authorization.used_cost_usdt,
+                    authorization.used_time_minutes,
+                    authorization.used_trials,
+                    authorization.created_at,
+                ),
+            )
+        return authorization
+
+    def get_research_authorization(
+        self, authorization_id: str
+    ) -> ResearchAuthorization:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM research_authorizations WHERE id = ?",
+                (authorization_id,),
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(
+                f"research authorization not found: {authorization_id}"
+            )
+        return self._research_authorization(row)
+
+    def list_research_authorizations(
+        self, *, session_id: str | None = None, subject_id: str | None = None
+    ) -> Sequence[ResearchAuthorization]:
+        conditions: list[str] = []
+        parameters: list[str] = []
+        if session_id is not None:
+            conditions.append("session_id = ?")
+            parameters.append(session_id)
+        if subject_id is not None:
+            conditions.append("subject_id = ?")
+            parameters.append(subject_id)
+        query = "SELECT * FROM research_authorizations"
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY created_at DESC"
+        with self._connect() as connection:
+            rows = connection.execute(query, tuple(parameters)).fetchall()
+        return [self._research_authorization(row) for row in rows]
+
+    def update_research_authorization_usage(
+        self,
+        authorization_id: str,
+        *,
+        status: str,
+        used_cost_usdt: float,
+        used_time_minutes: float,
+        used_trials: int,
+    ) -> ResearchAuthorization:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE research_authorizations
+                SET status = ?, used_cost_usdt = ?, used_time_minutes = ?,
+                    used_trials = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    used_cost_usdt,
+                    used_time_minutes,
+                    used_trials,
+                    authorization_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise NotFoundError(
+                    f"research authorization not found: {authorization_id}"
+                )
+        return self.get_research_authorization(authorization_id)
+
+    def create_research_authorization_stage(
+        self, stage: ResearchAuthorizationStage
+    ) -> ResearchAuthorizationStage:
+        with self._connect() as connection:
+            authorization = connection.execute(
+                "SELECT id FROM research_authorizations WHERE id = ?",
+                (stage.authorization_id,),
+            ).fetchone()
+            if authorization is None:
+                raise NotFoundError(
+                    f"research authorization not found: {stage.authorization_id}"
+                )
+            connection.execute(
+                """
+                INSERT INTO research_authorization_stages (
+                    id, authorization_id, stage, status, evidence_refs_json,
+                    reason, elapsed_minutes, cost_usdt, trials_used, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    stage.id,
+                    stage.authorization_id,
+                    stage.stage,
+                    stage.status,
+                    json.dumps(stage.evidence_refs, ensure_ascii=False),
+                    stage.reason,
+                    stage.elapsed_minutes,
+                    stage.cost_usdt,
+                    stage.trials_used,
+                    stage.created_at,
+                ),
+            )
+        return stage
+
+    def list_research_authorization_stages(
+        self, authorization_id: str
+    ) -> Sequence[ResearchAuthorizationStage]:
+        self.get_research_authorization(authorization_id)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM research_authorization_stages
+                WHERE authorization_id = ?
+                ORDER BY created_at, rowid
+                """,
+                (authorization_id,),
+            ).fetchall()
+        return [self._research_authorization_stage(row) for row in rows]
 
     def reserve_hypothesis(self, session_id: str) -> ResearchBudget:
         with self._connect() as connection:
@@ -1914,6 +2134,73 @@ class SQLiteProductRepository:
             ).fetchall()
         return [self._component_candidate(row) for row in rows]
 
+    def create_component_hypothesis(
+        self, hypothesis: ComponentHypothesis
+    ) -> ComponentHypothesis:
+        with self._connect() as connection:
+            session = connection.execute(
+                "SELECT id FROM research_sessions WHERE id = ?",
+                (hypothesis.session_id,),
+            ).fetchone()
+            if session is None:
+                raise NotFoundError(
+                    f"research session not found: {hypothesis.session_id}"
+                )
+            existing_count = connection.execute(
+                """
+                SELECT COUNT(*) FROM component_hypotheses
+                WHERE subject_id = ? AND status IN ('draft', 'approved')
+                """,
+                (hypothesis.subject_id,),
+            ).fetchone()[0]
+            if existing_count >= 3:
+                raise ConflictError(
+                    "a subject may have at most three active component hypotheses"
+                )
+            connection.execute(
+                """
+                INSERT INTO component_hypotheses (
+                    id, session_id, subject_id, title, hypothesis, component_type,
+                    source, evidence_refs_json, expected_improvement,
+                    parameter_space_json, suggested_trials,
+                    failure_conditions_json, evidence_level,
+                    contamination_status, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    hypothesis.id,
+                    hypothesis.session_id,
+                    hypothesis.subject_id,
+                    hypothesis.title,
+                    hypothesis.hypothesis,
+                    hypothesis.component_type,
+                    hypothesis.source,
+                    json.dumps(hypothesis.evidence_refs, ensure_ascii=False),
+                    hypothesis.expected_improvement,
+                    json.dumps(hypothesis.parameter_space, sort_keys=True),
+                    hypothesis.suggested_trials,
+                    json.dumps(hypothesis.failure_conditions, ensure_ascii=False),
+                    hypothesis.evidence_level,
+                    hypothesis.contamination_status,
+                    hypothesis.status,
+                    hypothesis.created_at,
+                ),
+            )
+        return hypothesis
+
+    def list_component_hypotheses(
+        self, *, subject_id: str | None = None
+    ) -> Sequence[ComponentHypothesis]:
+        query = "SELECT * FROM component_hypotheses"
+        parameters: tuple[str, ...] = ()
+        if subject_id is not None:
+            query += " WHERE subject_id = ?"
+            parameters = (subject_id,)
+        query += " ORDER BY created_at DESC"
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [self._component_hypothesis(row) for row in rows]
+
     def create_regime_validation(
         self, validation: RegimeValidation
     ) -> RegimeValidation:
@@ -1984,6 +2271,45 @@ class SQLiteProductRepository:
             reserved_trials=row["reserved_trials"],
             reserved_compute_minutes=row["reserved_compute_minutes"],
             used_locked_test_uses=row["used_locked_test_uses"],
+        )
+
+    @staticmethod
+    def _research_authorization(row: sqlite3.Row) -> ResearchAuthorization:
+        return ResearchAuthorization(
+            id=row["id"],
+            subject_id=row["subject_id"],
+            session_id=row["session_id"],
+            allowed_stages=tuple(json.loads(row["allowed_stages_json"])),
+            auto_continue=bool(row["auto_continue"]),
+            max_cost_usdt=float(row["max_cost_usdt"]),
+            max_time_minutes=int(row["max_time_minutes"]),
+            max_trials=int(row["max_trials"]),
+            locked_test_allowed=bool(row["locked_test_allowed"]),
+            stop_conditions=tuple(json.loads(row["stop_conditions_json"])),
+            expires_at=row["expires_at"],
+            approved_by=row["approved_by"],
+            status=row["status"],
+            created_at=row["created_at"],
+            used_cost_usdt=float(row["used_cost_usdt"]),
+            used_time_minutes=float(row["used_time_minutes"]),
+            used_trials=int(row["used_trials"]),
+        )
+
+    @staticmethod
+    def _research_authorization_stage(
+        row: sqlite3.Row,
+    ) -> ResearchAuthorizationStage:
+        return ResearchAuthorizationStage(
+            id=row["id"],
+            authorization_id=row["authorization_id"],
+            stage=row["stage"],
+            status=row["status"],
+            evidence_refs=tuple(json.loads(row["evidence_refs_json"])),
+            reason=row["reason"],
+            elapsed_minutes=float(row["elapsed_minutes"]),
+            cost_usdt=float(row["cost_usdt"]),
+            trials_used=int(row["trials_used"]),
+            created_at=row["created_at"],
         )
 
     @staticmethod
@@ -2130,6 +2456,29 @@ class SQLiteProductRepository:
             logic_signature=row["logic_signature"],
             target_market_profile=row["target_market_profile"],
             timeframe=row["timeframe"],
+        )
+
+    @staticmethod
+    def _component_hypothesis(row: sqlite3.Row) -> ComponentHypothesis:
+        return ComponentHypothesis(
+            id=row["id"],
+            session_id=row["session_id"],
+            subject_id=row["subject_id"],
+            title=row["title"],
+            hypothesis=row["hypothesis"],
+            component_type=row["component_type"],
+            source=row["source"],
+            evidence_refs=tuple(json.loads(row["evidence_refs_json"])),
+            expected_improvement=row["expected_improvement"],
+            parameter_space=json.loads(row["parameter_space_json"]),
+            suggested_trials=int(row["suggested_trials"]),
+            failure_conditions=tuple(
+                json.loads(row["failure_conditions_json"])
+            ),
+            evidence_level=row["evidence_level"],
+            contamination_status=row["contamination_status"],
+            status=row["status"],
+            created_at=row["created_at"],
         )
 
     @staticmethod

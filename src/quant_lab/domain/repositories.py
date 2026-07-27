@@ -22,7 +22,10 @@ from .models import (
     Trial,
     ComponentCandidate,
     ComponentEvidence,
+    ComponentHypothesis,
     RegimeValidation,
+    ResearchAuthorization,
+    ResearchAuthorizationStage,
 )
 
 
@@ -40,6 +43,36 @@ class ProductRepository(Protocol):
     def create_research_budget(self, budget: ResearchBudget) -> ResearchBudget: ...
 
     def get_research_budget(self, session_id: str) -> ResearchBudget: ...
+
+    def create_research_authorization(
+        self, authorization: ResearchAuthorization
+    ) -> ResearchAuthorization: ...
+
+    def get_research_authorization(
+        self, authorization_id: str
+    ) -> ResearchAuthorization: ...
+
+    def list_research_authorizations(
+        self, *, session_id: str | None = None, subject_id: str | None = None
+    ) -> Sequence[ResearchAuthorization]: ...
+
+    def update_research_authorization_usage(
+        self,
+        authorization_id: str,
+        *,
+        status: str,
+        used_cost_usdt: float,
+        used_time_minutes: float,
+        used_trials: int,
+    ) -> ResearchAuthorization: ...
+
+    def create_research_authorization_stage(
+        self, stage: ResearchAuthorizationStage
+    ) -> ResearchAuthorizationStage: ...
+
+    def list_research_authorization_stages(
+        self, authorization_id: str
+    ) -> Sequence[ResearchAuthorizationStage]: ...
 
     def reserve_hypothesis(self, session_id: str) -> ResearchBudget: ...
 
@@ -232,6 +265,14 @@ class ProductRepository(Protocol):
     ) -> ComponentCandidate: ...
 
     def list_component_candidates(self) -> Sequence[ComponentCandidate]: ...
+
+    def create_component_hypothesis(
+        self, hypothesis: ComponentHypothesis
+    ) -> ComponentHypothesis: ...
+
+    def list_component_hypotheses(
+        self, *, subject_id: str | None = None
+    ) -> Sequence[ComponentHypothesis]: ...
 
     def create_regime_validation(
         self, validation: RegimeValidation

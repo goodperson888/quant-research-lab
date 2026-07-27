@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import json
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,10 @@ from quant_lab.application.pipeline import (
     PipelineApplicationService,
     PipelineProfileCatalog,
     profile_as_dict,
+)
+from quant_lab.application.research_authorization import (
+    ResearchAuthorizationPolicyReader,
+    ResearchAuthorizationService,
 )
 from quant_lab.domain.errors import (
     ApprovalRequiredError,
@@ -47,6 +52,7 @@ from quant_lab.infrastructure.policy_readers import (
 )
 from quant_lab.application.storage import StorageReporter
 from quant_lab.infrastructure.sqlite_product_repository import SQLiteProductRepository
+from quant_lab.infrastructure.artifact_store import LocalArtifactStore
 from quant_lab.paths import app_database_path, project_root
 
 from .schemas import (
@@ -54,10 +60,13 @@ from .schemas import (
     ComponentCandidateResponse,
     ComponentEvidenceResponse,
     ComponentTriageResponse,
+    ComponentHypothesisResponse,
     ComponentAggregationRequest,
     CreateComponentCandidateRequest,
     CreateRegimeValidationRequest,
     CreateRegimeValidationJobRequest,
+    CreateResearchAuthorizationRequest,
+    CreateResearchDiagnosticJobRequest,
     CreateCorrectnessDiagnosticJobRequest,
     CreateStrategyOutcomeRequest,
     CreateIntakeRequest,
@@ -77,6 +86,8 @@ from .schemas import (
     PipelineProfileResponse,
     RegimeValidationResponse,
     ResearchHandoffResponse,
+    ResearchAuthorizationResponse,
+    ResearchAuthorizationStageResponse,
     ImprovementDirectionResponse,
     ProposalTransitionRequest,
     ProposalBudgetRequest,
@@ -125,11 +136,14 @@ def create_app(
     pipeline_service = PipelineApplicationService(
         repository, PipelineProfileCatalog(resolved_root)
     )
+    authorization_service = ResearchAuthorizationService(repository)
+    authorization_policy_reader = ResearchAuthorizationPolicyReader(resolved_root)
     provider = UnconfiguredLLMProvider()
     project_reader = ProjectStatusReader(resolved_root)
     agent_manifest_reader = AgentManifestReader(resolved_root)
     data_reader = DataSummaryReader(resolved_root)
     storage_reporter = StorageReporter(resolved_root)
+    artifact_store = LocalArtifactStore(resolved_root)
     versioning_reader = VersioningPolicyReader(resolved_root)
     engine_registry = BacktestEngineRegistry(
         (
@@ -156,6 +170,7 @@ def create_app(
     application.state.repository = repository
     application.state.research_service = service
     application.state.pipeline_service = pipeline_service
+    application.state.research_authorization_service = authorization_service
     application.state.guided_research_service = guided_service
     application.state.llm_provider = provider
 
@@ -521,6 +536,56 @@ def create_app(
         return service.get_latest_agent_run_handoff(agent_run_id)
 
     @application.get(
+        "/api/research-authorizations/template",
+        tags=["research-pipeline"],
+    )
+    def research_authorization_template() -> dict[str, Any]:
+        return asdict(authorization_policy_reader.read())
+
+    @application.get(
+        "/api/research-authorizations",
+        response_model=list[ResearchAuthorizationResponse],
+        tags=["research-pipeline"],
+    )
+    def research_authorizations(
+        session_id: str | None = Query(default=None),
+        subject_id: str | None = Query(default=None),
+    ) -> Any:
+        return authorization_service.list(
+            session_id=session_id, subject_id=subject_id
+        )
+
+    @application.post(
+        "/api/research-authorizations",
+        response_model=ResearchAuthorizationResponse,
+        status_code=status.HTTP_201_CREATED,
+        tags=["research-pipeline"],
+    )
+    def create_research_authorization(
+        body: CreateResearchAuthorizationRequest,
+    ) -> Any:
+        values = body.model_dump()
+        values["allowed_stages"] = tuple(values["allowed_stages"])
+        values["stop_conditions"] = tuple(values["stop_conditions"])
+        return authorization_service.create(**values)
+
+    @application.get(
+        "/api/research-authorizations/{authorization_id}",
+        response_model=ResearchAuthorizationResponse,
+        tags=["research-pipeline"],
+    )
+    def research_authorization(authorization_id: str) -> Any:
+        return authorization_service.get(authorization_id)
+
+    @application.get(
+        "/api/research-authorizations/{authorization_id}/stages",
+        response_model=list[ResearchAuthorizationStageResponse],
+        tags=["research-pipeline"],
+    )
+    def research_authorization_stages(authorization_id: str) -> Any:
+        return authorization_service.stages(authorization_id)
+
+    @application.get(
         "/api/pipeline-profiles",
         response_model=list[PipelineProfileResponse],
         tags=["research-pipeline"],
@@ -643,6 +708,16 @@ def create_app(
         }
 
     @application.get(
+        "/api/component-hypotheses",
+        response_model=list[ComponentHypothesisResponse],
+        tags=["research-components"],
+    )
+    def component_hypotheses(
+        subject_id: str | None = Query(default=None),
+    ) -> Any:
+        return repository.list_component_hypotheses(subject_id=subject_id)
+
+    @application.get(
         "/api/regime-validations",
         response_model=list[RegimeValidationResponse],
         tags=["research-regimes"],
@@ -671,6 +746,84 @@ def create_app(
         payload["ex_ante_observable"] = True
         payload["locked_test_used"] = False
         return service.create_job(job_type="regime_validation", payload=payload)
+
+    @application.post(
+        "/api/research-diagnostics/jobs",
+        response_model=JobResponse,
+        status_code=status.HTTP_201_CREATED,
+        tags=["research-pipeline"],
+    )
+    def create_research_diagnostic_job(
+        body: CreateResearchDiagnosticJobRequest,
+    ) -> Any:
+        payload = body.model_dump(exclude_none=True)
+        payload.update(
+            {
+                "intent": "post_viability_failure_diagnostics",
+                "locked_test_used": False,
+                "rerun_strategy": False,
+                "formal_regime_validation": False,
+            }
+        )
+        return service.create_job(job_type="research_diagnostic", payload=payload)
+
+    @application.get("/api/run-bundles", tags=["reports"])
+    def run_bundles(subject_id: str | None = Query(default=None)) -> list[dict[str, Any]]:
+        jobs = {item.id: item for item in repository.list_jobs()}
+        bundles: list[dict[str, Any]] = []
+        for report in repository.list_reports():
+            job = jobs.get(report.job_id)
+            if job is None:
+                continue
+            report_subject = (
+                job.payload.get("subject_id")
+                or job.payload.get("strategy_version_id")
+                or job.payload.get("candidate_version_id")
+            )
+            if subject_id is not None and report_subject != subject_id:
+                continue
+            bundles.append(
+                {
+                    "bundle_id": report.id,
+                    "job_id": report.job_id,
+                    "subject_id": report_subject,
+                    "job_type": job.job_type,
+                    "status": job.status,
+                    "report_type": report.report_type,
+                    "report_artifact_key": report.artifact_key,
+                    "summary": report.summary,
+                    "retention": {
+                        "manifest": "authoritative",
+                        "key_metrics": "authoritative",
+                        "failure_reason": "authoritative",
+                        "trades": "retain_when_required_for_attribution",
+                        "signals": "archiveable_after_attribution",
+                        "equity": "retain_for_baseline_or_key_candidate",
+                        "charts_and_detailed_logs": "rebuildable_or_archiveable",
+                    },
+                    "created_at": report.created_at,
+                }
+            )
+        return bundles
+
+    @application.get("/api/research-diagnostics/latest", tags=["reports"])
+    def latest_research_diagnostic(subject_id: str = Query(min_length=1)) -> dict[str, Any]:
+        jobs = {item.id: item for item in repository.list_jobs()}
+        report = next(
+            (
+                item
+                for item in repository.list_reports()
+                if item.report_type == "post_viability_failure_diagnostics"
+                and jobs.get(item.job_id) is not None
+                and jobs[item.job_id].payload.get("subject_id") == subject_id
+            ),
+            None,
+        )
+        if report is None:
+            raise NotFoundError(
+                f"research diagnostic report not found for subject: {subject_id}"
+            )
+        return json.loads(artifact_store.get(report.artifact_key))
 
     @application.post(
         "/api/correctness-diagnostics/jobs",

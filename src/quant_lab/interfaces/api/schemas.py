@@ -127,6 +127,63 @@ class ResearchHandoffResponse(StrictModel):
     created_at: str
 
 
+class CreateResearchAuthorizationRequest(StrictModel):
+    subject_id: str = Field(min_length=1)
+    session_id: str = Field(min_length=1)
+    allowed_stages: list[
+        Literal[
+            "correctness",
+            "smoke",
+            "fast_screen",
+            "viability",
+            "loss_attribution",
+            "regime_diagnostic",
+            "component_hypothesis_generation",
+        ]
+    ]
+    auto_continue: bool = True
+    max_cost_usdt: float = Field(default=0.0, ge=0)
+    max_time_minutes: int = Field(default=45, gt=0, le=240)
+    max_trials: int = Field(default=0, ge=0, le=200)
+    locked_test_allowed: Literal[False] = False
+    stop_conditions: list[str] = Field(min_length=1)
+    expires_at: str = Field(min_length=1)
+    confirmed_by_user: bool
+
+
+class ResearchAuthorizationResponse(StrictModel):
+    id: str
+    subject_id: str
+    session_id: str
+    allowed_stages: list[str]
+    auto_continue: bool
+    max_cost_usdt: float
+    max_time_minutes: int
+    max_trials: int
+    locked_test_allowed: bool
+    stop_conditions: list[str]
+    expires_at: str
+    approved_by: str
+    status: str
+    created_at: str
+    used_cost_usdt: float
+    used_time_minutes: float
+    used_trials: int
+
+
+class ResearchAuthorizationStageResponse(StrictModel):
+    id: str
+    authorization_id: str
+    stage: str
+    status: str
+    evidence_refs: list[str]
+    reason: str
+    elapsed_minutes: float
+    cost_usdt: float
+    trials_used: int
+    created_at: str
+
+
 class ParameterSpaceRequest(StrictModel):
     name: str = Field(min_length=1, max_length=120)
     kind: Literal["integer", "float", "categorical"]
@@ -312,6 +369,25 @@ class ComponentTriageResponse(StrictModel):
     automatic_validation: Literal[False]
 
 
+class ComponentHypothesisResponse(StrictModel):
+    id: str
+    session_id: str
+    subject_id: str
+    title: str
+    hypothesis: str
+    component_type: str
+    source: str
+    evidence_refs: list[str]
+    expected_improvement: str
+    parameter_space: dict[str, Any]
+    suggested_trials: int
+    failure_conditions: list[str]
+    evidence_level: str
+    contamination_status: str
+    status: str
+    created_at: str
+
+
 class CreateRegimeValidationJobRequest(StrictModel):
     mode: Literal["regime_diagnostic", "regime_validation"]
     subject_type: Literal["strategy_version", "component_candidate"]
@@ -322,6 +398,20 @@ class CreateRegimeValidationJobRequest(StrictModel):
     trades_artifact_key: str = Field(min_length=1)
     agent_run_id: str | None = None
     viability_gate_result_id: str | None = None
+
+
+class CreateResearchDiagnosticJobRequest(StrictModel):
+    authorization_id: str = Field(min_length=1)
+    session_id: str = Field(min_length=1)
+    subject_id: str = Field(min_length=1)
+    fast_screen_manifest_artifact_key: str = Field(min_length=1)
+    metrics_artifact_key: str = Field(min_length=1)
+    trades_artifact_key: str = Field(min_length=1)
+    signals_artifact_key: str = Field(min_length=1)
+    data_manifest_artifact_key: str = Field(min_length=1)
+    detector_config_artifact_key: str = Field(min_length=1)
+    agent_run_id: str | None = None
+    retry_of_job_id: str | None = None
 
 
 class CreateRegimeValidationRequest(StrictModel):

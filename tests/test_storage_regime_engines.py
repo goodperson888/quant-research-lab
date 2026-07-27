@@ -10,7 +10,11 @@ from fastapi.testclient import TestClient
 
 from quant_lab.application.backtest_engines import BacktestEngineRegistry
 from quant_lab.application.pipeline import PipelineApplicationService, PipelineProfileCatalog
-from quant_lab.application.regime import ExAnteRegimeDetector, RegimeDetectorCatalog
+from quant_lab.application.regime import (
+    ExAnteRegimeDetector,
+    RegimeDetectorCatalog,
+    summarize_trades_by_regime,
+)
 from quant_lab.application.services import ResearchApplicationService
 from quant_lab.application.storage import StoragePolicyCatalog, StorageReporter
 from quant_lab.domain.errors import GatePolicyError, InvalidJobError
@@ -87,6 +91,34 @@ def test_regime_detector_is_delayed_and_does_not_rewrite_past_labels() -> None:
         original["regime"], rerun.iloc[: len(original)]["regime"], check_names=False
     )
     assert original["ex_ante_observable"].all()
+
+
+def test_regime_summary_normalizes_datetime_precision() -> None:
+    trades = pd.DataFrame(
+        {
+            "entry_time": pd.Series(
+                [pd.Timestamp("2026-01-01T02:00:00Z")],
+                dtype="datetime64[ms, UTC]",
+            ),
+            "net_return": [0.01],
+        }
+    )
+    labels = pd.DataFrame(
+        {
+            "effective_from": pd.Series(
+                [pd.Timestamp("2026-01-01T01:00:00Z")],
+                dtype="datetime64[us, UTC]",
+            ),
+            "regime": ["trend_up__low_vol"],
+        }
+    )
+    metrics, groups = summarize_trades_by_regime(
+        trades,
+        labels,
+        minimum_trades=1,
+    )
+    assert metrics["trend_up__low_vol"]["trade_count"] == 1.0
+    assert groups["suitable"] == ("trend_up__low_vol",)
 
 
 def test_component_triage_requires_explicit_ablation_lineage(tmp_path: Path) -> None:

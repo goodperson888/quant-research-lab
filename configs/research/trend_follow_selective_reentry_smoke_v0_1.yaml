@@ -1,0 +1,125 @@
+schema_version: 1
+plan_id: trend_follow_selective_reentry_smoke_v0_1
+status: waiting_user_approval
+
+intent:
+  - baseline_backtest
+  - pipeline_evaluation
+
+session_id: session_e13f9aa36145450896ecca47e7cdc723
+baseline_version_id: version_070593dcd9034dfe8f31b8429d605153
+approval_subject_id: version_070593dcd9034dfe8f31b8429d605153
+baseline_label: v0.1
+baseline_artifact_key: strategies/research/trend-follow-selective-reentry-x50-20260724/baseline-v0.yaml
+baseline_immutable: true
+
+pipeline:
+  profile_id: smoke
+  requested_stages:
+    - correctness
+    - smoke_backtest
+  fast_screen_requested: false
+  reason: >-
+    The frozen Baseline authorizes correctness review and smoke only. Fast-screen
+    performance evidence remains blocked until the executable implementation is
+    reviewed and the high-leverage model gaps are handled explicitly.
+
+market_scope:
+  strategy_target_profile: configs/market_profiles/crypto_perpetual.okx.eth.yaml
+  effective_smoke_profile: configs/market_profiles/crypto_perpetual.binance.eth.yaml
+  validation_transfer_to_okx: false
+  symbol: ETH/USDT:USDT
+  timezone: UTC
+  data_manifest: data/manifests/binance_ethusdt_perpetual_20250720_20260720_v2.json
+  data_version: binance-vision-ethusdt-perpetual-20250720_20260720-v1
+
+time_splits:
+  warmup:
+    start_utc_inclusive: "2025-07-20T00:00:00Z"
+    end_utc_exclusive: "2025-07-27T00:00:00Z"
+  smoke:
+    start_utc_inclusive: "2025-07-27T00:00:00Z"
+    end_utc_exclusive: "2025-08-10T00:00:00Z"
+  future_train:
+    start_utc_inclusive: "2025-07-20T00:00:00Z"
+    end_utc_exclusive: "2026-03-20T00:00:00Z"
+  future_validation:
+    start_utc_inclusive: "2026-03-20T00:00:00Z"
+    end_utc_exclusive: "2026-06-20T00:00:00Z"
+  locked_test:
+    start_utc_inclusive: "2026-06-20T00:00:00Z"
+    end_utc_exclusive: "2026-07-20T00:00:00Z"
+    use_in_this_plan: false
+    status: reserved_uninspected
+    known_data_gap_note: >-
+      Funding is unavailable after 2026-06-30 16:00 UTC and mark/index have a
+      2026-06-29 gap; locked-test use remains forbidden until an explicit policy
+      or additional official data resolves these gaps.
+
+cost_model:
+  execution: taker
+  fee_per_side: 0.0005
+  slippage_bps_per_side: 2.0
+  funding_required: true
+  zero_funding_fallback_allowed: false
+  missing_funding_policy_for_smoke: adverse_p99_abs_observed
+
+leverage_boundary:
+  requested_exchange_leverage: 50
+  margin_mode: isolated_only
+  max_notional_fraction_of_equity: 0.50
+  max_estimated_account_risk_fraction: 0.003
+  performance_or_safety_conclusion_allowed: false
+  blocked_until:
+    - venue_leverage_tiers_verified
+    - mark_price_liquidation_model_implemented
+    - liquidation_buffer_and_gap_policy_verified
+    - precision_and_minimum_notional_enforced
+  smoke_claim: signal_and_execution_semantics_only
+
+correctness_checks:
+  - closed_1h_pivots_only_and_right_bar_confirmation_delay
+  - no_future_1h_or_15m_values_in_5m_execution
+  - 15m_pullback_length_and_confirmation_rules
+  - three_complete_5m_bar_trigger_expiry
+  - stop_distance_eligibility_and_stop_first_same_bar_policy
+  - partial_take_profit_and_remaining_position_accounting
+  - time_stop_and_max_holding_time
+  - reentry_cooldown_and_one_reentry_per_1h_trend_leg
+  - daily_entry_loss_and_consecutive_loss_controls
+  - taker_fee_slippage_and_nonzero_funding_treatment
+
+implementation_boundary:
+  strategy_evaluator_status: not_implemented
+  implementation_must_match_frozen_rules: true
+  baseline_changes_forbidden: true
+  pine_reconciliation_required_now: false
+  freqtrade_correctness_optional: true
+  native_engine_required: true
+
+approval:
+  required: true
+  exact_subject_required: true
+  decision: pending
+  requested_action: >-
+    Implement the immutable v0.1 rules, run correctness tests, then create and
+    execute one Native smoke Job over the declared smoke slice. Do not run
+    fast-screen, parameter search, locked test, full stress, dry-run or live trade.
+
+required_outputs:
+  - executable_strategy_adapter_or_explicit_failure_reason
+  - correctness_test_results
+  - experiment_run_manifest
+  - job_logs
+  - smoke_trades_or_failure_reason
+  - smoke_report
+  - audit_events
+  - research_handoff
+
+stop_rules:
+  - stop_if_rule_semantics_cannot_be_implemented_without_changing_baseline
+  - stop_if_multitimeframe_alignment_uses_unclosed_data
+  - stop_if_funding_is_silently_zero
+  - stop_if_smoke_requires_locked_test_data
+  - stop_after_smoke_without_automatic_fast_screen
+  - never_start_dry_run_or_live_trade

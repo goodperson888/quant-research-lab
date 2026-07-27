@@ -36,6 +36,10 @@ ALLOWED_RESEARCH_TOOLS = frozenset(
         "create_component_candidate",
         "record_regime_validation",
         "list_component_evidence",
+        "create_research_authorization",
+        "run_authorized_pipeline",
+        "generate_failure_diagnostics",
+        "list_component_hypotheses",
     }
 )
 
@@ -108,3 +112,19 @@ class ResearchToolGateway(Protocol):
     def record_regime_validation(self, payload: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
     def list_component_evidence(self, payload: Mapping[str, Any]) -> list[Mapping[str, Any]]: ...
+
+    def create_research_authorization(
+        self, payload: Mapping[str, Any]
+    ) -> Mapping[str, Any]: ...
+
+    def run_authorized_pipeline(
+        self, authorization_id: str
+    ) -> Mapping[str, Any]: ...
+
+    def generate_failure_diagnostics(
+        self, payload: Mapping[str, Any]
+    ) -> Mapping[str, Any]: ...
+
+    def list_component_hypotheses(
+        self, subject_id: str
+    ) -> list[Mapping[str, Any]]: ...

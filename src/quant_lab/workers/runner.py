@@ -7,7 +7,11 @@ import sys
 import time
 from typing import Any, Callable, Mapping
 
-from quant_lab.application.services import ResearchApplicationService
+from quant_lab.application.services import (
+    ResearchApplicationService,
+    strategy_is_rejected,
+)
+from quant_lab.application.research_authorization import ResearchAuthorizationService
 from quant_lab.domain.errors import JobCancelledError
 from quant_lab.domain.models import ALLOWED_JOB_TYPES
 from quant_lab.domain.models import AuditEvent, Job
@@ -44,6 +48,7 @@ class LocalWorker:
     ) -> None:
         self.repository = repository
         self.service = ResearchApplicationService(repository)
+        self.authorizations = ResearchAuthorizationService(repository)
         self.handlers = dict(handlers or {})
         self.resource_policy = resource_policy or DEFAULT_WORKER_RESOURCE_POLICY
         unknown = set(self.handlers) - ALLOWED_JOB_TYPES
@@ -118,6 +123,20 @@ class LocalWorker:
             # if an optional handoff cannot be linked or persisted.
             return
 
+    @staticmethod
+    def _subject_id_for_job(job: Job) -> str:
+        for key in (
+            "subject_id",
+            "strategy_version_id",
+            "candidate_version_id",
+            "baseline_version_id",
+            "experiment_plan_id",
+        ):
+            value = job.payload.get(key)
+            if isinstance(value, str):
+                return value
+        return job.id
+
     def run(self, job_id: str) -> Mapping[str, Any]:
         job = self.repository.get_job(job_id)
         if job.status != "queued":
@@ -152,12 +171,80 @@ class LocalWorker:
                 or gate.market_profile != job.payload.get("market_profile")
             ):
                 raise ValueError("formal regime validation is blocked until viability passes")
+        if job.job_type == "backtest" and job.payload.get("intent") == "candidate_smoke":
+            version_id = job.payload.get("strategy_version_id")
+            gate_id = job.payload.get("correctness_gate_result_id")
+            if (
+                job.payload.get("subject_id") != version_id
+                or job.payload.get("confirmed_by_user") is not True
+                or job.payload.get("pipeline_profile") != "smoke"
+                or job.payload.get("locked_test_used") is not False
+                or job.payload.get("run_fast_screen") is not False
+                or not isinstance(version_id, str)
+                or not isinstance(gate_id, str)
+            ):
+                raise ValueError("candidate smoke Worker gate is incomplete")
+            version = self.repository.get_strategy_version(version_id)
+            gate = self.repository.get_gate_evaluation(gate_id)
+            if (
+                version.status != "candidate"
+                or not version.immutable
+                or gate.subject_id != version_id
+                or gate.gate_name != "correctness"
+                or gate.status != "passed"
+                or gate.profile_id != "smoke"
+            ):
+                raise ValueError("candidate smoke Worker gate rejected the Job")
+        if job.job_type == "backtest" and job.payload.get("intent") == "candidate_fast_screen":
+            version_id = job.payload.get("strategy_version_id")
+            gate_id = job.payload.get("correctness_gate_result_id")
+            if (
+                job.payload.get("subject_id") != version_id
+                or job.payload.get("confirmed_by_user") is not True
+                or job.payload.get("pipeline_profile") != "fast_screen"
+                or job.payload.get("locked_test_used") is not False
+                or job.payload.get("run_viability") is not False
+                or not isinstance(version_id, str)
+                or not isinstance(gate_id, str)
+            ):
+                raise ValueError("candidate fast-screen Worker gate is incomplete")
+            version = self.repository.get_strategy_version(version_id)
+            gate = self.repository.get_gate_evaluation(gate_id)
+            if (
+                version.status != "candidate"
+                or not version.immutable
+                or gate.subject_id != version_id
+                or gate.gate_name != "correctness"
+                or gate.status != "passed"
+            ):
+                raise ValueError("candidate fast-screen Worker gate rejected the Job")
+        if job.job_type == "research_diagnostic":
+            subject_id = job.payload.get("subject_id")
+            authorization_id = job.payload.get("authorization_id")
+            if (
+                not isinstance(subject_id, str)
+                or not isinstance(authorization_id, str)
+                or job.payload.get("locked_test_used") is not False
+            ):
+                raise ValueError("research diagnostic Worker gate is incomplete")
+            if not strategy_is_rejected(self.repository, subject_id):
+                raise ValueError("research diagnostics cannot alter a non-rejected strategy")
+            self.authorizations.assert_scope_covers(
+                authorization_id,
+                subject_id=subject_id,
+                stages=(
+                    "loss_attribution",
+                    "regime_diagnostic",
+                    "component_hypothesis_generation",
+                ),
+            )
 
         agent_run_id = job.payload.get("agent_run_id")
         tool_name = {
             "parameter_search": "run_parameter_search",
             "regime_validation": "record_regime_validation",
             "correctness_diagnostic": "run_correctness_diagnostic",
+            "research_diagnostic": "generate_report",
             "report": "generate_report",
         }.get(job.job_type, "run_backtest")
         now = _utc_now()
@@ -231,7 +318,7 @@ class LocalWorker:
             self._record_job_handoff(
                 job,
                 agent_run_id=agent_run_id if isinstance(agent_run_id, str) else None,
-                subject_id=job.id,
+                subject_id=self._subject_id_for_job(job),
                 status="completed_scope",
                 stop_reason_code="job_cancelled_at_safe_boundary",
                 stop_reason_text=str(exc),
@@ -299,7 +386,7 @@ class LocalWorker:
             self._record_job_handoff(
                 job,
                 agent_run_id=agent_run_id if isinstance(agent_run_id, str) else None,
-                subject_id=job.id,
+                subject_id=self._subject_id_for_job(job),
                 status="blocked_dependency" if dependency_blocked else "failed",
                 stop_reason_code=(
                     "optional_freqtrade_unavailable"
@@ -380,20 +467,61 @@ class LocalWorker:
                 created_at=completed_at,
             )
         )
+        if job.job_type == "research_diagnostic":
+            hypothesis_ids = tuple(result.get("component_hypothesis_ids", ()))
+            next_action = (
+                "审阅诊断报告与 ComponentHypothesis "
+                + ", ".join(str(item) for item in hypothesis_ids)
+                + "；若要继续，另行创建并批准一次有 Trial/时间预算的 Diagnostic Batch。"
+            )
+            handoff_values = {
+                "stop_reason_code": "post_viability_diagnostics_scope_completed",
+                "stop_reason_text": (
+                    "已复用保存的 fast_screen trades/signals/metrics 完成失败归因、"
+                    "ex-ante Regime screening 和确定性组件假设；授权不包含组件 Trial。"
+                ),
+                "completed_actions": (
+                    "完成 artifact-only loss attribution，未重跑策略",
+                    "完成 closed-1h ex-ante regime_diagnostic，仅形成 screening 证据",
+                    f"创建 {len(hypothesis_ids)} 个 deterministic ComponentHypothesis 草案",
+                    "保存 Run Bundle、Report、资源指标和 append-only audit",
+                ),
+                "not_started_actions": (
+                    "组件消融 Batch Trials 或参数搜索",
+                    "Walk-forward/multi-period、正式 Regime validation",
+                    "locked test、full stress、dry-run、production 或 live trade",
+                ),
+                "next_recommended_action": next_action,
+            }
+        else:
+            handoff_values = {
+                "stop_reason_code": "worker_job_scope_completed",
+                "stop_reason_text": (
+                    f"Job {job.id} 已完成已批准范围，未自动启动后续阶段。"
+                ),
+                "completed_actions": (
+                    f"完成 {job.job_type} Job",
+                    "保存结果、资源指标与审计事件",
+                ),
+                "not_started_actions": (
+                    "自动接受策略修改",
+                    "自动晋升",
+                    "live trade",
+                ),
+                "next_recommended_action": (
+                    "审阅结果和 Gate 证据，再决定是否批准下一阶段。"
+                ),
+            }
         self._record_job_handoff(
             job,
             agent_run_id=agent_run_id if isinstance(agent_run_id, str) else None,
-            subject_id=job.id,
+            subject_id=self._subject_id_for_job(job),
             status="completed_scope",
-            stop_reason_code="worker_job_scope_completed",
-            stop_reason_text=f"Job {job.id} 已完成已批准范围，未自动启动后续阶段。",
-            completed_actions=(f"完成 {job.job_type} Job", "保存结果、资源指标与审计事件"),
-            not_started_actions=("自动接受策略修改", "自动晋升", "live trade"),
             user_action_required=False,
             required_user_action=None,
-            next_recommended_action="审阅结果和 Gate 证据，再决定是否批准下一阶段。",
             safe_to_continue=True,
             actor_type="system",
+            **handoff_values,
         )
         return result
 

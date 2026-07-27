@@ -1,0 +1,59 @@
+schema_version: 1
+session_id: session_e13f9aa36145450896ecca47e7cdc723
+baseline_version_id: version_070593dcd9034dfe8f31b8429d605153
+candidate_version_id: version_12e1307c9c0e43268f6fdbdda5b9bd20
+proposal_id: proposal_0365aa2b0c154490a899a6efdf435564
+strategy_artifact_key: strategies/research/trend-follow-selective-reentry-x50-20260724/candidate-v1.py
+market_profile: crypto_perpetual.binance.eth
+data_manifest_key: data/manifests/binance_ethusdt_perpetual_20250720_20260720_v2.json
+smoke_manifest_artifact_key: experiments/runs/20260727T102803Z-candidate-smoke-8136eee0/manifest.json
+
+time_splits:
+  train:
+    warmup_start_utc_inclusive: "2025-07-20T00:00:00Z"
+    start_utc_inclusive: "2025-07-27T00:00:00Z"
+    end_utc_exclusive: "2026-03-20T00:00:00Z"
+  validation:
+    warmup_start_utc_inclusive: "2026-03-13T00:00:00Z"
+    start_utc_inclusive: "2026-03-20T00:00:00Z"
+    end_utc_exclusive: "2026-06-20T00:00:00Z"
+  locked_test:
+    start_utc_inclusive: "2026-06-20T00:00:00Z"
+    end_utc_exclusive: "2026-07-20T00:00:00Z"
+    use_in_this_job: false
+    status: reserved_uninspected
+
+pipeline:
+  profile_id: fast_screen
+  viability_started: false
+  locked_test_used: false
+
+cost_model:
+  execution: taker
+  fee_per_side: 0.0005
+  slippage_bps_per_side: 2.0
+
+funding:
+  required: true
+  missing_policy: adverse_p99_abs_observed
+  zero_funding_fallback_allowed: false
+
+execution:
+  initial_equity: 10000.0
+  requested_exchange_leverage: 50
+  margin_mode: isolated
+  max_notional_fraction_of_equity: 0.50
+  max_estimated_account_risk_fraction: 0.003
+  tick_size: 0.01
+  quantity_step: 0.001
+  minimum_notional: 20.0
+  liquidation_model_complete: false
+
+random_seed: 20260727
+
+limitations:
+  - "这是 Native train/validation fast_screen，不是 viability、长期盈利或生产晋升结论。"
+  - "目标主市场是 OKX，但本轮只使用 Binance 官方年度数据作参考；结论不得传播为 OKX validated。"
+  - "50x 只作为逐仓保证金设置记录；历史杠杆阶梯、维持保证金和标记价格强平路径未完整建模。"
+  - "locked test [2026-06-20T00:00:00Z, 2026-07-20T00:00:00Z) 保留且不进入本 Job。"
+  - "不运行 viability、参数搜索、stress、Regime、Pine 对账、dry-run 或 live trade。"

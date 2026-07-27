@@ -1,0 +1,120 @@
+baseline_version_id: version_070593dcd9034dfe8f31b8429d605153
+subject_id: version_070593dcd9034dfe8f31b8429d605153
+hypothesis: >-
+  将七项阻塞歧义固定为可执行且只使用已收盘数据的规则后，可以消除
+  correctness gate 的 specification_underdefined 失败，同时保持冻结
+  Baseline v0.1 的经济意图、成本边界和高杠杆安全限制不变。
+rule_diff:
+  proposal_kind: correctness_clarification
+  baseline_mutation: forbidden
+  clarification_version: v0.1-c1
+  pullback_bar_definition:
+    long: >-
+      在有效的 1h 多头 trend leg 内，15m 回踩是紧邻确认K线之前连续
+      2 至 5 根 close < open 的已收盘K线；doji 或 close >= open
+      终止该连续序列。
+    short: >-
+      在有效的 1h 空头 trend leg 内，15m 回踩是紧邻确认K线之前连续
+      2 至 5 根 close > open 的已收盘K线；doji 或 close <= open
+      终止该连续序列。
+  pullback_swing:
+    long: "取该次完整 15m 回踩序列所有K线 low 的最小值。"
+    short: "取该次完整 15m 回踩序列所有K线 high 的最大值。"
+    repainting: "回踩序列和 swing 只在确认K线收盘后确定，不得事后扩展。"
+  opposite_5m_structure:
+    pivot_left_bars: 2
+    pivot_right_bars: 2
+    known_time: "仅在右侧第 2 根 5m K线收盘后确认 pivot。"
+    long_exit: >-
+      最新两个已确认 5m swing highs 依次降低，且最新两个已确认
+      swing lows 依次降低。
+    short_exit: >-
+      最新两个已确认 5m swing highs 依次升高，且最新两个已确认
+      swing lows 依次升高。
+  trend_leg_identity:
+    start: >-
+      1h 结构状态首次从 neutral 或反向状态切换为 long/short 时开始，
+      结构判定仍使用 left=2/right=2 的已确认 swing pivots。
+    end: >-
+      后续已确认 1h swing 使结构转为 neutral 或反向时结束；同方向
+      结构持续期间不重置 trend leg。
+    reentry_counter: "只在新的 1h trend leg 开始时重置。"
+  same_bar_exit_priority:
+    - "保护止损或已确认的结构失效"
+    - "1.0R 部分止盈"
+    - "1.8R 剩余仓位止盈"
+    - "已确认的 5m 反向结构、时间止损或最大持仓时间退出"
+    - "若同一优先级仍冲突，采用对策略更不利的成交价格"
+  daily_loss_equity_basis:
+    timezone: UTC
+    basis: "UTC 00:00 时的已实现账户权益。"
+    included:
+      - "当日已平仓交易盈亏"
+      - "已扣除的手续费和滑点"
+      - "已发生并计入账户的资金费率"
+    excluded:
+      - "未平仓浮动盈亏"
+    threshold: "固定为日初已实现权益的 0.75%，日内不随权益变化而重算。"
+    action: >-
+      达到阈值后禁止新的 entry/reentry；已有仓位继续按冻结退出规则处理，
+      不因日亏门槛扩大风险或增加杠杆。
+  leverage_boundary:
+    requested_exchange_leverage: 50
+    research_interpretation: >-
+      当前仅作为逐仓保证金设置记录；correctness/smoke 的名义仓位仍受
+      max_notional_fraction_of_equity=0.50 和
+      max_estimated_account_risk_fraction=0.003 限制。
+    claims_forbidden:
+      - "不得据此声称 50x 安全"
+      - "不得据此声称已正确模拟强平"
+      - "不得据此放大收益结论"
+    unresolved_model_gaps:
+      - "OKX 历史杠杆阶梯和维持保证金"
+      - "标记价格触发和强平路径"
+      - "资金费率、精度和最小名义金额的完整历史约束"
+    smoke_scope: "只验证信号、时点、仓位上限和成本记账语义。"
+evidence_refs:
+  - experiments/runs/20260727T085428Z-correctness-v0-1/manifest.json
+  - reports/backtests/20260727T085428Z-correctness-v0-1.md
+parameter_space:
+  - name: correctness_clarification_bundle
+    kind: categorical
+    values:
+      - v0.1-c1
+data_splits:
+  train: "[2025-07-20T00:00:00Z, 2026-03-20T00:00:00Z)"
+  validation: "[2026-03-20T00:00:00Z, 2026-06-20T00:00:00Z)"
+  locked_test: "[2026-06-20T00:00:00Z, 2026-07-20T00:00:00Z) reserved_uninspected"
+cost_model:
+  execution: taker
+  taker_fee_per_side: 0.0005
+  slippage_bps_per_side: 2.0
+  funding_required: true
+  zero_funding_fallback_allowed: false
+  missing_funding_policy_for_smoke: adverse_p99_abs_observed
+objectives:
+  - metric: correctness_checks_passed
+    direction: maximize
+constraints:
+  - metric: blocking_ambiguities_remaining
+    operator: eq
+    value: 0
+  - metric: locked_test_used
+    operator: eq
+    value: 0
+estimated_trials: 1
+estimated_minutes: 15
+failure_conditions:
+  - "任一规则仍需要实现者自行选择未记录的解释。"
+  - "多周期对齐读取未收盘 1h、15m 或未来确认 pivot。"
+  - "资金费率缺失被静默按 0 处理。"
+  - "correctness/smoke 被误述为 50x 强平安全或盈利证据。"
+stopping_conditions:
+  - "只创建并审阅一个 correctness clarification Candidate。"
+  - "不使用 locked test，不进行参数搜索或盈利优化。"
+  - "新版本 correctness 未通过前不得创建 Native smoke Job。"
+  - "smoke 完成后停止，不自动进入 fast_screen。"
+rollback_plan: >-
+  拒绝该 Proposal/Candidate，保留 Baseline v0.1、原 correctness 失败证据和
+  locked test 未查看状态；不覆盖任何既有策略或实验记录。
+source: external_agent

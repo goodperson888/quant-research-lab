@@ -1,0 +1,35 @@
+schema_version: 1
+template_id: guided_research_to_viability_v1
+description: One explicit approval for the bounded, non-locked research path.
+scope:
+  allowed_stages:
+    - correctness
+    - smoke
+    - fast_screen
+    - viability
+    - loss_attribution
+    - regime_diagnostic
+    - component_hypothesis_generation
+  auto_continue: true
+  max_cost_usdt: 0.0
+  max_time_minutes: 45
+  max_trials: 0
+  locked_test_allowed: false
+  expires_after_minutes: 1440
+  stop_conditions:
+    - correctness_failed
+    - smoke_failed
+    - fast_screen_failed
+    - viability_failed_after_optional_cheap_diagnostics
+    - authorization_budget_exhausted
+    - required_dependency_blocked
+    - authorization_expired
+    - safety_boundary_reached
+approval_boundaries_not_covered:
+  - resolve_material_strategy_ambiguity
+  - freeze_baseline
+  - accept_proposal_diff_and_create_candidate
+  - approve_component_or_parameter_batch_budget
+  - locked_test
+  - dry_run
+  - live_trade

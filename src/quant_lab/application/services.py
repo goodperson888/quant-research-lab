@@ -53,6 +53,18 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex}"
 
 
+def strategy_is_rejected(
+    repository: ProductRepository, strategy_version_id: str
+) -> bool:
+    """Use the immutable version state and append-only outcome as rejection facts."""
+    version = repository.get_strategy_version(strategy_version_id)
+    return version.status == "rejected" or any(
+        outcome.strategy_version_id == strategy_version_id
+        and outcome.outcome_type == "rejected"
+        for outcome in repository.list_strategy_outcomes()
+    )
+
+
 def _contains_forbidden_key(value: Any) -> bool:
     if isinstance(value, Mapping):
         for key, child in value.items():
@@ -117,6 +129,23 @@ class ResearchApplicationService:
                 created_at=utc_now(),
             )
         )
+
+    def _authorization_covers(
+        self, *, authorization_id: str, subject_id: str, stages: Sequence[str]
+    ) -> bool:
+        authorization = self.repository.get_research_authorization(authorization_id)
+        if (
+            authorization.subject_id != subject_id
+            or authorization.status != "active"
+            or authorization.locked_test_allowed
+        ):
+            return False
+        expires_at = datetime.fromisoformat(
+            authorization.expires_at.replace("Z", "+00:00")
+        )
+        if expires_at.astimezone(timezone.utc) <= datetime.now(timezone.utc):
+            return False
+        return all(stage in authorization.allowed_stages for stage in stages)
 
     def create_research_session(self, *, title: str) -> ResearchSession:
         now = utc_now()
@@ -348,6 +377,128 @@ class ResearchApplicationService:
             raise InvalidJobError(f"job type must be one of: {allowed}")
         if _contains_forbidden_key(payload):
             raise InvalidJobError("job payload contains a forbidden execution or secret key")
+        if job_type == "backtest" and payload.get("intent") == "candidate_smoke":
+            required = {
+                "session_id",
+                "strategy_version_id",
+                "subject_id",
+                "config_artifact_key",
+                "agent_run_id",
+                "correctness_gate_result_id",
+                "confirmed_by_user",
+                "pipeline_profile",
+                "locked_test_used",
+                "run_fast_screen",
+            }
+            missing = sorted(required - set(payload))
+            if missing:
+                raise InvalidJobError(
+                    "candidate smoke payload missing: " + ", ".join(missing)
+                )
+            subject_id = str(payload["subject_id"])
+            version_id = str(payload["strategy_version_id"])
+            if (
+                payload["confirmed_by_user"] is not True
+                or subject_id != version_id
+            ):
+                raise ApprovalRequiredError(
+                    "candidate smoke requires explicit approval of the exact subject_id"
+                )
+            candidate = self.repository.get_strategy_version(version_id)
+            if candidate.status != "candidate" or not candidate.immutable:
+                raise InvalidJobError(
+                    "candidate smoke requires an immutable Candidate version"
+                )
+            if payload["pipeline_profile"] != "smoke":
+                raise InvalidJobError("candidate smoke requires pipeline_profile=smoke")
+            if payload["locked_test_used"] is not False:
+                raise InvalidJobError("candidate smoke must not use locked-test data")
+            if payload["run_fast_screen"] is not False:
+                raise InvalidJobError("candidate smoke must stop before fast_screen")
+            try:
+                validate_artifact_key(str(payload["config_artifact_key"]))
+            except ValueError as exc:
+                raise InvalidJobError(str(exc)) from exc
+            gate = self.repository.get_gate_evaluation(
+                str(payload["correctness_gate_result_id"])
+            )
+            if (
+                gate.subject_id != version_id
+                or gate.gate_name != "correctness"
+                or gate.status != "passed"
+                or gate.profile_id != "smoke"
+            ):
+                raise ApprovalRequiredError(
+                    "candidate smoke requires the same subject's passed correctness gate"
+                )
+        if job_type == "backtest" and payload.get("intent") == "candidate_fast_screen":
+            required = {
+                "session_id",
+                "strategy_version_id",
+                "subject_id",
+                "config_artifact_key",
+                "agent_run_id",
+                "correctness_gate_result_id",
+                "smoke_manifest_artifact_key",
+                "confirmed_by_user",
+                "pipeline_profile",
+                "locked_test_used",
+                "run_viability",
+            }
+            missing = sorted(required - set(payload))
+            if missing:
+                raise InvalidJobError(
+                    "candidate fast-screen payload missing: " + ", ".join(missing)
+                )
+            subject_id = str(payload["subject_id"])
+            version_id = str(payload["strategy_version_id"])
+            if (
+                payload["confirmed_by_user"] is not True
+                or subject_id != version_id
+            ):
+                raise ApprovalRequiredError(
+                    "fast-screen requires explicit approval of the exact subject_id"
+                )
+            candidate = self.repository.get_strategy_version(version_id)
+            if candidate.status != "candidate" or not candidate.immutable:
+                raise InvalidJobError(
+                    "fast-screen requires an immutable Candidate version"
+                )
+            if payload["pipeline_profile"] != "fast_screen":
+                raise InvalidJobError(
+                    "fast-screen requires pipeline_profile=fast_screen"
+                )
+            if payload["locked_test_used"] is not False:
+                raise InvalidJobError("fast-screen must not use locked-test data")
+            if payload["run_viability"] is not False:
+                raise InvalidJobError("fast-screen must stop before viability")
+            for key in ("config_artifact_key", "smoke_manifest_artifact_key"):
+                try:
+                    validate_artifact_key(str(payload[key]))
+                except ValueError as exc:
+                    raise InvalidJobError(str(exc)) from exc
+            gate = self.repository.get_gate_evaluation(
+                str(payload["correctness_gate_result_id"])
+            )
+            if (
+                gate.subject_id != version_id
+                or gate.gate_name != "correctness"
+                or gate.status != "passed"
+            ):
+                raise ApprovalRequiredError(
+                    "fast-screen requires the same subject's passed correctness gate"
+                )
+            duplicate = [
+                item
+                for item in self.repository.list_jobs()
+                if item.job_type == "backtest"
+                and item.payload.get("intent") == "candidate_fast_screen"
+                and item.payload.get("strategy_version_id") == version_id
+            ]
+            if duplicate:
+                raise ConflictError(
+                    "fast-screen already exists for this Candidate; preserve the prior evidence"
+                )
         if job_type == "parameter_search":
             if payload.get("locked_test_used") is True:
                 raise InvalidJobError("parameter search must not use locked-test data")
@@ -547,6 +698,90 @@ class ResearchApplicationService:
                 ):
                     raise ApprovalRequiredError(
                         "formal regime validation requires the subject's passed viability gate"
+                    )
+        if job_type == "research_diagnostic":
+            required = {
+                "authorization_id",
+                "session_id",
+                "subject_id",
+                "fast_screen_manifest_artifact_key",
+                "metrics_artifact_key",
+                "trades_artifact_key",
+                "signals_artifact_key",
+                "data_manifest_artifact_key",
+                "detector_config_artifact_key",
+            }
+            missing = sorted(required - set(payload))
+            if missing:
+                raise InvalidJobError(
+                    "research diagnostic payload missing: " + ", ".join(missing)
+                )
+            subject_id = str(payload["subject_id"])
+            if not strategy_is_rejected(self.repository, subject_id):
+                raise InvalidJobError(
+                    "post-viability research diagnostics require a rejected strategy"
+                )
+            if (
+                self.repository.get_session_id_for_strategy_version(subject_id)
+                != payload["session_id"]
+            ):
+                raise InvalidJobError("research diagnostic subject/session mismatch")
+            if payload.get("locked_test_used") is not False:
+                raise InvalidJobError("research diagnostics must exclude locked-test data")
+            authorization_id = str(payload["authorization_id"])
+            if not self._authorization_covers(
+                authorization_id=authorization_id,
+                subject_id=subject_id,
+                stages=(
+                    "loss_attribution",
+                    "regime_diagnostic",
+                    "component_hypothesis_generation",
+                ),
+            ):
+                raise ApprovalRequiredError(
+                    "research diagnostics require an active exact-subject authorization"
+                )
+            for name in (
+                "fast_screen_manifest_artifact_key",
+                "metrics_artifact_key",
+                "trades_artifact_key",
+                "signals_artifact_key",
+                "data_manifest_artifact_key",
+                "detector_config_artifact_key",
+            ):
+                try:
+                    validate_artifact_key(str(payload[name]))
+                except ValueError as exc:
+                    raise InvalidJobError(str(exc)) from exc
+            duplicate = [
+                item
+                for item in self.repository.list_jobs()
+                if item.job_type == "research_diagnostic"
+                and item.payload.get("subject_id") == subject_id
+            ]
+            active_or_complete = [
+                item
+                for item in duplicate
+                if item.status in {"queued", "running", "succeeded"}
+            ]
+            if active_or_complete:
+                raise ConflictError(
+                    "research diagnostics already exist for this rejected subject"
+                )
+            retry_of_job_id = payload.get("retry_of_job_id")
+            if duplicate:
+                if not isinstance(retry_of_job_id, str):
+                    raise ConflictError(
+                        "failed research diagnostics require an explicit retry_of_job_id"
+                    )
+                prior = self.repository.get_job(retry_of_job_id)
+                if (
+                    prior.job_type != "research_diagnostic"
+                    or prior.status != "failed"
+                    or prior.payload.get("subject_id") != subject_id
+                ):
+                    raise InvalidJobError(
+                        "research diagnostic retry must reference the subject's failed Job"
                     )
         if job_type == "correctness_diagnostic":
             required = {

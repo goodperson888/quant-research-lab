@@ -53,6 +53,7 @@ experiments/runs/**
 reports/daily/**
 reports/weekly/**
 reports/backtests/**
+reports/diagnostics/**
 reports/risk/**
 !reports/**/.gitkeep
 
