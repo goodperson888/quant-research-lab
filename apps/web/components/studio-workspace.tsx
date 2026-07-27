@@ -10,6 +10,7 @@ import {
   AuditEvent,
   ComponentCandidate,
   ComponentEvidence,
+  ComponentHypothesis,
   GateEvaluation,
   ImprovementDirection,
   ExperimentPlan,
@@ -21,7 +22,11 @@ import {
   RegimeValidation,
   ResearchBudget,
   ResearchBudgetPolicy,
+  ResearchAuthorization,
+  ResearchAuthorizationStage,
+  ResearchDiagnosticReport,
   ResearchHandoff,
+  RunBundle,
   Session,
   StrategyOutcome,
   StrategyDraft,
@@ -97,6 +102,45 @@ export function StudioWorkspace() {
     queryKey: ["strategy-outcomes"],
     queryFn: () => apiFetch<StrategyOutcome[]>("/api/strategy-outcomes"),
   });
+  const latestOutcome = outcomes.data?.[0];
+  const currentSubjectId =
+    baseline?.id ?? latestOutcome?.strategy_version_id ?? handoff.data?.subject_id ?? null;
+  const authorizations = useQuery({
+    queryKey: ["research-authorizations", currentSubjectId],
+    queryFn: () =>
+      apiFetch<ResearchAuthorization[]>(
+        `/api/research-authorizations?subject_id=${encodeURIComponent(currentSubjectId ?? "")}`,
+      ),
+    enabled: Boolean(currentSubjectId),
+  });
+  const activeAuthorization = authorizations.data?.[0];
+  const authorizationStages = useQuery({
+    queryKey: ["research-authorization-stages", activeAuthorization?.id],
+    queryFn: () =>
+      apiFetch<ResearchAuthorizationStage[]>(
+        `/api/research-authorizations/${activeAuthorization?.id}/stages`,
+      ),
+    enabled: Boolean(activeAuthorization?.id),
+    refetchInterval: 3000,
+  });
+  const runBundles = useQuery({
+    queryKey: ["run-bundles", currentSubjectId],
+    queryFn: () =>
+      apiFetch<RunBundle[]>(
+        currentSubjectId
+          ? `/api/run-bundles?subject_id=${encodeURIComponent(currentSubjectId)}`
+          : "/api/run-bundles",
+      ),
+  });
+  const diagnosticReport = useQuery({
+    queryKey: ["research-diagnostic", currentSubjectId],
+    queryFn: () =>
+      apiFetch<ResearchDiagnosticReport>(
+        `/api/research-diagnostics/latest?subject_id=${encodeURIComponent(currentSubjectId ?? "")}`,
+      ),
+    enabled: Boolean(currentSubjectId),
+    retry: false,
+  });
   const components = useQuery({
     queryKey: ["component-candidates"],
     queryFn: () => apiFetch<ComponentCandidate[]>("/api/component-candidates"),
@@ -104,6 +148,15 @@ export function StudioWorkspace() {
   const componentEvidence = useQuery({
     queryKey: ["component-evidence"],
     queryFn: () => apiFetch<ComponentEvidence[]>("/api/component-evidence"),
+  });
+  const componentHypotheses = useQuery({
+    queryKey: ["component-hypotheses", currentSubjectId],
+    queryFn: () =>
+      apiFetch<ComponentHypothesis[]>(
+        currentSubjectId
+          ? `/api/component-hypotheses?subject_id=${encodeURIComponent(currentSubjectId)}`
+          : "/api/component-hypotheses",
+      ),
   });
   const regimes = useQuery({
     queryKey: ["regime-validations"],
@@ -149,12 +202,61 @@ export function StudioWorkspace() {
   });
   const selectedProfile = profiles.data?.find((profile) => profile.id === pipelineProfileId);
   const latestViability = gates.data?.find((gate) => gate.gate_name === "viability");
-  const latestOutcome = outcomes.data?.[0];
   const activeBatchJob = jobs.data?.find(
     (job) =>
       job.job_type === "parameter_search" &&
       job.payload.experiment_plan_id === activePlan?.id,
   );
+  const validationAttribution =
+    diagnosticReport.data?.loss_attribution.splits.validation;
+  const validationFunnel =
+    diagnosticReport.data?.loss_attribution.signal_funnel.validation;
+
+  const authorizeToViability = useMutation({
+    mutationFn: () => {
+      if (!currentSubjectId || !activeSession?.id) {
+        throw new Error("需要先选择明确的策略 subject 和研究会话。");
+      }
+      return apiFetch<ResearchAuthorization>("/api/research-authorizations", {
+        method: "POST",
+        body: JSON.stringify({
+          subject_id: currentSubjectId,
+          session_id: activeSession.id,
+          allowed_stages: [
+            "correctness",
+            "smoke",
+            "fast_screen",
+            "viability",
+            "loss_attribution",
+            "regime_diagnostic",
+            "component_hypothesis_generation",
+          ],
+          auto_continue: true,
+          max_cost_usdt: 0,
+          max_time_minutes: 45,
+          max_trials: 0,
+          locked_test_allowed: false,
+          stop_conditions: [
+            "gate_failed",
+            "budget_exhausted",
+            "blocked_dependency",
+            "authorization_expired",
+            "safety_boundary_reached",
+          ],
+          expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          confirmed_by_user: true,
+        }),
+      });
+    },
+    onSuccess: () => {
+      setNotice(
+        "已一次授权 correctness → smoke → fast_screen → viability；内部阶段不再逐次询问，Gate失败或授权范围结束时才停止。",
+      );
+      queryClient.invalidateQueries({ queryKey: ["research-authorizations"] });
+      queryClient.invalidateQueries({ queryKey: ["audit-events"] });
+      queryClient.invalidateQueries({ queryKey: ["research-handoff"] });
+    },
+  });
 
   const approveDirection = useMutation({
     mutationFn: (proposalId: string) =>
@@ -273,10 +375,25 @@ export function StudioWorkspace() {
   });
 
   const formError = useMemo(() => {
-    const error = saveIntake.error ?? freeze.error ?? submitDirection.error ?? approveDirection.error ?? reviseDirectionBudget.error ?? cancelBatchJob.error;
+    const error =
+      saveIntake.error ??
+      freeze.error ??
+      authorizeToViability.error ??
+      submitDirection.error ??
+      approveDirection.error ??
+      reviseDirectionBudget.error ??
+      cancelBatchJob.error;
     if (error instanceof z.ZodError) return error.issues[0]?.message;
     return error instanceof Error ? error.message : null;
-  }, [approveDirection.error, cancelBatchJob.error, freeze.error, reviseDirectionBudget.error, saveIntake.error, submitDirection.error]);
+  }, [
+    approveDirection.error,
+    authorizeToViability.error,
+    cancelBatchJob.error,
+    freeze.error,
+    reviseDirectionBudget.error,
+    saveIntake.error,
+    submitDirection.error,
+  ]);
 
   return (
     <div className="min-h-screen p-4 md:p-6">
@@ -374,6 +491,54 @@ export function StudioWorkspace() {
               尚无 AgentRun。默认模式为 <span className="text-slate-200">guided</span>；读取和安全研究任务可自动，冻结与参数搜索必须审批。
             </div>
           </Panel>
+          <Panel title="Scoped Research Authorization">
+            {activeAuthorization ? (
+              <div className="space-y-2 text-xs">
+                <Meta label="Status" value={activeAuthorization.status} />
+                <Meta
+                  label="Scope"
+                  value={activeAuthorization.allowed_stages.join(" → ")}
+                />
+                <Meta
+                  label="Usage"
+                  value={`${activeAuthorization.used_time_minutes.toFixed(1)} / ${activeAuthorization.max_time_minutes} min`}
+                />
+                <div className="space-y-1 rounded-lg bg-white/[0.03] p-2 text-slate-400">
+                  {(authorizationStages.data ?? []).map((item) => (
+                    <div key={item.id}>
+                      {item.stage}: <span className="text-slate-200">{item.status}</span>
+                    </div>
+                  ))}
+                  {!authorizationStages.data?.length ? (
+                    <div>已授权；等待确定性执行适配器记录阶段进度。</div>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <Empty>
+                  一次授权安全范围后，correctness、smoke、fast_screen 与读取已保存指标的
+                  viability 不再逐阶段询问。Gate 失败时自动停止。
+                </Empty>
+                <button
+                  type="button"
+                  onClick={() => authorizeToViability.mutate()}
+                  disabled={
+                    !currentSubjectId ||
+                    !activeSession ||
+                    latestOutcome?.outcome_type === "rejected" ||
+                    authorizeToViability.isPending
+                  }
+                  className="w-full rounded-lg border border-emerald-300/30 bg-emerald-300/10 px-2 py-2 text-xs text-emerald-100 disabled:opacity-40"
+                >
+                  授权“研究到 Viability”
+                </button>
+                <div className="text-[11px] leading-4 text-slate-500">
+                  UI 自动携带当前 subject；无需复制长 ID。Rejected 策略只能做已授权廉价诊断。
+                </div>
+              </div>
+            )}
+          </Panel>
           <Panel title="Research Budget">
             {sessionBudget.data ? (
               <div className="space-y-2 text-xs">
@@ -433,6 +598,29 @@ export function StudioWorkspace() {
               </div>
             ) : (
               <Empty>批准具体方向和预算后才会出现批量 Trial；页面只轮询结构化进度。</Empty>
+            )}
+          </Panel>
+          <Panel title="Run Bundles">
+            {runBundles.data?.length ? (
+              runBundles.data.slice(0, 4).map((bundle) => (
+                <div
+                  key={bundle.bundle_id}
+                  className="mb-2 rounded-lg border border-white/10 p-2 text-xs last:mb-0"
+                >
+                  <div className="text-slate-200">{bundle.report_type}</div>
+                  <div className="mt-1 text-slate-500">
+                    {bundle.status} · {bundle.job_type}
+                  </div>
+                  <div className="mt-1 break-all text-slate-600">
+                    {bundle.report_artifact_key}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <Empty>
+                每次 Run 作为一个 Bundle 展示；manifest、关键指标和失败原因是权威证据，
+                图表与详细日志可重建或归档。
+              </Empty>
             )}
           </Panel>
           <Panel title="Audit Timeline">
@@ -697,7 +885,74 @@ export function StudioWorkspace() {
               <Empty>尚无真实批量结果。测试 fixture 必须明确标记，不能伪装成盈利候选。</Empty>
             )}
           </Panel>
+          <Panel title="Loss Attribution & MTF Funnel">
+            {validationFunnel && validationAttribution ? (
+              <div className="space-y-2 text-xs">
+                <Meta
+                  label="1h trend legs"
+                  value={String(validationFunnel.trend_1h.trend_leg_count)}
+                />
+                <Meta
+                  label="15m pullbacks"
+                  value={
+                    validationFunnel.pullback_candidates_15m.count === null
+                      ? "existing artifact 未记录"
+                      : String(validationFunnel.pullback_candidates_15m.count)
+                  }
+                />
+                <Meta
+                  label="15m confirmations"
+                  value={String(validationFunnel.confirmations_15m)}
+                />
+                <Meta
+                  label="5m trigger records"
+                  value={String(validationFunnel.trigger_records_5m)}
+                />
+                <Meta
+                  label="Filled"
+                  value={String(validationFunnel.filled_entries)}
+                />
+                <Meta
+                  label="Fees / gross positive"
+                  value={String(
+                    validationAttribution.costs
+                      .fees_as_fraction_of_gross_positive_price_pnl ?? "—",
+                  )}
+                />
+                <div className="rounded-lg bg-white/[0.03] p-2 leading-5 text-slate-400">
+                  Long/Short、退出原因、持仓时间、UTC 时段/星期、止损距离、首次入场/再入和
+                  连续胜负均已按 train/validation 分开。此报告复用现有 trades/signals，
+                  未重新回测，不能证明因果。
+                </div>
+                <div className="text-amber-200">
+                  Multi-timeframe 已执行（5m/15m/1h）；Walk-forward / multi-period 尚未执行。
+                </div>
+              </div>
+            ) : (
+              <Empty>
+                viability 失败后可在授权范围内复用现有 trades/signals 做廉价归因；
+                不重新加载行情，不重新回测。
+              </Empty>
+            )}
+          </Panel>
           <Panel title="Failure → Component Branch">
+            {componentHypotheses.data?.length ? (
+              <div className="mb-3 space-y-2">
+                {componentHypotheses.data.slice(0, 3).map((item) => (
+                  <div key={item.id} className="rounded-lg border border-sky-300/15 p-2 text-xs">
+                    <div className="text-slate-100">{item.title}</div>
+                    <div className="mt-1 text-slate-400">
+                      {item.component_type} · {item.suggested_trials} Trials · {item.source}
+                    </div>
+                    <div className="mt-1 text-amber-200">{item.contamination_status}</div>
+                  </div>
+                ))}
+                <div className="text-[11px] leading-4 text-slate-500">
+                  这些是确定性规则分析器生成的 screening 草案，不是 Embedded AI 建议；
+                  批准一次 Diagnostic Batch 预算后才运行 3–5 个单组件 Trials。
+                </div>
+              </div>
+            ) : null}
             {components.data?.length ? (
               components.data.slice(0, 3).map((component) => (
                 <div key={component.id} className="mb-2 rounded-lg border border-white/10 p-2 text-xs last:mb-0">
@@ -714,11 +969,38 @@ export function StudioWorkspace() {
             )}
           </Panel>
           <Panel title="Regime & Pine Stage">
-            {regimes.data?.length ? (
+            {diagnosticReport.data?.regime_diagnostic ? (
+              <div className="space-y-2 text-xs">
+                <Meta
+                  label="Evidence"
+                  value={diagnosticReport.data.regime_diagnostic.evidence_status}
+                />
+                <Meta label="Mode" value="regime_diagnostic" />
+                <Meta
+                  label="States"
+                  value={Object.keys(
+                    diagnosticReport.data.regime_diagnostic.regime_metrics,
+                  ).join(", ")}
+                />
+                <div className="max-h-40 space-y-1 overflow-auto rounded-lg bg-white/[0.03] p-2 text-slate-400">
+                  {Object.entries(
+                    diagnosticReport.data.regime_diagnostic.regime_metrics,
+                  ).map(([name, metric]) => (
+                    <div key={name}>
+                      {name}: {metric.trade_count ?? 0} trades · net{" "}
+                      {Number(metric.net_return ?? 0).toFixed(4)} · PF{" "}
+                      {Number(metric.profit_factor ?? 0).toFixed(3)}
+                    </div>
+                  ))}
+                </div>
+                <div className="text-amber-200">
+                  Ex-ante closed 1h labels；screening only，不能晋升或形成正式适用行情声明。
+                </div>
+              </div>
+            ) : regimes.data?.length ? (
               <div className="space-y-2 text-xs">
                 <Meta label="Evidence" value={regimes.data[0].evidence_status} />
                 <Meta label="Mode" value={regimes.data[0].mode} />
-                <Meta label="Unknown" value={regimes.data[0].unknown_regimes.join(", ") || "none"} />
               </div>
             ) : (
               <Empty>

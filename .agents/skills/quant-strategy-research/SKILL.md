@@ -21,13 +21,27 @@ description: Orchestrate safe, auditable, fail-fast quantitative strategy resear
 
 1. Select `smoke`, `fast_screen`, or `full_validation` from `configs/pipelines/`; do not invent a hidden pipeline in strategy-specific code.
 2. Execute in order: correctness → fast screen → viability → cheap sensitivity → regime/Pine → full validation/locked/full stress → dry-run.
-3. Stop on a failed configured gate. After failure, allow only inexpensive attribution and component-evidence capture unless the user approves a new hypothesis.
+3. Stop on a correctness, smoke, or fast-screen failure. A failed viability Gate may continue only into explicitly authorized inexpensive attribution, regime diagnostic, and component-hypothesis capture.
 4. Treat viability as a standalone-strategy gate, separate from correctness, incremental improvement, robustness, locked-test and dry-run gates.
 5. Never call a strategy candidate merely because it loses less than baseline. Record it as `diagnostic_improvement`, reject the standalone strategy when appropriate, and preserve a reusable component only with separate evidence.
 6. Require a passed viability result before full stress. Cheap cost sensitivity requires fast-screen evidence and is a kill test, not full validation.
 7. Declare regime work as `regime_diagnostic` or `regime_validation`. Allow diagnostics before viability only as screening evidence; require the same subject's passed viability gate for formal validation.
 
 Read [references/pipeline-gates.md](references/pipeline-gates.md) whenever evaluating a gate, creating a StrategyOutcome or ComponentCandidate, running regime validation, reconciling Pine, or creating a stress Job.
+
+## Use one scoped authorization for safe stage continuity
+
+- Load `configs/research_authorizations/guided-to-viability.yaml`.
+- Require one explicit exact-subject approval before creating a `ResearchAuthorization`.
+- Auto-continue only through listed stages and budgets. Do not ask again at covered internal stage boundaries.
+- Treat the authorization as scope, not execution evidence. Create a white-listed Job only when a reviewed `StrategySpec`/executor is registered.
+- Never infer locked-test, component/parameter Batch, dry-run, live-trade, or Git permission from this authorization.
+- When viability fails and diagnostics are authorized, reuse saved artifacts first; mark new hypotheses from inspected validation as `screening_contaminated`.
+- Stop with a Handoff when scope completes, a pre-viability Gate fails, a budget/dependency blocks, or a true approval boundary is reached.
+
+Read [references/streamlined-research.md](references/streamlined-research.md) when creating or
+executing a ResearchAuthorization, producing failure diagnostics, generating ComponentHypothesis
+drafts, or presenting a Run Bundle.
 
 ## Preserve research integrity
 
@@ -36,6 +50,8 @@ Read [references/pipeline-gates.md](references/pipeline-gates.md) whenever evalu
 - Freeze baseline v0 once. Create a new Proposal/StrategyVersion for every later change.
 - Test one explicit hypothesis at a time; require ablation for compound changes.
 - Keep failed experiments, contaminated-test markers, costs, data versions, and stopping reasons.
+- Keep strategy Outcome and immutable StrategyVersion distinct: an append-only rejected Outcome is
+  sufficient to block core reruns even when the frozen version snapshot remains labelled candidate.
 - Never optimize solely for maximum historical profit or inspect locked test repeatedly.
 - Never treat validation in one Market Profile as validation in another.
 

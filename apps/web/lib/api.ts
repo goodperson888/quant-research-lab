@@ -168,6 +168,39 @@ export type ResearchHandoff = {
   created_at: string;
 };
 
+export type ResearchAuthorization = {
+  id: string;
+  subject_id: string;
+  session_id: string;
+  allowed_stages: string[];
+  auto_continue: boolean;
+  max_cost_usdt: number;
+  max_time_minutes: number;
+  max_trials: number;
+  locked_test_allowed: boolean;
+  stop_conditions: string[];
+  expires_at: string;
+  approved_by: string;
+  status: string;
+  created_at: string;
+  used_cost_usdt: number;
+  used_time_minutes: number;
+  used_trials: number;
+};
+
+export type ResearchAuthorizationStage = {
+  id: string;
+  authorization_id: string;
+  stage: string;
+  status: string;
+  evidence_refs: string[];
+  reason: string;
+  elapsed_minutes: number;
+  cost_usdt: number;
+  trials_used: number;
+  created_at: string;
+};
+
 export type PipelineProfile = {
   id: string;
   label: string;
@@ -243,6 +276,97 @@ export type ComponentEvidence = {
   failed_parameter_ranges: Record<string, unknown>;
   regimes: string[];
   evidence_level: string;
+};
+
+export type ComponentHypothesis = {
+  id: string;
+  session_id: string;
+  subject_id: string;
+  title: string;
+  hypothesis: string;
+  component_type: string;
+  source: string;
+  evidence_refs: string[];
+  expected_improvement: string;
+  parameter_space: Record<string, unknown>;
+  suggested_trials: number;
+  failure_conditions: string[];
+  evidence_level: string;
+  contamination_status: string;
+  status: string;
+  created_at: string;
+};
+
+export type RunBundle = {
+  bundle_id: string;
+  job_id: string;
+  subject_id: string | null;
+  job_type: string;
+  status: string;
+  report_type: string;
+  report_artifact_key: string;
+  summary: Record<string, unknown>;
+  retention: Record<string, string>;
+  created_at: string;
+};
+
+export type ResearchDiagnosticReport = {
+  run_id: string;
+  subject_id: string;
+  strategy_status_remains: "rejected";
+  loss_attribution: {
+    reran_strategy: false;
+    causal_claim_allowed: false;
+    splits: Record<
+      string,
+      {
+        summary: Record<string, number>;
+        by_side: Record<string, Record<string, number>>;
+        by_exit_reason: Record<string, Record<string, number>>;
+        by_holding_period: Record<string, Record<string, number>>;
+        by_entry_utc_session: Record<string, Record<string, number>>;
+        by_entry_weekday: Record<string, Record<string, number>>;
+        by_stop_distance: Record<string, Record<string, number>>;
+        by_first_entry_or_reentry: Record<string, Record<string, number>>;
+        costs: Record<string, number | null>;
+        streaks: Record<string, number>;
+      }
+    >;
+    signal_funnel: Record<
+      string,
+      {
+        trend_1h: { trend_leg_count: number; directions: string[] };
+        pullback_candidates_15m: { count: number | null; availability: string };
+        confirmations_15m: number;
+        trigger_records_5m: number;
+        filled_entries: number;
+        signal_status_counts: Record<string, number>;
+        filter_or_cancel_reasons: Record<string, number>;
+      }
+    >;
+    multi_timeframe: {
+      executed: boolean;
+      timeframes: string[];
+      walk_forward_or_multi_period_executed: boolean;
+    };
+  };
+  regime_diagnostic: {
+    mode: "regime_diagnostic";
+    evidence_status: string;
+    regime_metrics: Record<string, Record<string, number>>;
+    groups: Record<string, string[]>;
+    formal_validation: false;
+  };
+  component_hypotheses: Array<{
+    id: string;
+    title: string;
+    component_type: string;
+    source: string;
+    suggested_trials: number;
+    status: string;
+    contamination_status: string;
+  }>;
+  research_boundaries: Record<string, boolean>;
 };
 
 export type ImprovementDirection = {

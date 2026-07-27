@@ -301,3 +301,21 @@ safe-to-continue 和 UTC 时间。
 Skill 最终回复必须说明当前状态、停止原因、已完成、未执行、用户是否需要操作和精确下一步。
 Freqtrade `trade` 的 exit code 3 报告为 `Live trade safety guard: PASS (expected rejection,
 exit code 3)`，但不得把底层退出码改成 0。
+
+## 18. ResearchAuthorization 与自动阶段
+
+External Agent 或 Studio 可为一个 exact subject 创建 `ResearchAuthorization`。该对象记录
+允许阶段、预算、到期和审批人；Agent 不得把自然语言“继续”当作无限授权。内部 stage
+boundary 不再产生重复审批，但 Repository/Worker 必须逐阶段复查。
+
+规则是：
+
+- correctness、smoke、fast-screen 失败即停止；
+- viability 失败可在同一授权内继续 cheap loss attribution、`regime_diagnostic` 和
+  ComponentHypothesis generation；
+- 授权不覆盖组件/参数 Batch、locked test、dry-run、live trade 或 Git；
+- Authorization 不是执行证明，没有 reviewed StrategySpec/白名单 Job 时不得声称已运行；
+- 已观察 validation 生成的新假设标记 `screening_contaminated`；
+- 每次范围完成、Gate 失败或依赖阻塞都写 Handoff 和 Run Bundle。
+
+详见 [流畅研究授权与失败诊断](26-流畅研究授权与失败诊断.md)。

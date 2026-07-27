@@ -22,6 +22,7 @@
 - [本地商业交付与模型兼容策略](docs/23-本地商业交付与模型兼容策略.md)：查看本地交付、许可证到期、模型门禁、密钥和 Freqtrade 商业边界。
 - [阶段2研究门禁与资源预算](docs/24-阶段2研究门禁与资源预算.md)：查看 Regime 双模式、正确性诊断、会话与 Worker 硬预算。
 - [批量策略研究闭环](docs/25-批量策略研究闭环.md)：查看 Proposal、批量 Trial、稳定区间、组件证据和恢复语义。
+- [流畅研究授权与失败诊断](docs/26-流畅研究授权与失败诊断.md)：查看一次授权到 Viability、失败归因、Regime screening 和组件假设分流。
 
 ## 产品化阶段 0
 
@@ -77,13 +78,21 @@ Pipeline Profile 配置于 `configs/pipelines/`，顺序为 correctness → fast
 cheap sensitivity → regime/Pine → full validation/locked/full stress → dry-run。只比 baseline
 少亏的结果只作为 diagnostic improvement，不是完整可交易 strategy candidate。
 
+Studio 支持为精确 subject 一次创建 `ResearchAuthorization`，在已注册执行器和白名单 Job
+存在时连续完成 correctness、smoke、fast_screen 和读取既有指标的 viability，不在内部阶段
+反复询问。Viability 失败后若授权包含廉价诊断，只复用已有 Artifact 做 loss attribution、
+ex-ante Regime screening 和最多 3 个组件假设草案；组件 Batch、locked test 和 dry-run
+仍需独立批准。授权本身不是已执行证明。详见
+[docs/26-流畅研究授权与失败诊断.md](docs/26-流畅研究授权与失败诊断.md)。
+
 Regime 在 viability 前只能使用 `regime_diagnostic`，正式 `regime_validation` 必须引用同一
 subject 的 passed viability。每个 ResearchSession 和 one-shot Worker 都受机器可读预算
 限制；Freqtrade lookahead/recursive 只作为可选外部引擎的 correctness 证据。
 
 冻结 Baseline 后，系统支持最多 3 个结构化改进方向、精确 subject 审批、不可变 Candidate、
 确定性 grid/seeded-random Batch Trials、稳定参数区间和 ComponentEvidence 逻辑签名去重。
-当前真实策略 evaluator 尚未通用化；内置 deterministic fixture 只验证连线，不能作为收益证据。
+通用 evaluator registry 已建立，Selective Reentry 有真实单组件 adapter；其他新策略仍需
+新增受测的策略实现/配置并注册。内置 deterministic fixture 只验证连线，不能作为收益证据。
 
 ## 数据存储方案
 

@@ -32,6 +32,10 @@ enforcement:
     - component_logic_signature_deduplication
     - git_independent_research_lifecycle
     - structured_stop_and_handoff
+    - scoped_research_authorization
+    - viability_failure_diagnostics_only
+    - observed_validation_contamination
+    - registered_strategy_execution
 
 intents:
   - intent: strategy_intake
@@ -133,6 +137,7 @@ intents:
       - docs/16-产品化目标架构-v1.md
       - docs/18-Agent与Skill执行架构.md
       - docs/25-批量策略研究闭环.md
+      - docs/26-流畅研究授权与失败诊断.md
     required_preconditions:
       - baseline_frozen
       - single_falsifiable_hypothesis
@@ -215,6 +220,7 @@ intents:
       - docs/16-产品化目标架构-v1.md
       - docs/18-Agent与Skill执行架构.md
       - docs/25-批量策略研究闭环.md
+      - docs/26-流畅研究授权与失败诊断.md
     required_preconditions:
       - pipeline_profile_selected
       - exact_subject_id_selected
@@ -225,6 +231,8 @@ intents:
       - passed_same_subject_viability_when_mode_is_regime_validation
       - research_session_budget_available
       - exact_proposal_subject_when_batch_research_is_requested
+      - exact_subject_research_authorization_when_auto_continue_is_requested
+      - reviewed_strategy_executor_registered_before_execution
     allowed_tools:
       - list_pipeline_profiles
       - evaluate_gate
@@ -233,6 +241,10 @@ intents:
       - record_regime_validation
       - run_correctness_diagnostic
       - generate_report
+      - create_research_authorization
+      - run_authorized_pipeline
+      - generate_failure_diagnostics
+      - list_component_hypotheses
     required_outputs:
       - gate_evaluation
       - stop_or_continue_decision
@@ -240,6 +252,8 @@ intents:
       - audit_events
       - budget_usage_or_blocked_evidence
       - research_handoff
+      - research_authorization_stage_events
+      - run_bundle
     approval_gate:
       action: locked_test_full_stress_or_state_change
       required: explicit_subject_id_and_user_confirmation

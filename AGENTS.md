@@ -43,6 +43,10 @@ These rules apply to every automated agent working in this project.
 39. Git is manual backup/release transport only. Use it only for an explicit user backup/publish request, an explicit completed-session export, or a project code release milestone. Customer/local product operation must not require a repository or remote. Preserve existing tracked strategy history; do not rewrite or delete it to enforce this policy.
 40. Every pause, stop, refusal, gate failure, budget exhaustion, dependency block, Job completion or failure must create or report a structured ResearchHandoff/NextAction. It must state why execution stopped, completed and unstarted actions, whether user action is required, the exact approval subject when applicable, and the next recommended action.
 41. Report `scripts/freqtrade.sh trade` exit code 3 as `Live trade safety guard: PASS (expected rejection, exit code 3)`. Preserve the non-zero process exit code; do not present the expected safety refusal as a defect to fix.
+42. A user may approve one exact-subject `ResearchAuthorization` for the bounded path `correctness → smoke → fast_screen → viability` and explicitly listed cheap diagnostics. Internal stage boundaries covered by that authorization must not ask for repeated approval. The authorization is not permission for locked test, parameter search, dry-run, live trade, or an unregistered strategy executor.
+43. A failure before viability stops the automatic path. A failed viability Gate may continue only into authorization-listed `loss_attribution`, `regime_diagnostic`, and `component_hypothesis_generation`; these remain non-causal screening evidence and cannot restore a rejected strategy.
+44. Loss attribution should reuse saved trades/signals/metrics when possible. If an already inspected validation split informs a new component hypothesis, mark it `screening_contaminated`; do not relabel it independent out-of-sample evidence.
+45. Strategy-specific Native execution must enter through a registered `StrategySpec`/`StrategyEvaluator` boundary. Do not add new strategy conditionals to the core Worker, and do not claim an authorization alone executed research when no reviewed executor/Job ran.
 
 ## Instruction priority and enforcement
 
@@ -72,9 +76,9 @@ Before taking an action in one of these intents, read the listed documents in fu
 | Strategy intake or formalization | `docs/07-个人量化策略研究工作法.md`, `docs/10-市场适配与因子适用性.md`, `docs/15-产品需求规格-v1.md`, `docs/18-Agent与Skill执行架构.md` |
 | Market-data download or normalization | `docs/01-数据规范.md`, `docs/09-数据存储架构.md`, `docs/10-市场适配与因子适用性.md`, `docs/14-ETH永续第一阶段数据记录.md`, `docs/18-Agent与Skill执行架构.md`, `docs/21-存储治理与保留策略.md`, `docs/22-ETH永续一年数据扩展记录.md` |
 | Baseline backtest | `docs/00-标准研究流程.md`, `docs/02-回测与验收规范.md`, `docs/07-个人量化策略研究工作法.md`, `docs/10-市场适配与因子适用性.md`, `docs/15-产品需求规格-v1.md`, `docs/18-Agent与Skill执行架构.md`, `docs/20-Freqtrade能力边界与融合方案.md` |
-| Parameter optimization/search | `docs/02-回测与验收规范.md`, `docs/04-压力测试清单.md`, `docs/07-个人量化策略研究工作法.md`, `docs/15-产品需求规格-v1.md`, `docs/16-产品化目标架构-v1.md`, `docs/18-Agent与Skill执行架构.md`, `docs/25-批量策略研究闭环.md` |
+| Parameter optimization/search | `docs/02-回测与验收规范.md`, `docs/04-压力测试清单.md`, `docs/07-个人量化策略研究工作法.md`, `docs/15-产品需求规格-v1.md`, `docs/16-产品化目标架构-v1.md`, `docs/18-Agent与Skill执行架构.md`, `docs/25-批量策略研究闭环.md`, `docs/26-流畅研究授权与失败诊断.md` |
 | Stress testing | `docs/02-回测与验收规范.md`, `docs/04-压力测试清单.md`, `docs/07-个人量化策略研究工作法.md`, `docs/18-Agent与Skill执行架构.md`, `docs/20-Freqtrade能力边界与融合方案.md` |
 | Dry-run preparation or start | `docs/02-回测与验收规范.md`, `docs/05-自动化运行规范.md`, `docs/06-安全与实盘门禁.md`, `docs/07-个人量化策略研究工作法.md`, `docs/15-产品需求规格-v1.md`, `docs/18-Agent与Skill执行架构.md` |
-| Pipeline/gate, outcome, component, regime, Pine validation, or batch evidence aggregation | `docs/00-标准研究流程.md`, `docs/02-回测与验收规范.md`, `docs/04-压力测试清单.md`, `docs/07-个人量化策略研究工作法.md`, `docs/15-产品需求规格-v1.md`, `docs/16-产品化目标架构-v1.md`, `docs/18-Agent与Skill执行架构.md`, `docs/25-批量策略研究闭环.md` |
+| Pipeline/gate, outcome, component, regime, Pine validation, or batch evidence aggregation | `docs/00-标准研究流程.md`, `docs/02-回测与验收规范.md`, `docs/04-压力测试清单.md`, `docs/07-个人量化策略研究工作法.md`, `docs/15-产品需求规格-v1.md`, `docs/16-产品化目标架构-v1.md`, `docs/18-Agent与Skill执行架构.md`, `docs/25-批量策略研究闭环.md`, `docs/26-流畅研究授权与失败诊断.md` |
 
 If an intent is ambiguous, route to the stricter applicable set. Record the selected intent, documents read, preconditions, approval decision, tools used, and required outputs in the AgentRun or audit trail. Missing preconditions stop execution; they are not warnings to bypass.
