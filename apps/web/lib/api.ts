@@ -135,6 +135,38 @@ export type Session = {
   status: string;
   created_at: string;
   updated_at: string;
+  research_mode: "quick" | "guided" | "expert";
+  mode_config: {
+    agent_run_mode?: "supervised" | "guided" | "bounded_autonomous";
+    pause_policy?: "critical_only" | "key_decisions" | "every_stage";
+    stage_visibility?: "summary" | "guided" | "full";
+    default_trial_budget?: number;
+    auto_failure_diagnostics?: boolean;
+  };
+  mode_revision: number;
+};
+
+export type ResearchModeDefinition = {
+  mode: "quick" | "guided" | "expert";
+  label: string;
+  description: string;
+  agent_run_mode: "supervised" | "guided" | "bounded_autonomous";
+  pause_policy: "critical_only" | "key_decisions" | "every_stage";
+  stage_visibility: "summary" | "guided" | "full";
+  default_trial_budget: number;
+  auto_failure_diagnostics: boolean;
+};
+
+export type SessionDetail = {
+  session: Session;
+  messages: Array<{
+    id: string;
+    session_id: string;
+    role: string;
+    content: string;
+    created_at: string;
+  }>;
+  drafts: StrategyDraft[];
 };
 
 export type StrategyDraft = {
@@ -362,9 +394,14 @@ export type ResearchDiagnosticReport = {
     signal_funnel: Record<
       string,
       {
-        trend_1h: { trend_leg_count: number; directions: string[] };
+        trend_1h: {
+          trend_leg_count?: number;
+          bar_counts_by_direction?: Record<string, number>;
+          directions: string[];
+        };
         pullback_candidates_15m: { count: number | null; availability: string };
-        confirmations_15m: number;
+        confirmations_15m: number | null;
+        confirmations_15m_availability?: string;
         trigger_records_5m: number;
         filled_entries: number;
         signal_status_counts: Record<string, number>;

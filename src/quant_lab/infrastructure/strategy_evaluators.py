@@ -11,12 +11,14 @@ from typing import Any, Callable, Mapping
 import pandas as pd
 import yaml
 
+from quant_lab.application.ema_mtf_scalp import EmaMtfScalpBacktester
 from quant_lab.application.ports import TrialEvaluationRequest, TrialEvaluationResult
 from quant_lab.application.selective_reentry_smoke import SelectiveReentrySmokeBacktester
 from quant_lab.domain.models import Job, validate_artifact_key
 from quant_lab.domain.repositories import ProductRepository
 
 from .artifact_store import LocalArtifactStore
+from .execution_models import ExecutionModelCatalog
 
 
 class DeterministicFixtureStrategyEvaluator:
@@ -106,6 +108,317 @@ class StrategyPluginRegistry:
 
     def list_specs(self) -> tuple[StrategySpec, ...]:
         return tuple(self._specs.values())
+
+
+class EmaMtfScalpComponentEvaluator:
+    """Real Native evaluator for the approved EMA structure-exit diagnostic batch."""
+
+    evaluator_id = "ema_mtf_scalp_exit_component_v1"
+    _SUPPORTED_VARIANTS = frozenset({"current", "tighter", "looser"})
+
+    def __init__(
+        self,
+        root: Path,
+        repository: ProductRepository,
+        *,
+        config_artifact_key: str,
+    ) -> None:
+        self.root = root.resolve()
+        self.repository = repository
+        self.artifacts = LocalArtifactStore(self.root)
+        self.config_artifact_key = validate_artifact_key(config_artifact_key)
+
+    def evaluate(self, request: TrialEvaluationRequest) -> TrialEvaluationResult:
+        started = time.monotonic()
+        try:
+            config = yaml.safe_load(self.artifacts.get(self.config_artifact_key))
+            if not isinstance(config, dict) or config.get("schema_version") != 1:
+                raise ValueError("EMA component evaluator config must be schema v1 YAML")
+            if "locked_test" in request.data_splits:
+                raise ValueError("EMA component Trial must not receive locked-test data")
+            plan = self.repository.get_experiment_plan(request.experiment_plan_id)
+            if (
+                plan.baseline_version_id != request.baseline_version_id
+                or plan.candidate_version_id != request.candidate_version_id
+            ):
+                raise ValueError("EMA component Trial does not match its approved Plan")
+            if request.baseline_version_id != config["strategy_version_id"]:
+                raise ValueError("EMA component Trial baseline/config mismatch")
+            candidate = self.repository.get_strategy_version(
+                str(request.candidate_version_id)
+            )
+            if (
+                candidate.status != "candidate"
+                or not candidate.immutable
+                or candidate.content_snapshot.get("baseline_version_id")
+                != request.baseline_version_id
+                or candidate.content_snapshot.get("locked_test_used") is not False
+            ):
+                raise ValueError("EMA component Trial requires its immutable Candidate")
+            variant = self._variant(request.parameters)
+            self._validate_splits(config, request)
+            self._validate_cost_model(config, request)
+
+            data_manifest = json.loads(
+                self.artifacts.get(validate_artifact_key(config["data_manifest_key"]))
+            )
+            diagnostic_reference = config.get("diagnostic_reference")
+            if not isinstance(diagnostic_reference, Mapping):
+                raise ValueError("EMA component evaluator diagnostic reference is missing")
+            baseline_manifest = json.loads(
+                self.artifacts.get(
+                    validate_artifact_key(
+                        str(diagnostic_reference["baseline_manifest_artifact_key"])
+                    )
+                )
+            )
+            baseline_metrics = json.loads(
+                self.artifacts.get(
+                    validate_artifact_key(
+                        str(diagnostic_reference["baseline_metrics_artifact_key"])
+                    )
+                )
+            )
+            self._validate_baseline_evidence(
+                config=config,
+                request=request,
+                data_manifest=data_manifest,
+                baseline_manifest=baseline_manifest,
+                baseline_metrics=baseline_metrics,
+            )
+            validation_end = config["time_splits"]["validation"]["end_utc_exclusive"]
+            datasets = {
+                "ohlcv_5m": self._load_dataset(
+                    data_manifest, "futures_ohlcv", "5m", validation_end
+                ),
+                "ohlcv_15m": self._load_dataset(
+                    data_manifest, "futures_ohlcv", "15m", validation_end
+                ),
+                "ohlcv_1h": self._load_dataset(
+                    data_manifest, "futures_ohlcv", "1h", validation_end
+                ),
+                "funding": self._load_dataset(
+                    data_manifest, "funding_rate", None, validation_end
+                ),
+            }
+            execution = config["execution"]
+            backtester = EmaMtfScalpBacktester(
+                strategy_version_id=candidate.id,
+                execution_model=ExecutionModelCatalog(self.root).get(venue="binance"),
+                initial_equity=float(execution["initial_equity"]),
+                leverage=float(execution["leverage"]),
+                risk_per_trade_fraction=float(execution["risk_per_trade_fraction"]),
+                max_trades_per_day=int(execution["max_trades_per_day"]),
+                cooldown_minutes=int(execution["cooldown_minutes"]),
+                cooldown_after_loss_minutes=int(
+                    execution["cooldown_after_loss_minutes"]
+                ),
+                min_stop_distance_fraction=float(
+                    execution["min_stop_distance_fraction"]
+                ),
+                max_stop_distance_fraction=float(
+                    execution["max_stop_distance_fraction"]
+                ),
+                stop_buffer_atr_fraction=float(
+                    execution["stop_buffer_atr_fraction"]
+                ),
+                take_profit_r_multiple=float(execution["take_profit_r_multiple"]),
+                max_holding_bars=int(execution["max_holding_bars_5m"]),
+                max_entry_distance_fraction=float(
+                    execution["max_entry_distance_fraction"]
+                ),
+                max_trigger_bars=int(execution["max_trigger_bars_5m"]),
+                structure_exit_variant=variant,
+            )
+            results = {
+                label: backtester.run(
+                    **datasets,
+                    warmup_start_utc_inclusive=split[
+                        "warmup_start_utc_inclusive"
+                    ],
+                    start_utc_inclusive=split["start_utc_inclusive"],
+                    end_utc_exclusive=split["end_utc_exclusive"],
+                )
+                for label, split in (
+                    ("train", config["time_splits"]["train"]),
+                    ("validation", config["time_splits"]["validation"]),
+                )
+            }
+            train = results["train"].metrics
+            validation = results["validation"].metrics
+            baseline_train = baseline_metrics["train"]["metrics"]
+            baseline_validation = baseline_metrics["validation"]["metrics"]
+            return TrialEvaluationResult(
+                trial_id=request.trial_id,
+                status="succeeded",
+                metrics={
+                    "train_net_return": float(train["total_return"]),
+                    "train_profit_factor": float(train["profit_factor"]),
+                    "train_expectancy": float(train["expectancy"]),
+                    "train_trade_count": float(train["trade_count"]),
+                    "train_max_drawdown_abs": float(train["max_drawdown"]),
+                    "train_average_holding_minutes": float(
+                        train["average_holding_minutes"]
+                    ),
+                    "train_structure_exit_count": self._structure_exit_count(
+                        results["train"].trades
+                    ),
+                    "validation_net_return": float(validation["total_return"]),
+                    "validation_profit_factor": float(validation["profit_factor"]),
+                    "validation_expectancy": float(validation["expectancy"]),
+                    "validation_trade_count": float(validation["trade_count"]),
+                    "validation_max_drawdown_abs": float(
+                        validation["max_drawdown"]
+                    ),
+                    "validation_average_holding_minutes": float(
+                        validation["average_holding_minutes"]
+                    ),
+                    "validation_structure_exit_count": self._structure_exit_count(
+                        results["validation"].trades
+                    ),
+                    "incremental_train_net_return": float(
+                        train["total_return"] - baseline_train["total_return"]
+                    ),
+                    "incremental_net_return": float(
+                        validation["total_return"]
+                        - baseline_validation["total_return"]
+                    ),
+                    "incremental_profit_factor": float(
+                        validation["profit_factor"]
+                        - baseline_validation["profit_factor"]
+                    ),
+                    "incremental_drawdown_reduction": float(
+                        baseline_validation["max_drawdown"]
+                        - validation["max_drawdown"]
+                    ),
+                    "validation_contaminated": 1.0,
+                    "diagnostic_evidence": 1.0,
+                    "locked_test_used": 0.0,
+                },
+                elapsed_seconds=time.monotonic() - started,
+                peak_rss_mb=0.0,
+                stop_reason="diagnostic_split_validation_already_observed",
+            )
+        except Exception as exc:
+            return TrialEvaluationResult(
+                trial_id=request.trial_id,
+                status="failed",
+                error=str(exc),
+                elapsed_seconds=time.monotonic() - started,
+                peak_rss_mb=0.0,
+                stop_reason="ema_mtf_scalp_component_evaluation_failed",
+            )
+
+    @classmethod
+    def _variant(cls, parameters: Mapping[str, Any]) -> str:
+        if set(parameters) != {"structure_exit_variant"}:
+            raise ValueError(
+                "EMA diagnostic batch must change only structure_exit_variant"
+            )
+        variant = str(parameters["structure_exit_variant"])
+        if variant not in cls._SUPPORTED_VARIANTS:
+            raise ValueError("unsupported EMA structure-exit variant")
+        return variant
+
+    @staticmethod
+    def _validate_splits(
+        config: Mapping[str, Any], request: TrialEvaluationRequest
+    ) -> None:
+        if set(request.data_splits) != {"train", "validation"}:
+            raise ValueError("EMA diagnostic evaluator accepts train/validation only")
+        for label in ("train", "validation"):
+            configured = config["time_splits"][label]
+            declared = request.data_splits[label]
+            if (
+                configured["start_utc_inclusive"] not in declared
+                or configured["end_utc_exclusive"] not in declared
+            ):
+                raise ValueError(f"EMA component Trial {label} split mismatch")
+        if "screening_contaminated" not in request.data_splits["validation"]:
+            raise ValueError("EMA diagnostic validation must remain contaminated screening")
+
+    @staticmethod
+    def _validate_cost_model(
+        config: Mapping[str, Any], request: TrialEvaluationRequest
+    ) -> None:
+        expected = config["cost_model"]
+        if (
+            float(request.cost_model["taker_fee_per_side"])
+            != float(expected["fee_per_side"])
+            or float(request.cost_model["slippage_bps_per_side"])
+            != float(expected["slippage_bps_per_side"])
+            or float(request.cost_model["leverage"])
+            != float(config["execution"]["leverage"])
+            or request.cost_model.get("zero_funding_fallback_allowed") is not False
+        ):
+            raise ValueError("EMA component Trial cost model differs from the Baseline")
+
+    @staticmethod
+    def _validate_baseline_evidence(
+        *,
+        config: Mapping[str, Any],
+        request: TrialEvaluationRequest,
+        data_manifest: Mapping[str, Any],
+        baseline_manifest: Mapping[str, Any],
+        baseline_metrics: Mapping[str, Any],
+    ) -> None:
+        if (
+            baseline_manifest.get("status") != "succeeded"
+            or baseline_manifest.get("run_type") != "ema_mtf_scalp_fast_screen"
+            or baseline_manifest.get("strategy", {}).get("strategy_version_id")
+            != request.baseline_version_id
+            or baseline_manifest.get("locked_test", {}).get("used") is not False
+        ):
+            raise ValueError("EMA component Trial baseline evidence is invalid")
+        if (
+            baseline_manifest.get("data_manifest", {}).get("data_version")
+            != request.data_version
+            or data_manifest.get("data_version") != request.data_version
+            or baseline_manifest.get("market_profile") != config["market_profile"]
+        ):
+            raise ValueError("EMA component Trial data version/market mismatch")
+        if not {"train", "validation"}.issubset(baseline_metrics):
+            raise ValueError("EMA baseline metrics are incomplete")
+
+    @staticmethod
+    def _structure_exit_count(trades: pd.DataFrame) -> float:
+        if trades.empty:
+            return 0.0
+        return float(
+            trades["exit_reason"].astype(str).str.contains("structure_exit").sum()
+        )
+
+    def _load_dataset(
+        self,
+        manifest: Mapping[str, Any],
+        dataset: str,
+        timeframe: str | None,
+        end_utc_exclusive: str,
+    ) -> pd.DataFrame:
+        matches = [
+            item
+            for item in manifest["processed_datasets"]
+            if item["dataset"] == dataset
+            and (timeframe is None or item.get("timeframe") == timeframe)
+        ]
+        if len(matches) != 1:
+            raise ValueError(f"manifest must contain exactly one {dataset}/{timeframe}")
+        frames: list[pd.DataFrame] = []
+        end = pd.Timestamp(end_utc_exclusive)
+        for output in matches[0]["outputs"]:
+            content = self.artifacts.get(validate_artifact_key(str(output["path"])))
+            if hashlib.sha256(content).hexdigest() != output["sha256"]:
+                raise ValueError(f"dataset checksum mismatch: {output['path']}")
+            frame = pd.read_parquet(io.BytesIO(content))
+            if "timestamp" in frame:
+                frame = frame.loc[
+                    pd.to_datetime(frame["timestamp"], utc=True) < end
+                ].copy()
+            if not frame.empty:
+                frames.append(frame)
+        if not frames:
+            raise ValueError(f"dataset has no rows: {dataset}/{timeframe}")
+        return pd.concat(frames, ignore_index=True)
 
 
 class SelectiveReentryComponentEvaluator:

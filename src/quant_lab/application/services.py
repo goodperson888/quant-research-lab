@@ -29,6 +29,8 @@ from quant_lab.domain.models import (
     ResearchBudget,
     ResearchHandoff,
     ResearchSession,
+    ResearchMode,
+    RESEARCH_MODE_DEFINITIONS,
     StrategyDraft,
     StrategyVersion,
     ToolCall,
@@ -84,6 +86,16 @@ DEFAULT_RESEARCH_BUDGET = {
     "max_locked_test_uses": 2,
     "require_user_approval_for_new_hypothesis": True,
 }
+
+RESEARCH_MODE_CONFIG_KEYS = frozenset(
+    {
+        "agent_run_mode",
+        "pause_policy",
+        "stage_visibility",
+        "default_trial_budget",
+        "auto_failure_diagnostics",
+    }
+)
 
 
 class ResearchApplicationService:
@@ -149,12 +161,16 @@ class ResearchApplicationService:
 
     def create_research_session(self, *, title: str) -> ResearchSession:
         now = utc_now()
+        mode_config = self.research_mode_definition("guided")
         session = ResearchSession(
             id=new_id("session"),
             title=title.strip(),
             status="inbox",
             created_at=now,
             updated_at=now,
+            research_mode="guided",
+            mode_config=mode_config,
+            mode_revision=1,
         )
         created = self.repository.create_session(session)
         self.repository.create_research_budget(self._new_budget(created.id))
@@ -162,9 +178,89 @@ class ResearchApplicationService:
             event_type="research_session.created",
             aggregate_type="research_session",
             aggregate_id=created.id,
-            payload={"title": created.title, "status": created.status},
+            payload={
+                "title": created.title,
+                "status": created.status,
+                "research_mode": created.research_mode,
+                "mode_revision": created.mode_revision,
+            },
         )
         return created
+
+    @staticmethod
+    def list_research_mode_definitions() -> Sequence[Mapping[str, Any]]:
+        return tuple(dict(item) for item in RESEARCH_MODE_DEFINITIONS.values())
+
+    @staticmethod
+    def research_mode_definition(mode: str) -> dict[str, Any]:
+        if mode not in RESEARCH_MODE_DEFINITIONS:
+            raise ValueError(f"unsupported research mode: {mode}")
+        return dict(RESEARCH_MODE_DEFINITIONS[mode])  # type: ignore[index]
+
+    def update_research_mode(
+        self,
+        *,
+        session_id: str,
+        research_mode: str,
+        mode_config: Mapping[str, Any] | None,
+        confirmed_by_user: bool,
+    ) -> ResearchSession:
+        if not confirmed_by_user:
+            raise ApprovalRequiredError(
+                "research mode update requires explicit user confirmation"
+            )
+        current = self.repository.get_session(session_id)
+        resolved = self.research_mode_definition(research_mode)
+        overrides = dict(mode_config or {})
+        unknown = sorted(set(overrides) - RESEARCH_MODE_CONFIG_KEYS)
+        if unknown:
+            raise ValueError(
+                "unsupported research mode config keys: " + ", ".join(unknown)
+            )
+        resolved.update(overrides)
+        if resolved["agent_run_mode"] not in {
+            "supervised",
+            "guided",
+            "bounded_autonomous",
+        }:
+            raise ValueError("invalid agent_run_mode")
+        if resolved["pause_policy"] not in {
+            "critical_only",
+            "key_decisions",
+            "every_stage",
+        }:
+            raise ValueError("invalid pause_policy")
+        if resolved["stage_visibility"] not in {"summary", "guided", "full"}:
+            raise ValueError("invalid stage_visibility")
+        trial_budget = resolved["default_trial_budget"]
+        if (
+            isinstance(trial_budget, bool)
+            or not isinstance(trial_budget, int)
+            or not 1 <= trial_budget <= 200
+        ):
+            raise ValueError("default_trial_budget must be an integer from 1 to 200")
+        if not isinstance(resolved["auto_failure_diagnostics"], bool):
+            raise ValueError("auto_failure_diagnostics must be boolean")
+        updated = self.repository.update_session_research_mode(
+            session_id,
+            research_mode=research_mode,
+            mode_config=resolved,
+            mode_revision=current.mode_revision + 1,
+            updated_at=utc_now(),
+        )
+        self._audit(
+            event_type="research_session.mode_updated",
+            aggregate_type="research_session",
+            aggregate_id=session_id,
+            payload={
+                "previous_mode": current.research_mode,
+                "research_mode": updated.research_mode,
+                "mode_revision": updated.mode_revision,
+                "mode_config": dict(updated.mode_config),
+                "safety_boundaries_unchanged": True,
+            },
+        )
+        return updated
 
     def get_research_budget(self, session_id: str) -> ResearchBudget:
         self.repository.get_session(session_id)
@@ -1267,19 +1363,27 @@ class ResearchApplicationService:
         *,
         session_id: str,
         agent_name: str,
-        mode: str = "guided",
+        mode: str | None = None,
         agent_provider: AgentProviderKind = AgentProviderKind.EXTERNAL_LOCAL_AGENT,
         execution_target: ExecutionTargetKind = ExecutionTargetKind.LOCAL_RUNTIME,
         plan_summary: str | None = None,
     ) -> AgentRun:
-        self.repository.get_session(session_id)
+        session = self.repository.get_session(session_id)
+        resolved_mode = mode or str(
+            session.mode_config.get(
+                "agent_run_mode",
+                self.research_mode_definition(session.research_mode)["agent_run_mode"],
+            )
+        )
+        if resolved_mode not in {"supervised", "guided", "bounded_autonomous"}:
+            raise ValueError("invalid AgentRun mode")
         agent_run = AgentRun(
             id=new_id("agent_run"),
             session_id=session_id,
             agent_name=agent_name,
             agent_provider=agent_provider,
             execution_target=execution_target,
-            mode=mode,  # type: ignore[arg-type]
+            mode=resolved_mode,  # type: ignore[arg-type]
             status="queued",
             plan_summary=plan_summary,
             created_at=utc_now(),
@@ -1293,6 +1397,8 @@ class ResearchApplicationService:
                 "agent_provider": created.agent_provider,
                 "execution_target": created.execution_target,
                 "mode": created.mode,
+                "research_mode": session.research_mode,
+                "mode_revision": session.mode_revision,
             },
             actor_type="external_agent",
         )

@@ -20,6 +20,7 @@ SessionStatus = Literal[
 DraftStatus = Literal["draft", "awaiting_confirmation", "baseline_frozen"]
 JobStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 AgentRunMode = Literal["supervised", "guided", "bounded_autonomous"]
+ResearchMode = Literal["quick", "guided", "expert"]
 GateStatus = Literal["passed", "failed", "blocked", "not_evaluated"]
 RegimeMode = Literal["regime_diagnostic", "regime_validation"]
 ProposalStatus = Literal[
@@ -50,6 +51,39 @@ ResearchAuthorizationStatus = Literal[
     "revoked",
 ]
 ResearchStageStatus = Literal["pending", "running", "passed", "failed", "blocked", "skipped"]
+
+RESEARCH_MODE_DEFINITIONS: Mapping[ResearchMode, Mapping[str, Any]] = {
+    "quick": {
+        "mode": "quick",
+        "label": "快捷模式",
+        "description": "授权范围内自动连续完成机械步骤，只在真正的研究决策点暂停。",
+        "agent_run_mode": "bounded_autonomous",
+        "pause_policy": "critical_only",
+        "stage_visibility": "summary",
+        "default_trial_budget": 20,
+        "auto_failure_diagnostics": True,
+    },
+    "guided": {
+        "mode": "guided",
+        "label": "引导模式",
+        "description": "默认模式；展示关键证据，只在基准、具体改动、预算和最终测试等节点暂停。",
+        "agent_run_mode": "guided",
+        "pause_policy": "key_decisions",
+        "stage_visibility": "guided",
+        "default_trial_budget": 20,
+        "auto_failure_diagnostics": True,
+    },
+    "expert": {
+        "mode": "expert",
+        "label": "专家模式",
+        "description": "展示完整阶段、技术证据和预算设置，允许用户更细地控制研究节奏。",
+        "agent_run_mode": "supervised",
+        "pause_policy": "every_stage",
+        "stage_visibility": "full",
+        "default_trial_budget": 20,
+        "auto_failure_diagnostics": False,
+    },
+}
 
 
 class AgentProviderKind(StrEnum):
@@ -100,6 +134,9 @@ class ResearchSession:
     status: SessionStatus
     created_at: str
     updated_at: str
+    research_mode: ResearchMode = "guided"
+    mode_config: Mapping[str, Any] = field(default_factory=dict)
+    mode_revision: int = 1
 
 
 @dataclass(frozen=True, slots=True)

@@ -9,13 +9,18 @@ description: Orchestrate safe, auditable, fail-fast quantitative strategy resear
 
 1. Read the repository `AGENTS.md` completely.
 2. Read `configs/agent_policies/document-routing.yaml`.
-3. Classify the request as one or more configured intents. When uncertain, choose the stricter route.
-4. Read every `required_docs` file for each selected intent completely before acting.
-5. Check every `required_preconditions`. Stop and report missing conditions; do not downgrade them to warnings.
-6. Use only the route's `allowed_tools` through project CLI/API/ResearchToolGateway-compatible interfaces.
-7. Pause at each `approval_gate`. Never infer approval from past research or general permission.
-8. Produce every `required_outputs` artifact and append audit events for key actions and failures.
-9. Report the intent, documents read, preconditions, approvals, tools, artifact keys, tests, and unresolved gaps.
+3. Load the exact ResearchSession and its authoritative `research_mode`, `mode_config` and
+   `mode_revision` before creating an AgentRun. If operating through CLI, use
+   `show-research-mode --session-id ...`. Do not infer the mode from chat text.
+4. Classify the request as one or more configured intents. When uncertain, choose the stricter route.
+5. Read every `required_docs` file for each selected intent completely before acting.
+6. Check every `required_preconditions`. Stop and report missing conditions; do not downgrade them to warnings.
+7. Use only the route's `allowed_tools` through project CLI/API/ResearchToolGateway-compatible interfaces.
+8. Pause according to the session mode only for presentation and mechanical stage boundaries.
+   Mode never bypasses an `approval_gate`, Baseline freeze, exact Proposal/Diff approval, Batch
+   budget approval, locked test, dry-run or live-trade prohibition.
+9. Produce every `required_outputs` artifact and append audit events for key actions and failures.
+10. Report the intent, documents read, preconditions, approvals, tools, artifact keys, tests, and unresolved gaps.
 
 ## Follow the configured fail-fast pipeline
 
@@ -124,7 +129,10 @@ Store only project-relative `artifact_key` values. Reject absolute paths, `file:
 
 ## Respect the product boundary
 
-- Current mode: `external_local_agent + local_runtime + guided`.
+- Current provider/target: `external_local_agent + local_runtime`.
+- Default ResearchSession mode is `guided`; each session may explicitly select `quick`,
+  `guided` or `expert`. AgentRun pacing is derived from that persisted mode unless an exact
+  supported override is explicitly supplied.
 - Embedded Provider and Hosted Sandbox are planned/unsupported.
 - Do not request an API key, claim an LLM is connected, or fabricate AI output.
 - Do not expose or call live trade, credential, arbitrary path, arbitrary Shell, or automatic production-promotion capabilities.

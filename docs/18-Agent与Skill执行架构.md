@@ -7,10 +7,23 @@
 当前优先模式是：
 
 ```text
-external_local_agent + local_runtime + guided
+external_local_agent + local_runtime + ResearchSession mode
 ```
 
-即 Codex 等本地 Agent 读取项目规则并调用安全 CLI/API；Web 显示同一任务、事件、审批和成果。Embedded Provider、BYOK、Local Model、Hosted Sandbox、Local Connector 均是 planned/unsupported。
+默认会话模式为 `guided`，也可显式选择 `quick` 或 `expert`。Codex 等本地 Agent 先读取
+会话模式，再调用安全 CLI/API；Web 显示同一任务、事件、审批和成果。Embedded Provider、
+BYOK、Local Model、Hosted Sandbox、Local Connector 均是 planned/unsupported。
+
+模式只决定展示密度、授权范围内的机械连续性和 AgentRun pacing：
+
+| 会话模式 | 默认 AgentRun mode | 默认暂停策略 |
+|---|---|---|
+| `quick` | `bounded_autonomous` | 只停在关键研究决策与安全门禁 |
+| `guided` | `guided` | 关键证据与真正判断点 |
+| `expert` | `supervised` | 展示完整阶段并允许更细控制 |
+
+网页、本地 Agent 和未来网页模型都读写 `ResearchSession.research_mode/mode_config`；任何模式
+都不能绕过 Baseline、Proposal/Diff、Batch 预算、locked test、dry-run 或 live trade 门禁。
 
 ## 2. 七层职责
 

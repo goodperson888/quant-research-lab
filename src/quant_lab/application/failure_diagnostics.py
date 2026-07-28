@@ -49,6 +49,7 @@ class ArtifactLossAttribution:
     ) -> dict[str, Any]:
         if trades.empty:
             raise ValueError("loss attribution requires saved trades")
+        frame = _normalize_trade_columns(trades)
         required = {
             "trade_id",
             "side",
@@ -61,14 +62,12 @@ class ArtifactLossAttribution:
             "price_pnl",
             "funding_pnl",
             "net_pnl",
-            "is_reentry",
             "holding_minutes",
             "split",
         }
-        missing = sorted(required - set(trades.columns))
+        missing = sorted(required - set(frame.columns))
         if missing:
             raise ValueError("saved trades are missing attribution fields: " + ", ".join(missing))
-        frame = trades.copy()
         return_column = (
             "net_return"
             if "net_return" in frame.columns
@@ -91,7 +90,14 @@ class ArtifactLossAttribution:
             labels=["00-05", "06-11", "12-17", "18-23"],
         ).astype(str)
         frame["entry_weekday"] = frame["entry_time"].dt.day_name()
-        frame["entry_type"] = np.where(frame["is_reentry"], "reentry", "first_entry")
+        if "is_reentry" in frame:
+            frame["entry_type"] = np.where(
+                frame["is_reentry"], "reentry", "first_entry"
+            )
+            entry_type_availability = "recorded"
+        else:
+            frame["entry_type"] = "not_recorded"
+            entry_type_availability = "not_recorded"
         frame["stop_distance_fraction"] = (
             (frame["entry_raw_price"] - frame["initial_stop_price"]).abs()
             / frame["entry_raw_price"].abs()
@@ -117,6 +123,7 @@ class ArtifactLossAttribution:
                 "by_entry_weekday": _grouped(split_frame, "entry_weekday"),
                 "by_stop_distance": _grouped(split_frame, "stop_distance_bucket"),
                 "by_first_entry_or_reentry": _grouped(split_frame, "entry_type"),
+                "entry_type_availability": entry_type_availability,
                 "costs": {
                     "fees": total_fees,
                     "gross_positive_price_pnl": gross_positive,
@@ -139,7 +146,7 @@ class ArtifactLossAttribution:
             split: _signal_funnel(
                 trades=frame.loc[frame["split"] == split],
                 signals=signal_frame.loc[signal_frame["split"] == split],
-                split_metrics=dict(metrics.get(split, {}).get("metrics", {})),
+                split_metrics=_split_metric_context(metrics, split),
             )
             for split in sorted(frame["split"].astype(str).unique())
         }
@@ -161,7 +168,7 @@ class ArtifactLossAttribution:
                 "The report reuses saved trades, signals and metrics; it does not rerun the strategy.",
                 "Grouped loss attribution is descriptive and cannot prove causality.",
                 "Validation was already inspected and is therefore screening evidence for new hypotheses.",
-                "The existing signal artifact begins after several internal filters, so unavailable funnel stages remain explicit.",
+                "Unavailable funnel or first-entry/reentry fields remain explicit and are not inferred.",
             ],
         }
 
@@ -312,6 +319,60 @@ def _signal_funnel(
     signals: pd.DataFrame,
     split_metrics: Mapping[str, Any],
 ) -> dict[str, Any]:
+    saved_funnel = split_metrics.get("signal_funnel", {})
+    if isinstance(saved_funnel, Mapping) and saved_funnel:
+        trend_bars = saved_funnel.get("trend_bars_1h", {})
+        pullbacks = saved_funnel.get("pullback_candidates_15m", {})
+        skipped = saved_funnel.get("skipped", {})
+        return {
+            "trend_1h": {
+                "bar_counts_by_direction": (
+                    dict(trend_bars) if isinstance(trend_bars, Mapping) else {}
+                ),
+                "directions": sorted(
+                    str(key)
+                    for key, value in (
+                        trend_bars.items()
+                        if isinstance(trend_bars, Mapping)
+                        else ()
+                    )
+                    if int(value) > 0
+                ),
+            },
+            "pullback_candidates_15m": {
+                "count": (
+                    int(sum(int(value) for value in pullbacks.values()))
+                    if isinstance(pullbacks, Mapping)
+                    else None
+                ),
+                "by_direction": (
+                    dict(pullbacks) if isinstance(pullbacks, Mapping) else {}
+                ),
+                "availability": (
+                    "recorded"
+                    if isinstance(pullbacks, Mapping)
+                    else "not_recorded_in_existing_artifact"
+                ),
+            },
+            "confirmations_15m": None,
+            "confirmations_15m_availability": "not_separately_recorded",
+            "trigger_records_5m": int(saved_funnel.get("triggers_5m", len(signals))),
+            "entry_candidates": int(
+                saved_funnel.get("entry_candidates", len(signals))
+            ),
+            "filled_entries": int(saved_funnel.get("entered", len(trades))),
+            "signal_status_counts": (
+                {
+                    str(name): int(count)
+                    for name, count in signals["status"].value_counts().items()
+                }
+                if "status" in signals
+                else {}
+            ),
+            "filter_or_cancel_reasons": (
+                dict(skipped) if isinstance(skipped, Mapping) else {}
+            ),
+        }
     trend_legs = (
         int(signals["trend_leg_number"].nunique())
         if "trend_leg_number" in signals and not signals.empty
@@ -350,3 +411,37 @@ def _signal_funnel(
         ),
         "filter_or_cancel_reasons": dict(split_metrics.get("skipped_setups", {})),
     }
+
+
+def _normalize_trade_columns(trades: pd.DataFrame) -> pd.DataFrame:
+    """Map reviewed Native runner schemas into the shared diagnostic contract."""
+
+    frame = trades.copy()
+    aliases = {
+        "entry_raw_price": ("entry_price",),
+        "initial_stop_price": ("stop_price",),
+        "fees": ("fees_and_liquidation_cost",),
+        "net_return_on_entry_equity": ("return_on_initial_equity",),
+    }
+    for target, sources in aliases.items():
+        if target in frame:
+            continue
+        source = next((name for name in sources if name in frame), None)
+        if source is not None:
+            frame[target] = frame[source]
+    if "trade_id" not in frame:
+        frame = frame.reset_index(drop=True)
+        frame["trade_id"] = frame.index.astype(int) + 1
+    return frame
+
+
+def _split_metric_context(
+    metrics: Mapping[str, Any], split: str
+) -> dict[str, Any]:
+    raw = metrics.get(split, {})
+    if not isinstance(raw, Mapping):
+        return {}
+    context = dict(raw.get("metrics", {}))
+    if isinstance(raw.get("signal_funnel"), Mapping):
+        context["signal_funnel"] = dict(raw["signal_funnel"])
+    return context

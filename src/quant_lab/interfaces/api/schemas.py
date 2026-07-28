@@ -19,6 +19,34 @@ class SessionResponse(StrictModel):
     status: str
     created_at: str
     updated_at: str
+    research_mode: Literal["quick", "guided", "expert"]
+    mode_config: dict[str, Any]
+    mode_revision: int
+
+
+class ResearchModeDefinitionResponse(StrictModel):
+    mode: Literal["quick", "guided", "expert"]
+    label: str
+    description: str
+    agent_run_mode: Literal["supervised", "guided", "bounded_autonomous"]
+    pause_policy: Literal["critical_only", "key_decisions", "every_stage"]
+    stage_visibility: Literal["summary", "guided", "full"]
+    default_trial_budget: int
+    auto_failure_diagnostics: bool
+
+
+class ResearchModeConfigRequest(StrictModel):
+    agent_run_mode: Literal["supervised", "guided", "bounded_autonomous"] | None = None
+    pause_policy: Literal["critical_only", "key_decisions", "every_stage"] | None = None
+    stage_visibility: Literal["summary", "guided", "full"] | None = None
+    default_trial_budget: int | None = Field(default=None, ge=1, le=200)
+    auto_failure_diagnostics: bool | None = None
+
+
+class UpdateResearchModeRequest(StrictModel):
+    mode: Literal["quick", "guided", "expert"]
+    mode_config: ResearchModeConfigRequest | None = None
+    confirmed_by_user: bool
 
 
 class CreateMessageRequest(StrictModel):

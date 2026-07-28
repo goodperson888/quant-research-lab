@@ -1,0 +1,156 @@
+schema_version: 1
+artifact_type: strategy_formalization_proposal
+status: draft_waiting_user_confirmation
+session_id: session_b8410668d40c436983920450b8d7919d
+subject_id: draft_72f6ee77bec04d6d8e1351ff01073eb5
+strategy_id: ema_mtf_pullback_scalp_20x
+name: ETH 永续多周期 EMA 回踩超短线
+source:
+  type: natural_language
+  received_at_utc: "2026-07-28T07:24:34Z"
+  description: >-
+    用户希望研究 ETH/USDT USDT 本位永续的 EMA 超短线策略，
+    快进快出、低频、确认后入场，并显式研究 20 倍隔离杠杆。
+
+research_scope:
+  historical_research_only: true
+  live_trading_enabled: false
+  dry_run_started: false
+  market_profile: crypto_perpetual.binance.eth
+  symbol: ETHUSDT
+  instrument_type: usdt_margined_perpetual
+  timezone: UTC
+  pipeline_profile: fast_screen
+  execution_model: conservative_crypto_perpetual_v1
+  data_timeframes:
+    trend: 1h
+    setup: 15m
+    trigger: 5m
+
+parameters:
+  trend_ema_fast_1h: 20
+  trend_ema_slow_1h: 50
+  setup_ema_fast_15m: 9
+  setup_ema_pullback_15m: 21
+  setup_ema_slow_15m: 50
+  trigger_ema_5m: 9
+  atr_period_5m: 14
+  max_trigger_bars_5m: 3
+  max_entry_distance_from_15m_ema21_pct: 0.35
+  minimum_stop_distance_pct: 0.30
+  maximum_stop_distance_pct: 0.60
+  stop_buffer_atr_fraction: 0.15
+  take_profit_r_multiple: 1.50
+  max_holding_bars_5m: 6
+  cooldown_minutes: 45
+  cooldown_after_loss_minutes: 90
+  max_trades_per_utc_day: 3
+  risk_per_trade_equity_pct: 0.25
+  leverage: 20
+  margin_mode: isolated
+
+signal_timing:
+  closed_bars_only: true
+  higher_timeframe_values_available_after_close: true
+  entry_timing: next_5m_bar_open
+  same_bar_exit_priority:
+    - liquidation
+    - protective_stop
+    - take_profit
+
+long_rules:
+  trend_filter:
+    - 1h EMA20 is above EMA50 on the latest closed 1h bar.
+    - 1h EMA20 is higher than its value two closed 1h bars earlier.
+    - Latest closed 1h close is above EMA20.
+  setup:
+    - 15m EMA9 is above EMA21 and EMA21 is above EMA50.
+    - A closed 15m bar trades at or below EMA21 but closes at or above EMA21.
+    - The same 15m bar does not close below EMA50.
+  trigger:
+    - Within the next three closed 5m bars, a 5m bar closes above the previous 5m high.
+    - The trigger close is above 5m EMA9.
+    - Planned entry is no more than 0.35 percent above 15m EMA21.
+  entry:
+    - Enter long at the next 5m bar open using conservative market-order execution.
+
+short_rules:
+  trend_filter:
+    - 1h EMA20 is below EMA50 on the latest closed 1h bar.
+    - 1h EMA20 is lower than its value two closed 1h bars earlier.
+    - Latest closed 1h close is below EMA20.
+  setup:
+    - 15m EMA9 is below EMA21 and EMA21 is below EMA50.
+    - A closed 15m bar trades at or above EMA21 but closes at or below EMA21.
+    - The same 15m bar does not close above EMA50.
+  trigger:
+    - Within the next three closed 5m bars, a 5m bar closes below the previous 5m low.
+    - The trigger close is below 5m EMA9.
+    - Planned entry is no more than 0.35 percent below 15m EMA21.
+  entry:
+    - Enter short at the next 5m bar open using conservative market-order execution.
+
+risk_and_exit:
+  position_sizing: >-
+    Size from 0.25 percent account-equity risk using stop distance plus expected
+    round-trip fees and slippage. Leverage changes isolated margin requirement;
+    it does not multiply the risk budget or authorize using 20x account exposure.
+  initial_stop:
+    long: below the 15m pullback low minus 0.15 times 5m ATR14
+    short: above the 15m pullback high plus 0.15 times 5m ATR14
+    rejection_rule: skip entries whose stop distance is outside 0.30 to 0.60 percent
+  take_profit: 1.50R from the conservatively executed entry
+  time_stop: exit at the next 5m bar open after six completed holding bars
+  structure_exit:
+    long: exit next bar when a closed 5m bar closes below 5m EMA21
+    short: exit next bar when a closed 5m bar closes above 5m EMA21
+  concurrency:
+    max_open_positions: 1
+    pyramiding: false
+    reentry_same_setup: false
+
+execution_and_costs:
+  order_type: market
+  taker_fee_per_side: 0.0005
+  baseline_slippage_bps_per_side: 2
+  cheap_sensitivity_slippage_bps_per_side: 5
+  funding_policy: actual_when_available_otherwise_adverse_nonzero_proxy
+  mark_price_liquidation: true
+  limit_fill_assumption: not_applicable_to_baseline_market_entries
+  precision_and_minimum_order_rules: required
+  historical_leverage_tiers: conservative_assumption_not_official_account_history
+
+skip_conditions:
+  - Higher-timeframe bars required by the signal are not closed.
+  - Trigger appears after the three-bar trigger window.
+  - Entry is too far from 15m EMA21.
+  - Stop distance is outside the configured bounds.
+  - A position is already open.
+  - Daily trade limit or cooldown is active.
+  - Required mark or funding data is absent and the selected pipeline stage forbids fallback.
+
+known_ambiguities:
+  - id: primary_venue
+    selected_interpretation: Binance ETHUSDT for first historical validation because the local annual dataset is available.
+    alternative: OKX ETH-USDT-SWAP requires separate market-profile validation.
+  - id: leverage_meaning
+    selected_interpretation: 20x isolated margin setting with 0.25 percent equity risk sizing.
+    rejected_interpretation: 20x full-account directional exposure.
+  - id: low_frequency
+    selected_interpretation: maximum three entries per UTC day, one position, cooldown rules.
+    alternative: maximum two entries per UTC day.
+  - id: fast_exit
+    selected_interpretation: maximum 30-minute hold, 1.50R target, structural EMA21 exit.
+    alternative: 45-minute maximum hold.
+
+validation_boundaries:
+  baseline_must_be_frozen_before_execution: true
+  locked_test_allowed: false
+  parameter_search_allowed: false
+  no_profit_claim: true
+  first_step_after_freeze:
+    - correctness
+    - smoke
+  next_step_only_if_passed:
+    - fast_screen
+    - viability

@@ -1,0 +1,70 @@
+schema_version: 1
+strategy_spec_id: ema_mtf_pullback_scalp_20x_v0
+session_id: session_b8410668d40c436983920450b8d7919d
+strategy_version_id: version_1978576d128f420da09793a59bd37f89
+strategy_artifact_key: strategies/research/ema-mtf-scalp-20x/draft-v0.yaml
+market_profile: crypto_perpetual.binance.eth
+data_manifest_key: data/manifests/binance_ethusdt_perpetual_20250720_20260720_v2.json
+execution_model_id: conservative_crypto_perpetual_v1
+
+diagnostic_reference:
+  baseline_manifest_artifact_key: experiments/runs/20260728T081309Z-ema-fast-screen-d76da031/manifest.json
+  baseline_metrics_artifact_key: experiments/runs/20260728T081309Z-ema-fast-screen-d76da031/metrics.json
+  validation_evidence_status: screening_contaminated
+  locked_test_used: false
+
+smoke:
+  warmup_start_utc_inclusive: "2025-07-20T00:00:00Z"
+  start_utc_inclusive: "2025-07-27T00:00:00Z"
+  end_utc_exclusive: "2025-08-10T00:00:00Z"
+
+time_splits:
+  train:
+    warmup_start_utc_inclusive: "2025-07-20T00:00:00Z"
+    start_utc_inclusive: "2025-07-27T00:00:00Z"
+    end_utc_exclusive: "2026-03-20T00:00:00Z"
+  validation:
+    warmup_start_utc_inclusive: "2026-03-13T00:00:00Z"
+    start_utc_inclusive: "2026-03-20T00:00:00Z"
+    end_utc_exclusive: "2026-06-20T00:00:00Z"
+  locked_test:
+    start_utc_inclusive: "2026-06-20T00:00:00Z"
+    end_utc_exclusive: "2026-07-20T00:00:00Z"
+    use_in_this_authorization: false
+    status: reserved_uninspected
+
+cost_model:
+  execution: taker
+  fee_per_side: 0.0005
+  slippage_bps_per_side: 2.0
+
+funding:
+  required: true
+  missing_policy: adverse_p99_abs_observed
+  zero_funding_fallback_allowed: false
+
+execution:
+  initial_equity: 10000.0
+  leverage: 20.0
+  leverage_explicitly_requested: true
+  margin_mode: isolated
+  risk_per_trade_fraction: 0.0025
+  max_trades_per_day: 3
+  cooldown_minutes: 45
+  cooldown_after_loss_minutes: 90
+  min_stop_distance_fraction: 0.003
+  max_stop_distance_fraction: 0.006
+  stop_buffer_atr_fraction: 0.15
+  take_profit_r_multiple: 1.5
+  max_holding_bars_5m: 6
+  max_entry_distance_fraction: 0.0035
+  max_trigger_bars_5m: 3
+
+random_seed: 20260728
+
+limitations:
+  - This is Native Engine research on Binance reference data only; it is not OKX validation.
+  - The locked interval is reserved and excluded from correctness, smoke, fast_screen and viability.
+  - Historical account-specific leverage tiers are unavailable and leverage safety is not proven.
+  - Mark-price 5m OHLC is unavailable; smoke/fast-screen uses an explicit last-price fallback for liquidation checks.
+  - No parameter search, cost stress, regime validation, dry-run or live trade is authorized.

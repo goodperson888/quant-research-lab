@@ -1,0 +1,99 @@
+baseline_version_id: version_1978576d128f420da09793a59bd37f89
+subject_id: version_1978576d128f420da09793a59bd37f89
+hypothesis: >-
+  在保持入场、仓位、止损、止盈、时间止损和成本模型不变时，仅改变
+  ema21_structure_exit 的确认速度，可能减少过早结构退出造成的亏损；
+  若改善只出现在单一变体或 train/validation 方向不一致，则否定该假设。
+rule_diff:
+  component_type: exit
+  component_hypothesis_id: component_hypothesis_f0164aa6a5e44b148a616562652fc401
+  fixed_rules:
+    - All entry, sizing, protective-stop, take-profit and time-stop rules remain unchanged.
+    - Exit decisions use closed 5m bars only and execute at the next 5m bar open.
+    - Intrabar liquidation, protective stop and take profit keep their existing conservative priority.
+  variants:
+    current:
+      long: >-
+        After one closed 5m bar closes below 5m EMA21, exit at the next 5m bar open.
+      short: >-
+        After one closed 5m bar closes above 5m EMA21, exit at the next 5m bar open.
+    tighter:
+      long: >-
+        After one closed 5m bar closes below 5m EMA9, exit at the next 5m bar open.
+      short: >-
+        After one closed 5m bar closes above 5m EMA9, exit at the next 5m bar open.
+    looser:
+      long: >-
+        After two consecutive closed 5m bars close below 5m EMA21, exit at the
+        open following the second closed bar.
+      short: >-
+        After two consecutive closed 5m bars close above 5m EMA21, exit at the
+        open following the second closed bar.
+  interpretation:
+    tighter: Earlier adverse-momentum exit using EMA9.
+    looser: Later confirmation requiring two adverse EMA21 closes.
+  forbidden_changes:
+    - No entry-rule changes.
+    - No protective-stop, take-profit, time-stop or position-size changes.
+    - No leverage, fee, slippage or funding-assumption changes.
+    - No locked-test access.
+evidence_refs:
+  - experiments/runs/20260728T083355Z-diagnostic-11a391b8/loss-attribution.json
+  - experiments/runs/20260728T083355Z-diagnostic-11a391b8/regime-diagnostic.json
+  - reports/diagnostics/20260728T083355Z-diagnostic-11a391b8.json
+parameter_space:
+  - name: structure_exit_variant
+    kind: categorical
+    values:
+      - current
+      - tighter
+      - looser
+data_splits:
+  train: >-
+    [2025-07-27T00:00:00Z, 2026-03-20T00:00:00Z);
+    diagnostic search split
+  validation: >-
+    [2026-03-20T00:00:00Z, 2026-06-20T00:00:00Z);
+    already inspected and therefore screening_contaminated
+  locked_test: >-
+    [2026-06-20T00:00:00Z, 2026-07-20T00:00:00Z);
+    reserved_uninspected and forbidden for this Batch
+cost_model:
+  venue: Binance
+  instrument: ETHUSDT USDT-margined perpetual
+  execution: taker
+  taker_fee_per_side: 0.0005
+  slippage_bps_per_side: 2.0
+  leverage: 20.0
+  margin_mode: isolated
+  funding_policy: actual_when_available_otherwise_adverse_p99_abs_observed
+  zero_funding_fallback_allowed: false
+  mark_price_policy: explicit_last_price_fallback_with_limitations
+objectives:
+  - metric: incremental_net_return
+    direction: maximize
+constraints:
+  - metric: incremental_net_return
+    operator: gt
+    value: 0.0
+  - metric: validation_trade_count
+    operator: gte
+    value: 30
+  - metric: validation_max_drawdown_abs
+    operator: lte
+    value: 0.0665
+estimated_trials: 3
+estimated_minutes: 10
+failure_conditions:
+  - Train and contaminated-validation improvement directions disagree.
+  - No variant improves incremental net return after the unchanged cost model.
+  - Validation maximum drawdown exceeds 6.65 percent.
+  - The apparent improvement depends on an isolated parameter value rather than a stable interpretation.
+stopping_conditions:
+  - Stop after the three explicitly defined variants.
+  - Stop immediately if the evaluator attempts to access locked-test data.
+  - Preserve completed Trial evidence if a Trial fails or exceeds resource limits.
+rollback_plan: >-
+  Reject the Candidate/Proposal, preserve all Trial evidence, keep the immutable
+  Baseline and its rejected standalone StrategyOutcome unchanged.
+source: external_agent

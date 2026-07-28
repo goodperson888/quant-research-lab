@@ -40,6 +40,16 @@ class ProductRepository(Protocol):
 
     def get_session(self, session_id: str) -> ResearchSession: ...
 
+    def update_session_research_mode(
+        self,
+        session_id: str,
+        *,
+        research_mode: str,
+        mode_config: Mapping[str, Any],
+        mode_revision: int,
+        updated_at: str,
+    ) -> ResearchSession: ...
+
     def create_research_budget(self, budget: ResearchBudget) -> ResearchBudget: ...
 
     def get_research_budget(self, session_id: str) -> ResearchBudget: ...

@@ -89,11 +89,13 @@ from .schemas import (
     ResearchHandoffResponse,
     ResearchAuthorizationResponse,
     ResearchAuthorizationStageResponse,
+    ResearchModeDefinitionResponse,
     ImprovementDirectionResponse,
     ProposalTransitionRequest,
     ProposalBudgetRequest,
     SessionDetailResponse,
     SessionResponse,
+    UpdateResearchModeRequest,
     StrategyDraftResponse,
     StrategyOutcomeResponse,
     StrategyVersionResponse,
@@ -166,7 +168,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=LOCAL_ORIGINS,
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PUT"],
         allow_headers=["Content-Type"],
     )
     application.state.repository = repository
@@ -226,6 +228,14 @@ def create_app(
         return project_reader.read(provider_status=provider_status)
 
     @application.get(
+        "/api/research-modes",
+        response_model=list[ResearchModeDefinitionResponse],
+        tags=["research"],
+    )
+    def research_modes() -> Any:
+        return service.list_research_mode_definitions()
+
+    @application.get(
         "/api/research/sessions",
         response_model=list[SessionResponse],
         tags=["research"],
@@ -241,6 +251,34 @@ def create_app(
     )
     def create_session(body: CreateSessionRequest) -> Any:
         return service.create_research_session(title=body.title)
+
+    @application.get(
+        "/api/research/sessions/{session_id}/mode",
+        response_model=SessionResponse,
+        tags=["research"],
+    )
+    def get_session_mode(session_id: str) -> Any:
+        return service.get_research_session(session_id)
+
+    @application.put(
+        "/api/research/sessions/{session_id}/mode",
+        response_model=SessionResponse,
+        tags=["research"],
+    )
+    def update_session_mode(
+        session_id: str, body: UpdateResearchModeRequest
+    ) -> Any:
+        config = (
+            body.mode_config.model_dump(exclude_none=True)
+            if body.mode_config is not None
+            else None
+        )
+        return service.update_research_mode(
+            session_id=session_id,
+            research_mode=body.mode,
+            mode_config=config,
+            confirmed_by_user=body.confirmed_by_user,
+        )
 
     @application.get(
         "/api/research/sessions/{session_id}",
@@ -349,8 +387,17 @@ def create_app(
         response_model=list[ExperimentPlanResponse],
         tags=["experiments"],
     )
-    def list_experiment_plans() -> Any:
-        return service.list_experiment_plans()
+    def list_experiment_plans(
+        baseline_version_id: str | None = Query(default=None),
+    ) -> Any:
+        plans = list(service.list_experiment_plans())
+        if baseline_version_id is not None:
+            plans = [
+                item
+                for item in plans
+                if item.baseline_version_id == baseline_version_id
+            ]
+        return plans
 
     @application.post(
         "/api/experiment-plans",
@@ -622,8 +669,17 @@ def create_app(
         response_model=list[StrategyOutcomeResponse],
         tags=["research-pipeline"],
     )
-    def strategy_outcomes() -> Any:
-        return pipeline_service.list_strategy_outcomes()
+    def strategy_outcomes(
+        strategy_version_id: str | None = Query(default=None),
+    ) -> Any:
+        outcomes = list(pipeline_service.list_strategy_outcomes())
+        if strategy_version_id is not None:
+            outcomes = [
+                item
+                for item in outcomes
+                if item.strategy_version_id == strategy_version_id
+            ]
+        return outcomes
 
     @application.post(
         "/api/strategy-outcomes",
@@ -639,8 +695,18 @@ def create_app(
         response_model=list[ComponentCandidateResponse],
         tags=["research-components"],
     )
-    def component_candidates() -> Any:
-        return pipeline_service.list_component_candidates()
+    def component_candidates(
+        source_strategy_version_id: str | None = Query(default=None),
+    ) -> Any:
+        candidates = list(pipeline_service.list_component_candidates())
+        if source_strategy_version_id is None:
+            return candidates
+        evidence_ids = {
+            item.id
+            for item in pipeline_service.list_component_evidence()
+            if item.source_strategy_version_id == source_strategy_version_id
+        }
+        return [item for item in candidates if item.evidence_id in evidence_ids]
 
     @application.get(
         "/api/component-evidence",
@@ -652,9 +718,16 @@ def create_app(
         timeframe: str | None = Query(default=None),
         regime: str | None = Query(default=None),
         evidence_level: str | None = Query(default=None),
+        source_strategy_version_id: str | None = Query(default=None),
         sort_by: str = Query(default="created_at", pattern="^(created_at|incremental_net_return)$"),
     ) -> Any:
         evidence = list(pipeline_service.list_component_evidence())
+        if source_strategy_version_id is not None:
+            evidence = [
+                item
+                for item in evidence
+                if item.source_strategy_version_id == source_strategy_version_id
+            ]
         if market_profile is not None:
             evidence = [item for item in evidence if item.target_market_profile == market_profile]
         if timeframe is not None:
@@ -729,8 +802,15 @@ def create_app(
         response_model=list[RegimeValidationResponse],
         tags=["research-regimes"],
     )
-    def regime_validations() -> Any:
-        return pipeline_service.list_regime_validations()
+    def regime_validations(
+        subject_id: str | None = Query(default=None),
+    ) -> Any:
+        validations = list(pipeline_service.list_regime_validations())
+        if subject_id is not None:
+            validations = [
+                item for item in validations if item.subject_id == subject_id
+            ]
+        return validations
 
     @application.post(
         "/api/regime-validations",

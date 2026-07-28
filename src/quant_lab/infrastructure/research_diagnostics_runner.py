@@ -46,9 +46,12 @@ class ResearchDiagnosticsRunner:
         subject_id = payload["subject_id"]
         session_id = payload["session_id"]
         manifest = json.loads(self.artifacts.get(payload["fast_screen_manifest_artifact_key"]))
-        if manifest.get("run_type") != "candidate_fast_screen":
-            raise ValueError("diagnostics require a saved candidate fast-screen manifest")
-        if manifest.get("strategy", {}).get("candidate_version_id") != subject_id:
+        if (
+            manifest.get("status") != "succeeded"
+            or manifest.get("pipeline_stage") != "fast_screen"
+        ):
+            raise ValueError("diagnostics require a saved successful fast-screen manifest")
+        if _manifest_strategy_subject(manifest) != subject_id:
             raise ValueError("fast-screen evidence belongs to another subject")
         if manifest.get("locked_test", {}).get("used") is not False:
             raise ValueError("diagnostics must not consume locked-test evidence")
@@ -340,14 +343,27 @@ class ResearchDiagnosticsRunner:
             dataset="futures_ohlcv",
             timeframe=config.timeframe,
         )
-        validation_end = manifest["time_splits"]["validation"]["end_utc_exclusive"]
+        validation_end = _manifest_validation_end(manifest)
         bars = bars.loc[
             pd.to_datetime(bars["timestamp"], utc=True) < pd.Timestamp(validation_end)
         ].copy()
         labels = ExAnteRegimeDetector(config).detect(bars)
         normalized = trades.copy()
         if "net_return" not in normalized:
-            normalized["net_return"] = normalized["net_return_on_entry_equity"]
+            return_column = next(
+                (
+                    name
+                    for name in (
+                        "net_return_on_entry_equity",
+                        "return_on_initial_equity",
+                    )
+                    if name in normalized
+                ),
+                None,
+            )
+            if return_column is None:
+                raise ValueError("trade evidence does not contain a net-return field")
+            normalized["net_return"] = normalized[return_column]
         metrics, groups = summarize_trades_by_regime(
             normalized, labels, minimum_trades=config.minimum_trades_per_regime
         )
@@ -445,3 +461,28 @@ def _artifact_record(
     if rows is not None:
         result["rows"] = rows
     return result
+
+
+def _manifest_strategy_subject(manifest: Mapping[str, Any]) -> str | None:
+    strategy = manifest.get("strategy", {})
+    if not isinstance(strategy, Mapping):
+        return None
+    for key in ("candidate_version_id", "strategy_version_id"):
+        value = strategy.get(key)
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def _manifest_validation_end(manifest: Mapping[str, Any]) -> str:
+    for key in ("time_splits", "time_range_or_splits"):
+        splits = manifest.get(key)
+        if not isinstance(splits, Mapping):
+            continue
+        validation = splits.get("validation")
+        if not isinstance(validation, Mapping):
+            continue
+        value = validation.get("end_utc_exclusive")
+        if isinstance(value, str):
+            return value
+    raise ValueError("fast-screen manifest does not declare validation end")

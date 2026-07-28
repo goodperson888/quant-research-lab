@@ -54,6 +54,26 @@ def add_governance_parsers(subparsers: argparse._SubParsersAction) -> None:
     )
     handoff.add_argument("--session-id", required=True)
 
+    show_mode = subparsers.add_parser(
+        "show-research-mode",
+        help="Show the authoritative ResearchSession mode shared by Web, CLI and Agents.",
+    )
+    show_mode.add_argument("--session-id", required=True)
+
+    set_mode = subparsers.add_parser(
+        "set-research-mode",
+        help="Update one ResearchSession mode and append an audit event.",
+    )
+    set_mode.add_argument("--session-id", required=True)
+    set_mode.add_argument(
+        "--mode", choices=["quick", "guided", "expert"], required=True
+    )
+    set_mode.add_argument(
+        "--mode-config-json",
+        help="Optional JSON overrides for expert pacing, visibility and bounded Trial defaults.",
+    )
+    set_mode.add_argument("--confirmed-by-user", action="store_true")
+
     subparsers.add_parser(
         "list-backtest-engines", help="List declared engine capabilities; runs nothing."
     )
@@ -178,6 +198,37 @@ def handle_governance_command(
     if args.command == "show-session-handoff":
         handoff = service.get_latest_session_handoff(args.session_id)
         print(json.dumps(asdict(handoff), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "show-research-mode":
+        session = service.get_research_session(args.session_id)
+        print(
+            json.dumps(
+                {
+                    "session_id": session.id,
+                    "research_mode": session.research_mode,
+                    "mode_config": session.mode_config,
+                    "mode_revision": session.mode_revision,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+
+    if args.command == "set-research-mode":
+        mode_config = (
+            json.loads(args.mode_config_json) if args.mode_config_json else None
+        )
+        if mode_config is not None and not isinstance(mode_config, dict):
+            raise ValueError("mode_config_json must decode to a JSON object")
+        session = service.update_research_mode(
+            session_id=args.session_id,
+            research_mode=args.mode,
+            mode_config=mode_config,
+            confirmed_by_user=args.confirmed_by_user,
+        )
+        print(json.dumps(asdict(session), ensure_ascii=False, indent=2))
         return 0
 
     if args.command == "list-improvement-directions":

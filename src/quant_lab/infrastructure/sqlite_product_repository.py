@@ -30,6 +30,7 @@ from quant_lab.domain.models import (
     ResearchAuthorization,
     ResearchAuthorizationStage,
     ResearchHandoff,
+    RESEARCH_MODE_DEFINITIONS,
     StrategyDraft,
     StrategyOutcome,
     StrategyVersion,
@@ -39,7 +40,7 @@ from quant_lab.domain.models import (
 )
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 class SQLiteProductRepository:
@@ -71,7 +72,10 @@ class SQLiteProductRepository:
                     title TEXT NOT NULL,
                     status TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    research_mode TEXT NOT NULL DEFAULT 'guided',
+                    mode_config_json TEXT NOT NULL DEFAULT '{}',
+                    mode_revision INTEGER NOT NULL DEFAULT 1
                 );
 
                 CREATE TABLE IF NOT EXISTS research_budgets (
@@ -501,6 +505,11 @@ class SQLiteProductRepository:
                     "ADD COLUMN viability_gate_result_id TEXT"
                 )
             migrations = {
+                "research_sessions": {
+                    "research_mode": "TEXT NOT NULL DEFAULT 'guided'",
+                    "mode_config_json": "TEXT NOT NULL DEFAULT '{}'",
+                    "mode_revision": "INTEGER NOT NULL DEFAULT 1",
+                },
                 "proposals": {
                     "baseline_version_id": "TEXT",
                     "subject_id": "TEXT",
@@ -566,6 +575,19 @@ class SQLiteProductRepository:
                         connection.execute(
                             f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
                         )
+            for mode, config in RESEARCH_MODE_DEFINITIONS.items():
+                connection.execute(
+                    """
+                    UPDATE research_sessions
+                    SET mode_config_json = ?
+                    WHERE research_mode = ?
+                      AND (mode_config_json = '{}' OR mode_config_json = '')
+                    """,
+                    (
+                        json.dumps(config, ensure_ascii=False, sort_keys=True),
+                        mode,
+                    ),
+                )
             connection.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS one_trial_per_parameter_signature "
                 "ON trials(experiment_plan_id, parameter_signature) "
@@ -582,8 +604,11 @@ class SQLiteProductRepository:
         with self._connect() as connection:
             connection.execute(
                 """
-                INSERT INTO research_sessions (id, title, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO research_sessions (
+                    id, title, status, created_at, updated_at,
+                    research_mode, mode_config_json, mode_revision
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.id,
@@ -591,9 +616,43 @@ class SQLiteProductRepository:
                     session.status,
                     session.created_at,
                     session.updated_at,
+                    session.research_mode,
+                    json.dumps(
+                        session.mode_config, ensure_ascii=False, sort_keys=True
+                    ),
+                    session.mode_revision,
                 ),
             )
         return session
+
+    def update_session_research_mode(
+        self,
+        session_id: str,
+        *,
+        research_mode: str,
+        mode_config: Mapping[str, Any],
+        mode_revision: int,
+        updated_at: str,
+    ) -> ResearchSession:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE research_sessions
+                SET research_mode = ?, mode_config_json = ?,
+                    mode_revision = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    research_mode,
+                    json.dumps(mode_config, ensure_ascii=False, sort_keys=True),
+                    mode_revision,
+                    updated_at,
+                    session_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise NotFoundError(f"research session not found: {session_id}")
+        return self.get_session(session_id)
 
     def list_sessions(self) -> Sequence[ResearchSession]:
         with self._connect() as connection:
@@ -2248,12 +2307,16 @@ class SQLiteProductRepository:
 
     @staticmethod
     def _session(row: sqlite3.Row) -> ResearchSession:
+        mode_config = json.loads(row["mode_config_json"] or "{}")
         return ResearchSession(
             id=row["id"],
             title=row["title"],
             status=row["status"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            research_mode=row["research_mode"],
+            mode_config=mode_config,
+            mode_revision=row["mode_revision"],
         )
 
     @staticmethod
