@@ -103,6 +103,7 @@ intents:
       - docs/15-产品需求规格-v1.md
       - docs/18-Agent与Skill执行架构.md
       - docs/20-Freqtrade能力边界与融合方案.md
+      - docs/27-保守交易执行模型-v1.md
     required_preconditions:
       - baseline_frozen
       - market_profile_matches_validation_scope
@@ -184,6 +185,7 @@ intents:
       - docs/18-Agent与Skill执行架构.md
       - docs/25-批量策略研究闭环.md
       - docs/20-Freqtrade能力边界与融合方案.md
+      - docs/27-保守交易执行模型-v1.md
     required_preconditions:
       - candidate_or_baseline_version_selected
       - pipeline_profile_selected

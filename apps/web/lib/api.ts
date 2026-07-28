@@ -102,6 +102,33 @@ export type WorkerResourcePolicy = {
   kill_on_memory_limit?: boolean;
 };
 
+export type ExecutionModelSummary = {
+  model_id: string;
+  venue: string;
+  market_profile: string;
+  symbol: string;
+  status: string;
+  default_leverage: number;
+  max_research_leverage: number;
+  live_trading_enabled: boolean;
+  margin_mode: string;
+  mark_price_liquidation: boolean;
+  same_bar_priority: string[];
+  funding_policy: string;
+  leverage_tiers_status: string;
+  tier_source: string;
+  historical_tiers_complete: boolean;
+  precision: {
+    tick_size: number;
+    quantity_step: number;
+    minimum_quantity: number;
+    minimum_notional: number;
+    quantity_unit: string;
+    contract_size_base: number;
+  };
+  limitations: string[];
+};
+
 export type Session = {
   id: string;
   title: string;

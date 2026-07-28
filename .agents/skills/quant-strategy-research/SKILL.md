@@ -70,6 +70,13 @@ drafts, or presenting a Run Bundle.
 - Read `docs/20-Freqtrade能力边界与融合方案.md` before baseline or stress execution. Use the native engine for current smoke/fast-screen evidence and Freqtrade only as a reviewed reconciliation/full-validation adapter.
 - Do not relabel existing native runs as Freqtrade results. Do not enable Hyperopt, FreqAI or dry-run merely because their modules or CLI commands exist.
 
+For crypto-perpetual baseline or stress work, also read
+`docs/27-保守交易执行模型-v1.md` and load
+`configs/execution_models/conservative_crypto_perpetual_v1.yaml`. Leverage above 1 must be an
+explicit immutable research setting. Historical/account maintenance tiers that are unavailable
+must remain labelled conservative assumptions; mark-price fallback and funding imputation must be
+reported.
+
 ## Bound parameter search
 
 Do not tune parameters conversationally or one-by-one without a budget. Require an approved ExperimentPlan containing:

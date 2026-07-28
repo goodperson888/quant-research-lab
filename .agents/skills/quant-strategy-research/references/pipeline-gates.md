@@ -28,6 +28,15 @@ An incremental pass does not imply viability. “Less loss” may be diagnostic 
 
 The Worker must re-check the full-stress gate. Do not rely only on the Agent or HTTP payload.
 
+## Perpetual execution model
+
+Use `conservative_crypto_perpetual_v1` for perpetual baseline/stress execution semantics. Keep
+leverage=1 unless an immutable research config explicitly requests a higher value. Check precision,
+minimum order rules, isolated initial/maintenance margin, mark-price liquidation, entry/exit fees,
+slippage and funding. On a same-bar conflict use liquidation before protective stop before take
+profit. Historical/account leverage tiers that are unavailable remain conservative assumptions and
+cannot support a leverage-safety claim.
+
 ## Components
 
 Record source strategy, lineage, component type, target Market Profile, incremental metrics, out-of-sample status and failure conditions. A failed source strategy can yield `diagnostic_improvement` or `component_candidate`; it cannot automatically yield a validated factor/component.

@@ -6,6 +6,7 @@ import {
   AgentManifest,
   AgentStatus,
   apiFetch,
+  ExecutionModelSummary,
   ProjectStatus,
   VersioningPolicy,
   WorkerResourcePolicy,
@@ -32,9 +33,13 @@ export function SettingsStatus() {
     queryKey: ["versioning-policy"],
     queryFn: () => apiFetch<VersioningPolicy>("/api/versioning/policy"),
   });
-  if (project.isPending || agent.isPending || manifest.isPending || workerPolicy.isPending || versioning.isPending)
+  const executionModels = useQuery({
+    queryKey: ["execution-models"],
+    queryFn: () => apiFetch<ExecutionModelSummary[]>("/api/execution-models"),
+  });
+  if (project.isPending || agent.isPending || manifest.isPending || workerPolicy.isPending || versioning.isPending || executionModels.isPending)
     return <div className="text-sm text-slate-500">读取本地设置…</div>;
-  if (project.isError || agent.isError || manifest.isError || workerPolicy.isError || versioning.isError)
+  if (project.isError || agent.isError || manifest.isError || workerPolicy.isError || versioning.isError || executionModels.isError)
     return <div className="text-sm text-rose-300">API未连接，无法读取真实状态。</div>;
   return (
     <div className="grid gap-4 lg:grid-cols-2">
@@ -121,6 +126,25 @@ export function SettingsStatus() {
             Worker 资源策略不可用：{workerPolicy.data.reason ?? "unknown"}
           </p>
         )}
+      </Section>
+      <Section title="保守交易执行模型 v1">
+        {executionModels.data.map((model) => (
+          <div key={`${model.model_id}:${model.venue}`} className="space-y-3 border-b border-white/[0.08] pb-4 last:border-0 last:pb-0">
+            <Row label="Venue / Symbol" value={`${model.venue} · ${model.symbol}`} />
+            <Row label="默认杠杆" value={`${model.default_leverage}x`} />
+            <Row label="研究硬上限" value={`${model.max_research_leverage}x · 必须显式设置`} />
+            <Row label="保证金" value={`${model.margin_mode} · mark price 强平`} />
+            <Row label="同K线顺序" value={model.same_bar_priority.join(" → ")} />
+            <Row label="Funding缺口" value={model.funding_policy} />
+            <Row
+              label="历史杠杆阶梯"
+              value={model.historical_tiers_complete ? "complete" : "保守假设 / 未完成"}
+            />
+            <p className="text-xs leading-5 text-amber-200/80">
+              研究模型，不授权交易；50x 安全性不会由模型自动声明。
+            </p>
+          </div>
+        ))}
       </Section>
       <Section title="未来模式（未实现）">
         <Row label="embedded_cloud_provider" value="planned / unsupported" />

@@ -66,7 +66,8 @@ external engine。商业包不捆绑、复制或修改 Freqtrade，`src/quant_la
 
 - 尚未将真实研究策略转成 Freqtrade `IStrategy` 并做逐笔对账；
 - 尚未将 Freqtrade 结果自动导入 Experiment Run/Trial 注册；
-- 尚未建立历史杠杆阶梯和强平模型；
+- Native 已增加 `conservative_crypto_perpetual_v1` 研究级保证金/强平模型；历史交易所和
+  账户级杠杆阶梯仍不可得，当前档位是明确标记的保守假设；
 - 尚未启用 Hyperopt、FreqAI 或 dry-run；
 - `scripts/freqtrade.sh trade` 仍必须返回退出码 3。
 

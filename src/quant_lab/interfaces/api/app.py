@@ -36,6 +36,7 @@ from quant_lab.domain.errors import (
 from quant_lab.domain.models import AgentProviderKind, ExecutionTargetKind
 from quant_lab.domain.models import Constraint, Objective, ParameterSpace
 from quant_lab.infrastructure.llm import UnconfiguredLLMProvider
+from quant_lab.infrastructure.execution_models import ExecutionModelCatalog
 from quant_lab.infrastructure.backtest_engines import (
     FreqtradeBacktestEngineAdapter,
     NativeBacktestEngineAdapter,
@@ -145,6 +146,7 @@ def create_app(
     storage_reporter = StorageReporter(resolved_root)
     artifact_store = LocalArtifactStore(resolved_root)
     versioning_reader = VersioningPolicyReader(resolved_root)
+    execution_model_catalog = ExecutionModelCatalog(resolved_root)
     engine_registry = BacktestEngineRegistry(
         (
             NativeBacktestEngineAdapter(lambda _job: {}),
@@ -439,6 +441,11 @@ def create_app(
     @application.get("/api/backtest-engines", tags=["research-pipeline"])
     def backtest_engines() -> list[dict[str, Any]]:
         return [asdict(item) for item in engine_registry.capabilities()]
+
+    @application.get("/api/execution-models", tags=["research-pipeline"])
+    def execution_models() -> list[dict[str, Any]]:
+        """Expose reviewed research-only execution semantics; never submit orders."""
+        return list(execution_model_catalog.list_summaries())
 
     @application.get("/api/settings/status", tags=["system"])
     def settings_status() -> dict[str, Any]:
