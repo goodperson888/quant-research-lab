@@ -17,12 +17,14 @@ class NativeBacktestEngineAdapter:
         return BacktestEngineCapabilities(
             engine_id="native_research",
             supported_stages=("smoke", "fast_screen", "cheap_cost_sensitivity"),
-            supports_exchange_execution_model=False,
+            supports_exchange_execution_model=True,
             supports_dry_run=False,
-            requires_exchange_metadata=False,
+            requires_exchange_metadata=True,
             notes=(
                 "Conservative project-owned semantics for fast fail and custom evidence.",
                 "It is the engine used by the current recorded research runs.",
+                "New adapters may use conservative_crypto_perpetual_v1 for precision, margin, funding and liquidation semantics.",
+                "Historical leverage tiers remain explicit conservative assumptions, not official account history.",
             ),
         )
 

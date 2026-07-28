@@ -54,10 +54,9 @@ adjustments:
 roll_rules: not_applicable
 corporate_action_rules: not_applicable
 unmodeled_or_pending_constraints:
-  - liquidation_engine
-  - leverage_tiers
-  - minimum_order_notional
-  - amount_and_price_precision
+  - historical_account_specific_leverage_tiers
+  - cross_and_portfolio_margin
+  - order_book_queue_and_partial_fill_probability
   - mark_index_dislocation
   - exchange_outage
 market_specific_risks:

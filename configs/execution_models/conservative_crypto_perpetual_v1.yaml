@@ -1,0 +1,76 @@
+schema_version: 1
+model_id: conservative_crypto_perpetual_v1
+status: active_research_only
+scope:
+  asset_class: crypto
+  instrument_type: usdt_margined_perpetual
+  live_trading_enabled: false
+
+defaults:
+  leverage: 1.0
+  max_research_leverage: 50.0
+  require_explicit_leverage_above_one: true
+  margin_mode: isolated
+  order_type: market
+  taker_fee_per_side: 0.0005
+  maker_fee_per_side: 0.0002
+  slippage_bps_per_side: 2.0
+  stress_slippage_bps_per_side: 5.0
+  liquidation_fee_rate: 0.005
+  liquidation_buffer_rate: 0.002
+  missing_funding_policy: adverse_nonzero_proxy
+  same_bar_priority:
+    - liquidation
+    - protective_stop
+    - take_profit
+  limit_fill_policy: no_fill_on_touch
+  partial_fill_policy: conservative_fraction
+  partial_fill_fraction: 0.5
+
+maintenance_margin:
+  source: conservative_research_assumption_not_official_historical_tiers
+  historical_tiers_complete: false
+  tiers:
+    - max_notional: 50000
+      maintenance_margin_rate: 0.010
+      maintenance_amount: 0
+    - max_notional: 250000
+      maintenance_margin_rate: 0.015
+      maintenance_amount: 0
+    - max_notional: null
+      maintenance_margin_rate: 0.025
+      maintenance_amount: 0
+
+venues:
+  binance:
+    market_profile: crypto_perpetual.binance.eth
+    symbol: ETHUSDT
+    quantity_unit: base_asset
+    contract_size_base: 1.0
+    tick_size: 0.01
+    quantity_step: 0.001
+    minimum_quantity: 0.001
+    maximum_quantity: 2000
+    minimum_notional: 20
+    venue_max_leverage_snapshot: null
+    metadata_manifest_key: data/manifests/market_metadata_eth_perpetual_20260722.json
+    leverage_tiers_status: unavailable_historical_assumption_used
+  okx:
+    market_profile: crypto_perpetual.okx.eth
+    symbol: ETH-USDT-SWAP
+    quantity_unit: contracts
+    contract_size_base: 0.1
+    tick_size: 0.01
+    quantity_step: 0.01
+    minimum_quantity: 0.01
+    maximum_quantity: null
+    minimum_notional: 0
+    venue_max_leverage_snapshot: 100
+    metadata_manifest_key: data/manifests/market_metadata_eth_perpetual_20260722.json
+    leverage_tiers_status: unavailable_historical_assumption_used
+
+limitations:
+  - Maintenance-margin tiers are deliberately conservative research assumptions, not historical exchange/account tiers.
+  - Partial fills are a deterministic stress approximation, not order-book queue simulation.
+  - Mark-price OHLC is required for authoritative liquidation checks; last-price fallback must be disclosed.
+  - This model does not authorize live trading or claim that 50x leverage is safe.

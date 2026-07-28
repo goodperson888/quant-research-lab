@@ -63,6 +63,20 @@ class BacktestEnginePort(Protocol):
     def run(self, job: Job) -> Mapping[str, Any]: ...
 
 
+class ExecutionModelPort(Protocol):
+    """Deterministic research-only order, margin and liquidation semantics."""
+
+    def summary(self) -> Mapping[str, Any]: ...
+
+    def prepare_market_order(self, **values: Any) -> Any: ...
+
+    def margin_snapshot(self, **values: Any) -> Any: ...
+
+    def select_intrabar_exit(self, **values: Any) -> Any: ...
+
+    def limit_fill_decision(self, **values: Any) -> Any: ...
+
+
 class TrialMetricsSink(Protocol):
     """Batch Trial metrics to columnar storage instead of one tiny file per Trial."""
 
