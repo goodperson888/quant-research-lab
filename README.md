@@ -29,7 +29,14 @@
 
 产品首页正在演进为“AI 策略研究工作台”。当前采用 Agent-first hybrid architecture：Codex 等 External Local Agent 继续作为可见研究执行者，Web 负责控制、审批、审计和结果展示；二者共享 FastAPI/CLI 领域接口与 append-only 审计记录。当前固定为 `external_local_agent + local_runtime`，Embedded Provider、Hosted Sandbox、Local Connector 和真实 LLM 调用均未实现。
 
-阶段0开发入口：
+阶段0一键启动入口：
+
+```bash
+./scripts/dev.sh
+```
+
+启动后访问 `http://127.0.0.1:3000/studio`，在同一终端按 `Ctrl+C` 会同时关闭 API 和 Web。
+需要单独排错时仍可分别运行：
 
 ```bash
 ./scripts/dev-api.sh

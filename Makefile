@@ -1,6 +1,6 @@
 PYTHON ?= .venv/bin/python
 
-.PHONY: doctor init test daily weekly dev-api dev-web dev-worker web-build web-lint web-typecheck check-fast check-standard check-release
+.PHONY: doctor init test daily weekly dev dev-api dev-web dev-worker web-build web-lint web-typecheck check-fast check-standard check-release
 
 doctor:
 	PYTHONPATH=src $(PYTHON) -m quant_lab.cli doctor
@@ -16,6 +16,9 @@ daily:
 
 weekly:
 	./scripts/run_weekly.sh
+
+dev:
+	./scripts/dev.sh
 
 dev-api:
 	./scripts/dev-api.sh

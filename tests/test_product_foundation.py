@@ -112,6 +112,9 @@ def test_api_smoke_and_agent_first_status(tmp_path: Path) -> None:
     health = client.get("/health")
     assert health.status_code == 200
     assert health.json()["live_trading_enabled"] is False
+    api_root = client.get("/")
+    assert api_root.status_code == 200
+    assert api_root.json()["web_studio"] == "http://127.0.0.1:3000/studio"
 
     agent = client.get("/api/agent/status").json()
     assert agent["active_configuration"] == {

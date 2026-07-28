@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -219,6 +220,21 @@ def create_app(
         return {
             "status": "ok",
             "mode": "local_research_only",
+            "live_trading_enabled": False,
+        }
+
+    @application.get("/", include_in_schema=False)
+    def api_root() -> dict[str, Any]:
+        web_studio = (
+            f"http://127.0.0.1:{os.environ.get('QUANT_LAB_WEB_PORT', '3000')}/studio"
+        )
+        return {
+            "service": "Quant Research Lab API",
+            "status": "ok",
+            "message": f"网页工作台不在 API 端口，请打开 {web_studio}",
+            "web_studio": web_studio,
+            "health": "/health",
+            "openapi": "/docs",
             "live_trading_enabled": False,
         }
 
