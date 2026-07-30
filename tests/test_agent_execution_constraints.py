@@ -127,6 +127,46 @@ def test_agent_run_tool_call_and_artifact_round_trip(tmp_path: Path) -> None:
         )
 
 
+def test_session_allows_only_one_active_writing_agent_run(tmp_path: Path) -> None:
+    repository = SQLiteProductRepository(tmp_path / "runtime/app/product.sqlite3")
+    service = ResearchApplicationService(repository)
+    session_id, _baseline_id = create_baseline(service)
+
+    first = service.create_agent_run(
+        session_id=session_id,
+        agent_name="codex-window-a",
+        plan_summary="Research strategy A in this session.",
+    )
+    occupancy = service.get_session_agent_occupancy(session_id)
+    assert occupancy["occupied"] is True
+    assert occupancy["agent_run_id"] == first.id
+    assert occupancy["agent_name"] == "codex-window-a"
+
+    with pytest.raises(ConflictError, match="正由另一个 AI 任务写入"):
+        service.create_agent_run(
+            session_id=session_id,
+            agent_name="codex-window-b",
+            plan_summary="Competing write in the same session.",
+        )
+
+    service.update_agent_run_status(
+        agent_run_id=first.id, status="waiting_approval"
+    )
+    assert service.get_session_agent_occupancy(session_id)["occupied"] is False
+
+    second = service.create_agent_run(
+        session_id=session_id,
+        agent_name="codex-window-b",
+        plan_summary="Continue in the now-idle session.",
+    )
+    with pytest.raises(ConflictError, match="原任务只能在会话空闲后继续"):
+        service.update_agent_run_status(agent_run_id=first.id, status="queued")
+
+    service.update_agent_run_status(agent_run_id=second.id, status="completed")
+    resumed = service.update_agent_run_status(agent_run_id=first.id, status="queued")
+    assert resumed.lease_expires_at is not None
+
+
 @pytest.mark.parametrize(
     "invalid_key",
     ["/tmp/report.json", "../outside.json", "file://report.json", "C:/report.json"],

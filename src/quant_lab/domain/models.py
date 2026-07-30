@@ -367,6 +367,7 @@ class AgentRun:
     ] = "queued"
     plan_summary: str | None = None
     created_at: str = ""
+    lease_expires_at: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

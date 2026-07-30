@@ -46,6 +46,9 @@ export function ResearchCharts({
     .flatMap((query) => (query.data?.available ? query.data.series : []))
     .slice(0, 6);
   const [visible, setVisible] = useState<Record<string, boolean>>({});
+  const [activeTab, setActiveTab] = useState<
+    "equity" | "drawdown" | "parameters"
+  >("equity");
   const coloredSeries = allSeries.map((item, index) => ({
     ...item,
     color: CHART_COLORS[index % CHART_COLORS.length],
@@ -58,13 +61,39 @@ export function ResearchCharts({
     <div className="space-y-5">
       <div>
         <div className="mb-1 text-sm font-medium text-slate-200">
-          资金曲线与回撤
+          研究图表
         </div>
         <div className="text-xs leading-5 text-slate-500">
-          日期使用 UTC。系统会叠加当前策略已保存的试跑、快速初筛与验证曲线，并用同期 ETH 永续价格帮助判断收益发生在哪种行情。
+          点击标签切换视角。图表只读取当前研究会话、当前策略版本的真实结果；不同会话不会自动混线，同一策略的试跑、训练和验证结果可以主动叠加比较。
         </div>
       </div>
-      {chart?.available && series.length ? (
+      <div
+        className="inline-flex max-w-full gap-1 overflow-x-auto rounded-xl border border-white/10 bg-black/10 p-1"
+        role="tablist"
+        aria-label="研究图表类型"
+      >
+        <ChartTabButton
+          active={activeTab === "equity"}
+          onClick={() => setActiveTab("equity")}
+        >
+          行情与资金
+        </ChartTabButton>
+        <ChartTabButton
+          active={activeTab === "drawdown"}
+          onClick={() => setActiveTab("drawdown")}
+        >
+          策略回撤
+        </ChartTabButton>
+        <ChartTabButton
+          active={activeTab === "parameters"}
+          onClick={() => setActiveTab("parameters")}
+        >
+          参数对比
+        </ChartTabButton>
+      </div>
+      {activeTab === "parameters" ? (
+        <TrialMetricComparison trials={trials} />
+      ) : chart?.available && series.length ? (
         <>
           {selectedBundle && selectedChartIndex > 0 ? (
             <div className="rounded-lg border border-sky-300/15 bg-sky-300/[0.07] px-3 py-2 text-xs leading-5 text-sky-100">
@@ -95,54 +124,59 @@ export function ResearchCharts({
               </label>
             ))}
           </div>
-          {chart.market_series ? (
-            <SvgMarketComparisonChart
-              market={chart.market_series}
-              series={series.map((item) => ({
-                id: item.series_id,
-                label: item.label,
-                color: item.color,
-                points: item.points.map((point) => ({
-                  t: point.t,
-                  value: point.normalized_equity,
-                })),
-              }))}
-            />
+          {activeTab === "equity" ? (
+            chart.market_series ? (
+              <SvgMarketComparisonChart
+                market={chart.market_series}
+                series={series.map((item) => ({
+                  id: item.series_id,
+                  label: item.label,
+                  color: item.color,
+                  points: item.points.map((point) => ({
+                    t: point.t,
+                    value: point.normalized_equity,
+                  })),
+                }))}
+              />
+            ) : (
+              <SvgLineChart
+                title="策略资金曲线"
+                series={series.map((item) => ({
+                  id: item.series_id,
+                  label: item.label,
+                  color: item.color,
+                  points: item.points.map((point) => ({
+                    t: point.t,
+                    value: point.normalized_equity,
+                  })),
+                }))}
+                baseline={1}
+                formatValue={(value) => formatSignedPercentValue(value - 1)}
+              />
+            )
           ) : (
             <SvgLineChart
-              title="策略资金曲线"
+              title="策略回撤"
               series={series.map((item) => ({
                 id: item.series_id,
                 label: item.label,
                 color: item.color,
                 points: item.points.map((point) => ({
                   t: point.t,
-                  value: point.normalized_equity,
+                  value: point.drawdown,
                 })),
               }))}
-              baseline={1}
-              formatValue={(value) => formatSignedPercentValue(value - 1)}
+              baseline={0}
+              formatValue={formatSignedPercentValue}
             />
           )}
-          {!chart.market_series && chart.market_reason ? (
+          {activeTab === "equity" &&
+          !chart.market_series &&
+          chart.market_reason ? (
             <div className="text-xs leading-5 text-amber-100/80">
               行情对照暂不可用：{chart.market_reason}
             </div>
           ) : null}
-          <SvgLineChart
-            title="策略回撤"
-            series={series.map((item) => ({
-              id: item.series_id,
-              label: item.label,
-              color: item.color,
-              points: item.points.map((point) => ({
-                t: point.t,
-                value: point.drawdown,
-              })),
-            }))}
-            baseline={0}
-            formatValue={formatSignedPercentValue}
-          />
           <TechnicalDetails label="曲线来源与限制">
             {chart.limitations.map((item) => (
               <p key={item}>{item}</p>
@@ -164,13 +198,73 @@ export function ResearchCharts({
               "当前策略还没有保存可读取的逐时点资金曲线。下次运行快速初筛或完整回测后，这里会自动显示折线图。"}
         </EmptyState>
       )}
-      <TrialMetricComparison trials={trials} />
     </div>
   );
 }
 
+function ChartTabButton({
+  active,
+  children,
+  onClick,
+}: {
+  active: boolean;
+  children: React.ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={
+        active
+          ? "whitespace-nowrap rounded-lg bg-sky-300/15 px-3 py-2 text-xs font-medium text-sky-100"
+          : "whitespace-nowrap rounded-lg px-3 py-2 text-xs text-slate-400 transition hover:bg-white/[0.05] hover:text-slate-200"
+      }
+    >
+      {children}
+    </button>
+  );
+}
+
+const TRIAL_METRICS = [
+  {
+    key: "validation_net_return",
+    label: "验证收益",
+    baseline: 0,
+    format: formatSignedPercentValue,
+    colorMode: "signed",
+  },
+  {
+    key: "validation_max_drawdown_abs",
+    label: "最大回撤",
+    baseline: 0,
+    format: (value: number) => formatPercent(value),
+    colorMode: "drawdown",
+  },
+  {
+    key: "validation_profit_factor",
+    label: "盈亏效率",
+    baseline: 1,
+    format: (value: number) => value.toFixed(2),
+    colorMode: "profit_factor",
+  },
+  {
+    key: "validation_trade_count",
+    label: "交易数",
+    baseline: 0,
+    format: (value: number) => Math.round(value).toLocaleString("zh-CN"),
+    colorMode: "neutral",
+  },
+] as const;
+
 function TrialMetricComparison({ trials }: { trials: Trial[] }) {
-  const succeeded = trials.filter((item) => item.status === "succeeded").slice(0, 8);
+  const [metricKey, setMetricKey] =
+    useState<(typeof TRIAL_METRICS)[number]["key"]>("validation_net_return");
+  const succeeded = trials
+    .filter((item) => item.status === "succeeded")
+    .slice(0, 20);
   if (!succeeded.length) {
     return (
       <EmptyState>
@@ -178,40 +272,154 @@ function TrialMetricComparison({ trials }: { trials: Trial[] }) {
       </EmptyState>
     );
   }
-  const values = succeeded.map(
-    (item) => finiteOrZero(item.metrics.validation_net_return),
+  const metric =
+    TRIAL_METRICS.find((item) => item.key === metricKey) ?? TRIAL_METRICS[0];
+  const parameterKeys = Array.from(
+    new Set(succeeded.flatMap((trial) => Object.keys(trial.parameters))),
   );
-  const scale = Math.max(...values.map((value) => Math.abs(value)), 0.001);
+  const varyingParameterKeys = parameterKeys.filter(
+    (key) =>
+      new Set(
+        succeeded.map((trial) => JSON.stringify(trial.parameters[key])),
+      ).size > 1,
+  );
+  const numericParameter =
+    varyingParameterKeys.length === 1 &&
+    succeeded.every(
+      (trial) =>
+        typeof trial.parameters[varyingParameterKeys[0]] === "number" &&
+        Number.isFinite(trial.parameters[varyingParameterKeys[0]]),
+    )
+      ? varyingParameterKeys[0]
+      : null;
   return (
-    <div>
-      <div className="mb-3 text-sm font-medium text-slate-200">
-        多参数方案验证净收益
+    <div className="space-y-4">
+      <div>
+        <div className="mb-1 text-sm font-medium text-slate-200">
+          参数方案指标对比
+        </div>
+        <div className="text-xs leading-5 text-slate-500">
+          单个连续参数会按数值顺序绘制折线；多个参数同时变化时保留独立条形，避免用连线制造不存在的顺序。
+        </div>
       </div>
-      <div className="space-y-2">
-        {succeeded.map((trial) => {
-          const value = finiteOrZero(trial.metrics.validation_net_return);
-          return (
-            <div key={trial.id} className="grid grid-cols-[minmax(0,1fr)_90px] gap-3 text-xs">
-              <div>
-                <div className="truncate text-slate-300">
-                  {formatTrialParameters(trial.parameters)}
-                </div>
-                <div className="mt-1 h-2 overflow-hidden rounded-full bg-white/[0.06]">
-                  <div
-                    className={value >= 0 ? "h-full bg-emerald-300/70" : "ml-auto h-full bg-rose-300/70"}
-                    style={{ width: `${Math.max((Math.abs(value) / scale) * 100, 2)}%` }}
-                  />
-                </div>
-              </div>
-              <div className={value >= 0 ? "text-right text-emerald-200" : "text-right text-rose-200"}>
-                {formatPercent(value)}
-              </div>
-            </div>
-          );
-        })}
+      <div className="flex max-w-full gap-1 overflow-x-auto">
+        {TRIAL_METRICS.map((item) => (
+          <button
+            type="button"
+            key={item.key}
+            onClick={() => setMetricKey(item.key)}
+            className={
+              metricKey === item.key
+                ? "whitespace-nowrap rounded-full border border-sky-300/25 bg-sky-300/10 px-3 py-1.5 text-xs text-sky-100"
+                : "whitespace-nowrap rounded-full border border-white/10 px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200"
+            }
+          >
+            {item.label}
+          </button>
+        ))}
       </div>
+      {numericParameter ? (
+        <SvgParameterLineChart
+          parameterName={numericParameter}
+          metricLabel={metric.label}
+          baseline={metric.baseline}
+          formatValue={metric.format}
+          points={succeeded
+            .map((trial) => ({
+              trialId: trial.id,
+              parameterValue: Number(trial.parameters[numericParameter]),
+              metricValue: finiteOrZero(trial.metrics[metric.key]),
+            }))
+            .sort((left, right) => left.parameterValue - right.parameterValue)}
+        />
+      ) : (
+        <TrialMetricBars
+          trials={succeeded}
+          metricKey={metric.key}
+          formatValue={metric.format}
+          colorMode={metric.colorMode}
+        />
+      )}
     </div>
   );
+}
+
+function TrialMetricBars({
+  trials,
+  metricKey,
+  formatValue,
+  colorMode,
+}: {
+  trials: Trial[];
+  metricKey: (typeof TRIAL_METRICS)[number]["key"];
+  formatValue: (value: number) => string;
+  colorMode: (typeof TRIAL_METRICS)[number]["colorMode"];
+}) {
+  const values = trials.map((item) => finiteOrZero(item.metrics[metricKey]));
+  const scale = Math.max(...values.map((value) => Math.abs(value)), 0.001);
+  return (
+    <div className="space-y-2">
+      {trials.map((trial) => {
+        const value = finiteOrZero(trial.metrics[metricKey]);
+        return (
+          <div
+            key={trial.id}
+            className="grid grid-cols-[minmax(0,1fr)_90px] gap-3 text-xs"
+          >
+            <div>
+              <div className="truncate text-slate-300">
+                {formatTrialParameters(trial.parameters)}
+              </div>
+              <div className="mt-1 h-2 overflow-hidden rounded-full bg-white/[0.06]">
+                <div
+                  className={`${value < 0 ? "ml-auto " : ""}${trialMetricBarColor(
+                    colorMode,
+                    value,
+                  )}`}
+                  style={{
+                    width: `${Math.max((Math.abs(value) / scale) * 100, 2)}%`,
+                  }}
+                />
+              </div>
+            </div>
+            <div
+              className={`text-right ${trialMetricTextColor(colorMode, value)}`}
+            >
+              {formatValue(value)}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function trialMetricBarColor(
+  colorMode: (typeof TRIAL_METRICS)[number]["colorMode"],
+  value: number,
+) {
+  if (colorMode === "drawdown") return "h-full bg-amber-300/70";
+  if (colorMode === "neutral") return "h-full bg-sky-300/70";
+  if (colorMode === "profit_factor") {
+    return value >= 1
+      ? "h-full bg-emerald-300/70"
+      : "h-full bg-rose-300/70";
+  }
+  return value >= 0
+    ? "h-full bg-emerald-300/70"
+    : "h-full bg-rose-300/70";
+}
+
+function trialMetricTextColor(
+  colorMode: (typeof TRIAL_METRICS)[number]["colorMode"],
+  value: number,
+) {
+  if (colorMode === "drawdown") return "text-amber-200";
+  if (colorMode === "neutral") return "text-sky-200";
+  if (colorMode === "profit_factor") {
+    return value >= 1 ? "text-emerald-200" : "text-rose-200";
+  }
+  return value >= 0 ? "text-emerald-200" : "text-rose-200";
 }
 
 function finiteOrZero(value: number | undefined) {
@@ -518,6 +726,133 @@ function SvgLineChart({
   );
 }
 
+function SvgParameterLineChart({
+  parameterName,
+  metricLabel,
+  points,
+  baseline,
+  formatValue,
+}: {
+  parameterName: string;
+  metricLabel: string;
+  points: Array<{
+    trialId: string;
+    parameterValue: number;
+    metricValue: number;
+  }>;
+  baseline: number;
+  formatValue: (value: number) => string;
+}) {
+  const width = 860;
+  const height = 300;
+  const padding = { top: 22, right: 24, bottom: 54, left: 64 };
+  const parameterValues = points.map((point) => point.parameterValue);
+  const metricValues = points.map((point) => point.metricValue);
+  const xScale = paddedRange(parameterValues);
+  const yScale = paddedRange([...metricValues, baseline]);
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const x = (value: number) =>
+    padding.left +
+    ((value - xScale.min) / Math.max(xScale.max - xScale.min, 0.000001)) *
+      plotWidth;
+  const y = (value: number) =>
+    padding.top +
+    ((yScale.max - value) /
+      Math.max(yScale.max - yScale.min, 0.000001)) *
+      plotHeight;
+  const yTicks = valueTicks(yScale.min, yScale.max, 4);
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-white/10 bg-black/10 p-3">
+      <div className="mb-1 text-sm font-medium text-slate-200">
+        {parameterName} 与{metricLabel}
+      </div>
+      <div className="mb-3 text-xs leading-5 text-slate-500">
+        横轴按参数实际数值排序；折线只表示这一项连续参数的局部变化趋势。
+      </div>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label={`${parameterName} 与${metricLabel}参数对比`}
+        className="h-auto w-full"
+      >
+        {yTicks.map((value) => (
+          <g key={value}>
+            <line
+              x1={padding.left}
+              x2={width - padding.right}
+              y1={y(value)}
+              y2={y(value)}
+              stroke="rgba(148,163,184,.12)"
+            />
+            <text
+              x={padding.left - 8}
+              y={y(value) + 4}
+              textAnchor="end"
+              fill="rgba(148,163,184,.72)"
+              fontSize="11"
+            >
+              {formatValue(value)}
+            </text>
+          </g>
+        ))}
+        <line
+          x1={padding.left}
+          x2={width - padding.right}
+          y1={y(baseline)}
+          y2={y(baseline)}
+          stroke="rgba(148,163,184,.28)"
+          strokeDasharray="5 5"
+        />
+        <polyline
+          points={points
+            .map(
+              (point) =>
+                `${x(point.parameterValue)},${y(point.metricValue)}`,
+            )
+            .join(" ")}
+          fill="none"
+          stroke="#7dd3fc"
+          strokeWidth="2"
+          vectorEffect="non-scaling-stroke"
+        />
+        {points.map((point, index) => (
+          <g key={point.trialId}>
+            <circle
+              cx={x(point.parameterValue)}
+              cy={y(point.metricValue)}
+              r="4"
+              fill="#071017"
+              stroke="#7dd3fc"
+              strokeWidth="2"
+              vectorEffect="non-scaling-stroke"
+            />
+            <text
+              x={x(point.parameterValue)}
+              y={height - 24 - (index % 2) * 13}
+              textAnchor="middle"
+              fill="rgba(148,163,184,.78)"
+              fontSize="11"
+            >
+              {formatCompactNumber(point.parameterValue)}
+            </text>
+          </g>
+        ))}
+        <text
+          x={width / 2}
+          y={height - 4}
+          textAnchor="middle"
+          fill="rgba(148,163,184,.62)"
+          fontSize="11"
+        >
+          {parameterName}
+        </text>
+      </svg>
+    </div>
+  );
+}
+
 function paddedRange(values: number[]) {
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -538,6 +873,12 @@ function valueTicks(min: number, max: number, count: number) {
     { length: count },
     (_, index) => max - ((max - min) * index) / Math.max(count - 1, 1),
   );
+}
+
+function formatCompactNumber(value: number) {
+  return new Intl.NumberFormat("zh-CN", {
+    maximumFractionDigits: 4,
+  }).format(value);
 }
 
 function formatDateTick(timestamp: number) {

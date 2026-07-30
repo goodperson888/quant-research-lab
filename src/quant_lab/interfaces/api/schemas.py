@@ -24,6 +24,17 @@ class SessionResponse(StrictModel):
     mode_revision: int
 
 
+class SessionAgentOccupancyResponse(StrictModel):
+    session_id: str
+    occupied: bool
+    agent_run_id: str | None
+    agent_name: str | None
+    status: str | None
+    plan_summary: str | None
+    started_at: str | None
+    lease_expires_at: str | None
+
+
 class ResearchModeDefinitionResponse(StrictModel):
     mode: Literal["quick", "guided", "expert"]
     label: str

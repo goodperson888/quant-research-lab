@@ -29,9 +29,11 @@ def test_session_defaults_to_guided_and_agent_run_inherits_mode(tmp_path: Path) 
     assert session.research_mode == "guided"
     assert session.mode_config["agent_run_mode"] == "guided"
     assert session.mode_revision == 1
-    assert service.create_agent_run(
+    first_run = service.create_agent_run(
         session_id=session.id, agent_name="fixture"
-    ).mode == "guided"
+    )
+    assert first_run.mode == "guided"
+    service.update_agent_run_status(agent_run_id=first_run.id, status="completed")
 
 
 def test_mode_update_requires_confirmation_is_audited_and_changes_agent_pacing(
@@ -88,6 +90,36 @@ def test_api_lists_and_updates_research_modes(tmp_path: Path) -> None:
     assert updated.status_code == 200
     assert updated.json()["research_mode"] == "expert"
     assert updated.json()["mode_config"]["agent_run_mode"] == "supervised"
+
+
+def test_api_exposes_current_session_agent_occupancy(tmp_path: Path) -> None:
+    database_path = tmp_path / "runtime/app/api-occupancy.sqlite3"
+    app = create_app(root=tmp_path, database_path=database_path)
+    client = TestClient(app)
+    session = client.post(
+        "/api/research/sessions", json={"title": "occupancy"}
+    ).json()
+    service = ResearchApplicationService(SQLiteProductRepository(database_path))
+    run = service.create_agent_run(
+        session_id=session["id"],
+        agent_name="codex-window-a",
+        plan_summary="Research the selected strategy.",
+    )
+
+    response = client.get(
+        f"/api/research/sessions/{session['id']}/agent-occupancy"
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "session_id": session["id"],
+        "occupied": True,
+        "agent_run_id": run.id,
+        "agent_name": "codex-window-a",
+        "status": "queued",
+        "plan_summary": "Research the selected strategy.",
+        "started_at": run.created_at,
+        "lease_expires_at": run.lease_expires_at,
+    }
 
 
 def test_schema_v7_session_migrates_without_losing_existing_values(

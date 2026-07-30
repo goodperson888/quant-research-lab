@@ -97,6 +97,7 @@ from .schemas import (
     ImprovementDirectionResponse,
     ProposalTransitionRequest,
     ProposalBudgetRequest,
+    SessionAgentOccupancyResponse,
     SessionDetailResponse,
     SessionResponse,
     UpdateResearchModeRequest,
@@ -298,6 +299,14 @@ def create_app(
     )
     def get_session_mode(session_id: str) -> Any:
         return service.get_research_session(session_id)
+
+    @application.get(
+        "/api/research/sessions/{session_id}/agent-occupancy",
+        response_model=SessionAgentOccupancyResponse,
+        tags=["agent-control-plane"],
+    )
+    def get_session_agent_occupancy(session_id: str) -> Any:
+        return service.get_session_agent_occupancy(session_id)
 
     @application.put(
         "/api/research/sessions/{session_id}/mode",

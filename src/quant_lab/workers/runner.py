@@ -248,6 +248,8 @@ class LocalWorker:
             "report": "generate_report",
         }.get(job.job_type, "run_backtest")
         now = _utc_now()
+        if isinstance(agent_run_id, str):
+            self.repository.update_agent_run_status(agent_run_id, status="running")
         self.repository.update_job(job.id, status="running", updated_at=now)
         self.repository.append_job_log(
             job.id,
@@ -255,8 +257,6 @@ class LocalWorker:
             message=f"Allowlisted {job.job_type} handler started.",
             created_at=now,
         )
-        if isinstance(agent_run_id, str):
-            self.repository.update_agent_run_status(agent_run_id, status="running")
         self.repository.append_event(
             AuditEvent(
                 id=None,

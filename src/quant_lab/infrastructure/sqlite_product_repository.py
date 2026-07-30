@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -40,7 +41,18 @@ from quant_lab.domain.models import (
 )
 
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
+AGENT_RUN_LEASE_MINUTES = 120
+
+
+def _agent_run_lease_expiry() -> str:
+    return (
+        datetime.now(timezone.utc) + timedelta(minutes=AGENT_RUN_LEASE_MINUTES)
+    ).isoformat()
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 class SQLiteProductRepository:
@@ -359,6 +371,7 @@ class SQLiteProductRepository:
                     status TEXT NOT NULL,
                     plan_summary TEXT,
                     created_at TEXT NOT NULL,
+                    lease_expires_at TEXT,
                     FOREIGN KEY (session_id) REFERENCES research_sessions(id)
                 );
 
@@ -551,6 +564,9 @@ class SQLiteProductRepository:
                     "result_artifact_key": "TEXT",
                     "metrics_artifact_key": "TEXT",
                 },
+                "agent_runs": {
+                    "lease_expires_at": "TEXT",
+                },
                 "component_evidence": {
                     "logic_signature": "TEXT NOT NULL DEFAULT ''",
                     "timeframe": "TEXT NOT NULL DEFAULT ''",
@@ -603,6 +619,10 @@ class SQLiteProductRepository:
                 "CREATE UNIQUE INDEX IF NOT EXISTS one_component_candidate_per_logic_scope "
                 "ON component_candidates(logic_signature, target_market_profile, timeframe) "
                 "WHERE logic_signature != ''"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS active_agent_run_by_session "
+                "ON agent_runs(session_id, status, lease_expires_at)"
             )
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -1930,12 +1950,32 @@ class SQLiteProductRepository:
 
     def create_agent_run(self, agent_run: AgentRun) -> AgentRun:
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            occupied = connection.execute(
+                """
+                SELECT agent_name
+                FROM agent_runs
+                WHERE session_id = ?
+                  AND status IN ('queued', 'running')
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at > ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (agent_run.session_id, _utc_now()),
+            ).fetchone()
+            if occupied is not None:
+                raise ConflictError(
+                    "当前研究会话正由另一个 AI 任务写入；"
+                    "请等待它结束，或新建研究会话后并行运行。"
+                )
+            lease_expires_at = _agent_run_lease_expiry()
             connection.execute(
                 """
                 INSERT INTO agent_runs (
                     id, session_id, agent_name, agent_provider, execution_target,
-                    mode, status, plan_summary, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    mode, status, plan_summary, created_at, lease_expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     agent_run.id,
@@ -1947,9 +1987,15 @@ class SQLiteProductRepository:
                     agent_run.status,
                     agent_run.plan_summary,
                     agent_run.created_at,
+                    lease_expires_at,
                 ),
             )
-        return agent_run
+            row = connection.execute(
+                "SELECT * FROM agent_runs WHERE id = ?", (agent_run.id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"agent run not found after create: {agent_run.id}")
+        return self._agent_run(row)
 
     def get_agent_run(self, agent_run_id: str) -> AgentRun:
         with self._connect() as connection:
@@ -1962,9 +2008,40 @@ class SQLiteProductRepository:
 
     def update_agent_run_status(self, agent_run_id: str, *, status: str) -> AgentRun:
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute(
+                "SELECT * FROM agent_runs WHERE id = ?", (agent_run_id,)
+            ).fetchone()
+            if current is None:
+                raise NotFoundError(f"agent run not found: {agent_run_id}")
+            lease_expires_at: str | None = None
+            if status in {"queued", "running"}:
+                occupied = connection.execute(
+                    """
+                    SELECT id
+                    FROM agent_runs
+                    WHERE session_id = ?
+                      AND id != ?
+                      AND status IN ('queued', 'running')
+                      AND lease_expires_at IS NOT NULL
+                      AND lease_expires_at > ?
+                    LIMIT 1
+                    """,
+                    (current["session_id"], agent_run_id, _utc_now()),
+                ).fetchone()
+                if occupied is not None:
+                    raise ConflictError(
+                        "当前研究会话正由另一个 AI 任务写入；"
+                        "原任务只能在会话空闲后继续。"
+                    )
+                lease_expires_at = _agent_run_lease_expiry()
             cursor = connection.execute(
-                "UPDATE agent_runs SET status = ? WHERE id = ?",
-                (status, agent_run_id),
+                """
+                UPDATE agent_runs
+                SET status = ?, lease_expires_at = ?
+                WHERE id = ?
+                """,
+                (status, lease_expires_at, agent_run_id),
             )
             if cursor.rowcount != 1:
                 raise NotFoundError(f"agent run not found: {agent_run_id}")
@@ -1976,6 +2053,23 @@ class SQLiteProductRepository:
                 "SELECT * FROM agent_runs ORDER BY created_at DESC"
             ).fetchall()
         return [self._agent_run(row) for row in rows]
+
+    def get_active_session_agent_run(self, session_id: str) -> AgentRun | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM agent_runs
+                WHERE session_id = ?
+                  AND status IN ('queued', 'running')
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at > ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (session_id, _utc_now()),
+            ).fetchone()
+        return self._agent_run(row) if row is not None else None
 
     def create_tool_call(self, tool_call: ToolCall) -> ToolCall:
         with self._connect() as connection:
@@ -2724,6 +2818,7 @@ class SQLiteProductRepository:
             status=row["status"],
             plan_summary=row["plan_summary"],
             created_at=row["created_at"],
+            lease_expires_at=row["lease_expires_at"],
         )
 
     @staticmethod

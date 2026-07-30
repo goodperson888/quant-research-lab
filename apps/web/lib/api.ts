@@ -146,6 +146,17 @@ export type Session = {
   mode_revision: number;
 };
 
+export type SessionAgentOccupancy = {
+  session_id: string;
+  occupied: boolean;
+  agent_run_id: string | null;
+  agent_name: string | null;
+  status: string | null;
+  plan_summary: string | null;
+  started_at: string | null;
+  lease_expires_at: string | null;
+};
+
 export type ResearchModeDefinition = {
   mode: "quick" | "guided" | "expert";
   label: string;

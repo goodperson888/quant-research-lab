@@ -1579,6 +1579,31 @@ class ResearchApplicationService:
         )
         return updated
 
+    def get_session_agent_occupancy(self, session_id: str) -> dict[str, Any]:
+        self.repository.get_session(session_id)
+        active = self.repository.get_active_session_agent_run(session_id)
+        if active is None:
+            return {
+                "session_id": session_id,
+                "occupied": False,
+                "agent_run_id": None,
+                "agent_name": None,
+                "status": None,
+                "plan_summary": None,
+                "started_at": None,
+                "lease_expires_at": None,
+            }
+        return {
+            "session_id": session_id,
+            "occupied": True,
+            "agent_run_id": active.id,
+            "agent_name": active.agent_name,
+            "status": active.status,
+            "plan_summary": active.plan_summary,
+            "started_at": active.created_at,
+            "lease_expires_at": active.lease_expires_at,
+        }
+
     def record_tool_call(
         self,
         *,

@@ -187,6 +187,12 @@ fixture 只能作为连线证据，不能伪造策略收益。
 
 AgentRun 保存 Provider、Execution Target、run mode、状态和计划摘要。ToolCall 保存领域工具名、脱敏输入/输出和状态。密钥、Cookie、账户标识和提现凭据不得进入 ToolCall 或事件 payload。
 
+每个写入型 AgentRun 创建时自动取得 ResearchSession 租约。同一会话只允许一个
+`queued/running` AgentRun 持有租约；其他 AI 窗口必须等待、只读，或为另一策略创建
+独立 ResearchSession。进入 waiting approval、paused、completed、failed 或 cancelled
+会释放租约，恢复任务时重新竞争租约。租约由 SQLite 事务校验，并在 Web 显示当前占用
+助手，避免仅靠提示词约束多窗口写入。
+
 ### 8.5 Pipeline 与 Fail-fast
 
 Agent 先选择 `smoke`、`fast_screen` 或 `full_validation`，然后按

@@ -47,6 +47,7 @@ These rules apply to every automated agent working in this project.
 43. A failure before viability stops the automatic path. A failed viability Gate may continue only into authorization-listed `loss_attribution`, `regime_diagnostic`, and `component_hypothesis_generation`; these remain non-causal screening evidence and cannot restore a rejected strategy.
 44. Loss attribution should reuse saved trades/signals/metrics when possible. If an already inspected validation split informs a new component hypothesis, mark it `screening_contaminated`; do not relabel it independent out-of-sample evidence.
 45. Strategy-specific Native execution must enter through a registered `StrategySpec`/`StrategyEvaluator` boundary. Do not add new strategy conditionals to the core Worker, and do not claim an authorization alone executed research when no reviewed executor/Job ran.
+46. One ResearchSession may have only one active write-capable AgentRun lease. Parallel strategy research must use separate ResearchSessions; a waiting, paused, completed, failed or cancelled run releases the lease before another AgentRun may write.
 
 ## Instruction priority and enforcement
 

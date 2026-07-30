@@ -29,6 +29,7 @@ import {
   ResearchHandoff,
   RunBundle,
   Session,
+  SessionAgentOccupancy,
   SessionDetail,
   ResearchModeDefinition,
   StrategyOutcome,
@@ -118,6 +119,16 @@ export function StudioWorkspace() {
     queryFn: () =>
       apiFetch<SessionDetail>(`/api/research/sessions/${activeSession?.id}`),
     enabled: Boolean(activeSession?.id),
+  });
+  const agentOccupancy = useQuery({
+    queryKey: ["session-agent-occupancy", activeSession?.id],
+    queryFn: () =>
+      apiFetch<SessionAgentOccupancy>(
+        `/api/research/sessions/${activeSession?.id}/agent-occupancy`,
+      ),
+    enabled: Boolean(activeSession?.id),
+    refetchInterval: 5000,
+    retry: false,
   });
   const activeDraft =
     draft?.session_id === activeSession?.id
@@ -662,6 +673,31 @@ export function StudioWorkspace() {
               <Meta label="状态" value={cnStatus(activeSession?.status ?? "inbox")} />
               <Meta label="策略草稿" value={activeDraft ? "1 份" : "0 份"} />
               <Meta label="当前基准" value={currentBaselineId ? "已冻结" : "未冻结"} />
+              <div
+                className={
+                  agentOccupancy.isError || agentOccupancy.isPending
+                    ? "rounded-lg border border-white/10 bg-white/[0.03] p-2 text-xs leading-5 text-slate-400"
+                    : agentOccupancy.data?.occupied
+                    ? "rounded-lg border border-amber-300/20 bg-amber-300/10 p-2 text-xs leading-5 text-amber-100"
+                    : "rounded-lg border border-emerald-300/15 bg-emerald-300/[0.07] p-2 text-xs leading-5 text-emerald-100"
+                }
+              >
+                {agentOccupancy.isPending ? (
+                  "正在读取当前会话的 AI 占用状态……"
+                ) : agentOccupancy.isError ? (
+                  "AI 会话隔离接口尚未加载；重启本地 API 后生效。"
+                ) : agentOccupancy.data?.occupied ? (
+                  <>
+                    当前由
+                    <span className="mx-1 font-medium">
+                      {friendlyAgentName(agentOccupancy.data.agent_name)}
+                    </span>
+                    写入。其他 AI 窗口请新建研究会话，避免结果混在一起。
+                  </>
+                ) : (
+                  "当前会话空闲。不同策略使用不同研究会话，可以安全并行。"
+                )}
+              </div>
               {currentBaselineId ? (
                 <TechnicalDetails label="查看基准技术 ID">
                   <TechnicalId label="冻结基准" value={currentBaselineId} />
@@ -1123,6 +1159,13 @@ export function StudioWorkspace() {
       </div>
     </div>
   );
+}
+
+function friendlyAgentName(name: string | null) {
+  if (!name) return "本地研究助手";
+  const normalized = name.toLowerCase();
+  if (normalized.includes("codex")) return "Codex 本地研究助手";
+  return name;
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
