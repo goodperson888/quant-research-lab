@@ -21,9 +21,17 @@ class RunBundleEquityReader:
         self.repository = repository
         self.artifacts = artifacts
 
-    def read(self, *, bundle_id: str, max_points: int = 800) -> dict[str, Any]:
+    def read(
+        self,
+        *,
+        bundle_id: str,
+        max_points: int = 800,
+        market_timeframe: str = "1h",
+    ) -> dict[str, Any]:
         if not 50 <= max_points <= 2_000:
             raise ValueError("max_points must be between 50 and 2000")
+        if market_timeframe not in {"5m", "15m", "1h", "4h"}:
+            raise ValueError("market_timeframe must be one of 5m, 15m, 1h, 4h")
         report = next(
             (item for item in self.repository.list_reports() if item.id == bundle_id),
             None,
@@ -87,6 +95,12 @@ class RunBundleEquityReader:
             manifest=manifest,
             equity_series=series,
             max_points=max_points,
+            market_timeframe=market_timeframe,
+        )
+        available_market_timeframes = (
+            market_series.pop("available_timeframes")
+            if market_series is not None
+            else self._available_market_timeframes(manifest)
         )
         trades, trade_source_keys = self._read_trades(
             trade_keys=trade_keys,
@@ -99,11 +113,13 @@ class RunBundleEquityReader:
         ]
         if market_series is not None:
             limitations.append(
-                "行情对照使用本次运行登记数据版本中的 1 小时 ETHUSDT 永续 OHLCV。"
+                "行情对照使用本次运行登记数据版本中的 "
+                f"{_timeframe_name(market_series['source_timeframe'])} "
+                "ETHUSDT 永续 OHLCV。"
             )
             if market_series["aggregated"]:
                 limitations.append(
-                    "为了控制浏览器负载，展示K线由原始 1 小时K线确定性聚合；"
+                    "为了控制浏览器负载，展示K线由所选原始周期确定性聚合；"
                     "开高低收和成交量均按K线规则合并。"
                 )
         if trades:
@@ -116,6 +132,7 @@ class RunBundleEquityReader:
             "series": series,
             "market_series": market_series,
             "market_reason": market_reason,
+            "available_market_timeframes": available_market_timeframes,
             "trades": trades,
             "trade_source_artifact_keys": trade_source_keys,
             "limitations": limitations,
@@ -128,6 +145,7 @@ class RunBundleEquityReader:
         manifest: dict[str, Any],
         equity_series: list[dict[str, Any]],
         max_points: int,
+        market_timeframe: str,
     ) -> tuple[dict[str, Any] | None, str | None]:
         data_manifest = manifest.get("data_manifest")
         manifest_key = (
@@ -142,18 +160,22 @@ class RunBundleEquityReader:
         except (json.JSONDecodeError, OSError):
             return None, "行情数据清单无法读取。"
 
+        available_timeframes = self._available_market_timeframes(manifest)
         dataset = next(
             (
                 item
                 for item in market_manifest.get("processed_datasets", [])
                 if isinstance(item, dict)
                 and item.get("dataset") == "futures_ohlcv"
-                and item.get("timeframe") == "1h"
+                and item.get("timeframe") == market_timeframe
             ),
             None,
         )
         if dataset is None:
-            return None, "数据清单未登记 1 小时永续行情。"
+            return (
+                None,
+                f"数据清单未登记 {_timeframe_name(market_timeframe)} 永续行情。",
+            )
 
         timestamps = [
             pd.Timestamp(point["t"])
@@ -216,11 +238,10 @@ class RunBundleEquityReader:
         source_point_count = len(combined)
         combined = _downsample_ohlcv(combined, max_points=max_points)
         aggregated = len(combined) < source_point_count
-        display_hours = source_point_count / len(combined)
-        display_timeframe = (
-            f"约{display_hours:.1f}小时/根（由1小时K线聚合）"
-            if aggregated
-            else "1小时/根"
+        display_timeframe = _display_timeframe(
+            source_timeframe=market_timeframe,
+            source_point_count=source_point_count,
+            display_point_count=len(combined),
         )
 
         symbol = market_manifest.get("symbol", {})
@@ -236,8 +257,9 @@ class RunBundleEquityReader:
                 "kind": "market_price",
                 "unit": "quote_price",
                 "timeframe": display_timeframe,
-                "source_timeframe": "1h",
+                "source_timeframe": market_timeframe,
                 "aggregated": aggregated,
+                "available_timeframes": available_timeframes,
                 "points": [
                     {
                         "t": timestamp.isoformat(),
@@ -280,6 +302,29 @@ class RunBundleEquityReader:
             None,
         )
 
+    def _available_market_timeframes(self, manifest: dict[str, Any]) -> list[str]:
+        data_manifest = manifest.get("data_manifest")
+        manifest_key = (
+            str(data_manifest.get("artifact_key", "")).strip()
+            if isinstance(data_manifest, dict)
+            else ""
+        )
+        if not manifest_key or not self.artifacts.exists(manifest_key):
+            return []
+        try:
+            market_manifest = json.loads(self.artifacts.get(manifest_key))
+        except (json.JSONDecodeError, OSError):
+            return []
+        available = {
+            str(item.get("timeframe"))
+            for item in market_manifest.get("processed_datasets", [])
+            if isinstance(item, dict)
+            and item.get("dataset") == "futures_ohlcv"
+            and item.get("timeframe") in {"5m", "15m", "1h", "4h"}
+        }
+        order = {"5m": 0, "15m": 1, "1h": 2, "4h": 3}
+        return sorted(available, key=order.__getitem__)
+
     def _read_trades(
         self,
         *,
@@ -309,11 +354,43 @@ class RunBundleEquityReader:
             "series": [],
             "market_series": None,
             "market_reason": None,
+            "available_market_timeframes": [],
             "trades": [],
             "trade_source_artifact_keys": [],
             "reason": reason,
             "limitations": [],
         }
+
+
+def _display_timeframe(
+    *,
+    source_timeframe: str,
+    source_point_count: int,
+    display_point_count: int,
+) -> str:
+    source_minutes = {"5m": 5, "15m": 15, "1h": 60, "4h": 240}[source_timeframe]
+    if display_point_count >= source_point_count:
+        return f"{_timeframe_name(source_timeframe)}/根"
+    display_minutes = (
+        source_minutes * source_point_count / max(display_point_count, 1)
+    )
+    if display_minutes < 60:
+        interval = f"{display_minutes:.0f}分钟"
+    else:
+        interval = f"{display_minutes / 60:.1f}小时"
+    return (
+        f"约{interval}/根"
+        f"（由{_timeframe_name(source_timeframe)}K线聚合）"
+    )
+
+
+def _timeframe_name(timeframe: str) -> str:
+    return {
+        "5m": "5分钟",
+        "15m": "15分钟",
+        "1h": "1小时",
+        "4h": "4小时",
+    }[timeframe]
 
 
 def _normalize_equity_frame(

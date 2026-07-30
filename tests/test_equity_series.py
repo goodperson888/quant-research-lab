@@ -67,6 +67,21 @@ def test_run_bundle_equity_reader_uses_registered_bundle_not_caller_path(
         }
     ).to_parquet(market_buffer, index=False)
     store.put(market_key, market_buffer.getvalue())
+    market_5m_key = "data/processed/eth-5m.parquet"
+    market_5m_buffer = io.BytesIO()
+    pd.DataFrame(
+        {
+            "timestamp": pd.date_range(
+                "2026-01-01", periods=120, freq="5min", tz="UTC"
+            ),
+            "open": [1999 + index * 0.2 for index in range(120)],
+            "high": [2001 + index * 0.2 for index in range(120)],
+            "low": [1998 + index * 0.2 for index in range(120)],
+            "close": [2000 + index * 0.2 for index in range(120)],
+            "volume": [10 + index for index in range(120)],
+        }
+    ).to_parquet(market_5m_buffer, index=False)
+    store.put(market_5m_key, market_5m_buffer.getvalue())
     trade_key = "experiments/runs/run_equity/trades.parquet"
     trade_buffer = io.BytesIO()
     pd.DataFrame(
@@ -93,6 +108,11 @@ def test_run_bundle_equity_reader_uses_registered_bundle_not_caller_path(
             {
                 "symbol": {"unified": "ETH/USDT:USDT"},
                 "processed_datasets": [
+                    {
+                        "dataset": "futures_ohlcv",
+                        "timeframe": "5m",
+                        "outputs": [{"path": market_5m_key}],
+                    },
                     {
                         "dataset": "futures_ohlcv",
                         "timeframe": "1h",
@@ -126,6 +146,7 @@ def test_run_bundle_equity_reader_uses_registered_bundle_not_caller_path(
     assert result["series"][0]["source_artifact_key"] == equity_key
     assert result["market_series"]["label"] == "ETH/USDT:USDT 行情"
     assert result["market_series"]["source_timeframe"] == "1h"
+    assert result["available_market_timeframes"] == ["5m", "1h"]
     assert result["market_series"]["aggregated"] is True
     assert "由1小时K线聚合" in result["market_series"]["timeframe"]
     assert len(result["market_series"]["points"]) == 50
@@ -138,6 +159,15 @@ def test_run_bundle_equity_reader_uses_registered_bundle_not_caller_path(
     assert result["trades"][0]["stop_price"] == 2040.0
     assert result["trades"][0]["take_profit_price"] == 2070.0
     assert result["trade_source_artifact_keys"] == [trade_key]
+
+    five_minute_result = RunBundleEquityReader(repository, store).read(
+        bundle_id="report_equity",
+        max_points=50,
+        market_timeframe="5m",
+    )
+    assert five_minute_result["market_series"]["source_timeframe"] == "5m"
+    assert "由5分钟K线聚合" in five_minute_result["market_series"]["timeframe"]
+    assert five_minute_result["available_market_timeframes"] == ["5m", "1h"]
 
 
 def test_run_bundle_equity_reader_reports_missing_curve_without_fabrication(

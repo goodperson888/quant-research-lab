@@ -1071,8 +1071,16 @@ def create_app(
     def run_bundle_chart_series(
         bundle_id: str,
         max_points: int = Query(default=800, ge=50, le=2_000),
+        market_timeframe: str = Query(
+            default="1h",
+            pattern="^(5m|15m|1h|4h)$",
+        ),
     ) -> dict[str, Any]:
-        return equity_reader.read(bundle_id=bundle_id, max_points=max_points)
+        return equity_reader.read(
+            bundle_id=bundle_id,
+            max_points=max_points,
+            market_timeframe=market_timeframe,
+        )
 
     @application.get("/api/research-diagnostics/latest", tags=["reports"])
     def latest_research_diagnostic(subject_id: str = Query(min_length=1)) -> dict[str, Any]:

@@ -653,6 +653,7 @@ export type RunBundleChart = {
   series: EquityChartSeries[];
   market_series: MarketChartSeries | null;
   market_reason?: string | null;
+  available_market_timeframes: string[];
   trades: TradeChartRecord[];
   trade_source_artifact_keys: string[];
   reason?: string;

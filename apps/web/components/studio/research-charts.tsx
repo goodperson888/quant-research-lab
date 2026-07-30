@@ -20,12 +20,17 @@ import {
 
 export function PerformanceCharts({ bundles }: { bundles: RunBundle[] }) {
   const [selectedBundleId, setSelectedBundleId] = useState<string | null>(null);
+  const [marketTimeframe, setMarketTimeframe] = useState("1h");
   const chartQueries = useQueries({
     queries: bundles.slice(0, 8).map((bundle) => ({
-      queryKey: ["run-bundle-chart", bundle.bundle_id],
+      queryKey: [
+        "run-bundle-chart",
+        bundle.bundle_id,
+        marketTimeframe,
+      ],
       queryFn: () =>
         apiFetch<RunBundleChart>(
-          `/api/run-bundles/${encodeURIComponent(bundle.bundle_id)}/chart-series?max_points=2000`,
+          `/api/run-bundles/${encodeURIComponent(bundle.bundle_id)}/chart-series?max_points=2000&market_timeframe=${encodeURIComponent(marketTimeframe)}`,
         ),
       retry: false,
     })),
@@ -51,6 +56,8 @@ export function PerformanceCharts({ bundles }: { bundles: RunBundle[] }) {
     availableCharts[0];
   const chart = selectedChartEntry?.chart;
   const selectedBundle = selectedChartEntry?.bundle;
+  const availableMarketTimeframes =
+    chart?.available_market_timeframes ?? [];
   const isLoading = chartQueries.some((query) => query.isPending);
   const unavailableReason = chartQueries
     .map((query) => query.data?.reason)
@@ -125,6 +132,13 @@ export function PerformanceCharts({ bundles }: { bundles: RunBundle[] }) {
               </span>
             </label>
           ) : null}
+          {availableMarketTimeframes.length ? (
+            <MarketTimeframeSelector
+              value={marketTimeframe}
+              options={availableMarketTimeframes}
+              onChange={setMarketTimeframe}
+            />
+          ) : null}
           {chart?.market_series ? (
             <InteractiveTradingChart
               market={chart.market_series}
@@ -182,6 +196,50 @@ export function PerformanceCharts({ bundles }: { bundles: RunBundle[] }) {
               "当前策略还没有保存可读取的逐时点资金曲线。下次运行快速初筛或完整回测后，这里会自动显示折线图。"}
         </EmptyState>
       )}
+    </div>
+  );
+}
+
+function MarketTimeframeSelector({
+  value,
+  options,
+  onChange,
+}: {
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-black/10 p-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="text-sm font-medium text-slate-200">行情K线周期</div>
+          <div className="mt-1 text-xs leading-5 text-slate-500">
+            切换本次回测已登记的行情数据；交易时间与价格不会改变。
+          </div>
+        </div>
+        <div
+          className="flex max-w-full gap-2 overflow-x-auto pb-1"
+          role="group"
+          aria-label="选择行情K线周期"
+        >
+          {options.map((option) => (
+            <button
+              key={option}
+              type="button"
+              aria-pressed={value === option}
+              onClick={() => onChange(option)}
+              className={
+                value === option
+                  ? "min-h-11 shrink-0 rounded-xl border border-sky-300/30 bg-sky-300/10 px-3 text-xs text-sky-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+                  : "min-h-11 shrink-0 rounded-xl border border-white/10 px-3 text-xs text-slate-400 transition hover:border-white/20 hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+              }
+            >
+              {timeframeLabel(option)}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -612,6 +670,15 @@ function formatDateTick(timestamp: number) {
 function formatShortDate(value: string) {
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? formatDateTick(timestamp) : value;
+}
+
+function timeframeLabel(value: string) {
+  return {
+    "5m": "5分钟",
+    "15m": "15分钟",
+    "1h": "1小时",
+    "4h": "4小时",
+  }[value] ?? value;
 }
 
 function formatSignedPercentValue(value: number) {

@@ -302,6 +302,19 @@ export function InteractiveTradingChart({
         <LegendMarker color="#fbbf24" shape="square" label="离场" />
         <span>{sortedTrades.length.toLocaleString("zh-CN")} 笔真实交易</span>
       </div>
+      {selectedTrade ? (
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2 text-[11px] text-slate-400">
+          <span className="text-slate-500">当前交易四条价格线：</span>
+          <PriceLineLegend color="#7dd3fc" label="入场" />
+          <PriceLineLegend color="#fbbf24" label="离场" />
+          {selectedTrade.stop_price !== null ? (
+            <PriceLineLegend color="#fb7185" label="止损" dashed />
+          ) : null}
+          {selectedTrade.take_profit_price !== null ? (
+            <PriceLineLegend color="#3dd6b0" label="止盈" dashed />
+          ) : null}
+        </div>
+      ) : null}
 
       <div
         ref={containerRef}
@@ -519,7 +532,7 @@ export function InteractiveEquityChart({
             多策略资金曲线
           </div>
           <div className="mt-1 text-xs leading-5 text-slate-500">
-            不同线型与颜色共同区分策略；支持滚轮、双指缩放和拖动平移。
+            不同线型与颜色共同区分策略；支持滚轮、双指缩放和拖动平移。“全周期”可随时恢复完整覆盖范围。
           </div>
         </div>
         <ChartToolbar chartRef={chartRef} disabled={!chartReady} />
@@ -596,7 +609,7 @@ function ChartToolbar({
         onClick={() => panChart(chartRef.current, 0.25)}
       />
       <ChartButton
-        label="复位"
+        label="全周期"
         disabled={disabled}
         onClick={() => chartRef.current?.timeScale().fitContent()}
       />
@@ -704,6 +717,34 @@ function LegendMarker({
               ? { borderBottomColor: color }
               : { borderTopColor: color }
         }
+      />
+      {label}
+    </span>
+  );
+}
+
+function PriceLineLegend({
+  color,
+  label,
+  dashed = false,
+}: {
+  color: string;
+  label: string;
+  dashed?: boolean;
+}) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span
+        className={
+          dashed
+            ? "h-0 w-5 border-t border-dashed"
+            : "h-0.5 w-5"
+        }
+        style={{
+          color,
+          backgroundColor: dashed ? undefined : color,
+          borderColor: dashed ? color : undefined,
+        }}
       />
       {label}
     </span>
