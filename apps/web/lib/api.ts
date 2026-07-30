@@ -559,10 +559,25 @@ export type EquityChartSeries = {
   evidence_mode: string;
 };
 
+export type MarketChartSeries = {
+  series_id: string;
+  label: string;
+  kind: "market_price";
+  unit: "quote_price";
+  points: Array<{
+    t: string;
+    value: number;
+  }>;
+  source_artifact_keys: string[];
+  evidence_mode: "market_context";
+};
+
 export type RunBundleChart = {
   available: boolean;
   bundle_id: string;
   series: EquityChartSeries[];
+  market_series: MarketChartSeries | null;
+  market_reason?: string | null;
   reason?: string;
   limitations: string[];
 };

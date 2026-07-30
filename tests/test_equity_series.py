@@ -44,7 +44,7 @@ def test_run_bundle_equity_reader_uses_registered_bundle_not_caller_path(
     frame = pd.DataFrame(
         {
             "timestamp": pd.date_range(
-                "2026-01-01", periods=120, freq="5min", tz="UTC"
+                "2026-01-01", periods=120, freq="1h", tz="UTC"
             ),
             "equity": [1000 + index for index in range(120)],
         }
@@ -52,9 +52,41 @@ def test_run_bundle_equity_reader_uses_registered_bundle_not_caller_path(
     buffer = io.BytesIO()
     frame.to_parquet(buffer, index=False)
     store.put(equity_key, buffer.getvalue())
+    market_key = "data/processed/eth-1h.parquet"
+    market_buffer = io.BytesIO()
+    pd.DataFrame(
+        {
+            "timestamp": pd.date_range(
+                "2026-01-01", periods=120, freq="1h", tz="UTC"
+            ),
+            "close": [2000 + index * 2 for index in range(120)],
+        }
+    ).to_parquet(market_buffer, index=False)
+    store.put(market_key, market_buffer.getvalue())
+    data_manifest_key = "data/manifests/eth-fixture.json"
+    store.put(
+        data_manifest_key,
+        json.dumps(
+            {
+                "symbol": {"unified": "ETH/USDT:USDT"},
+                "processed_datasets": [
+                    {
+                        "dataset": "futures_ohlcv",
+                        "timeframe": "1h",
+                        "outputs": [{"path": market_key}],
+                    }
+                ],
+            }
+        ).encode(),
+    )
     store.put(
         "experiments/runs/run_equity/manifest.json",
-        json.dumps({"outputs": [{"artifact_key": equity_key}]}).encode(),
+        json.dumps(
+            {
+                "outputs": [{"artifact_key": equity_key}],
+                "data_manifest": {"artifact_key": data_manifest_key},
+            }
+        ).encode(),
     )
 
     result = RunBundleEquityReader(repository, store).read(
@@ -66,6 +98,9 @@ def test_run_bundle_equity_reader_uses_registered_bundle_not_caller_path(
     assert len(result["series"][0]["points"]) == 50
     assert result["series"][0]["points"][0]["normalized_equity"] == 1.0
     assert result["series"][0]["source_artifact_key"] == equity_key
+    assert result["market_series"]["label"] == "ETH/USDT:USDT 行情"
+    assert len(result["market_series"]["points"]) == 50
+    assert result["market_series"]["points"][0]["value"] == 2000.0
 
 
 def test_run_bundle_equity_reader_reports_missing_curve_without_fabrication(
