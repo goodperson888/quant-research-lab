@@ -14,3 +14,7 @@ export PYTHONPYCACHEPREFIX="$ROOT/.cache/pycache"
 export MPLCONFIGDIR="$ROOT/.cache/matplotlib"
 export PATH="$ROOT/.tools/bin:$PATH"
 export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
+
+# Stable local development ports shared by every start/stop/status command.
+export QUANT_LAB_API_PORT="${QUANT_LAB_API_PORT:-8100}"
+export QUANT_LAB_WEB_PORT="${QUANT_LAB_WEB_PORT:-3100}"

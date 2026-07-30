@@ -1,5 +1,5 @@
 export const API_BASE =
-  process.env.NEXT_PUBLIC_QUANT_LAB_API_URL ?? "http://127.0.0.1:8000";
+  process.env.NEXT_PUBLIC_QUANT_LAB_API_URL ?? "http://127.0.0.1:8100";
 
 export type ProjectStatus = {
   name: string;

@@ -333,9 +333,6 @@ class DevManager:
         api_class, api_pids = classify_port("api", self.api_port)
         web_class, web_pids = classify_port("web", self.web_port)
 
-        if api_class == web_class == "project":
-            self.print_running(self.api_port, self.web_port)
-            return "reuse"
         if api_class == "unknown":
             report_unknown_port("api", self.api_port, api_pids)
         if web_class == "unknown":
@@ -343,11 +340,94 @@ class DevManager:
         if "unknown" in (api_class, web_class):
             raise DevManagerError("端口预检失败，未启动或终止任何进程。")
         if "project" in (api_class, web_class):
-            raise DevManagerError(
-                "只检测到一部分本项目服务。为避免混合不同实例，本次没有启动或终止进程。\n"
-                "请回到原启动终端按 Ctrl+C；若该实例由本脚本管理，也可运行 ./scripts/dev.sh stop。"
+            print(
+                "检测到本项目手动启动或失去状态文件的旧服务；"
+                "正在安全停止并重新纳入 dev.sh 管理。"
+            )
+            self.stop_unmanaged_project_services(
+                classified={
+                    "api": (api_class, api_pids),
+                    "web": (web_class, web_pids),
+                },
+                announce=False,
             )
         return "start"
+
+    def terminate_verified_listeners(
+        self,
+        *,
+        role: str,
+        port: int,
+        pids: Iterable[int],
+    ) -> bool:
+        verified = sorted(set(pids))
+        if not verified:
+            return False
+        current_listeners = set(listener_pids(port))
+        for pid in verified:
+            if pid not in current_listeners:
+                continue
+            if not process_matches_role(pid, role):
+                raise DevManagerError(
+                    f"{ROLE_LABELS[role]} 端口 {port} 的进程身份在停止前发生变化；"
+                    "本次没有继续终止。"
+                )
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                continue
+            except PermissionError as exc:
+                raise DevManagerError(
+                    f"没有权限停止已确认的本项目 {ROLE_LABELS[role]} 进程 PID {pid}。"
+                ) from exc
+
+        deadline = time.monotonic() + 5.0
+        while listener_pids(port) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        remaining = listener_pids(port)
+        if remaining:
+            raise DevManagerError(
+                f"已向本项目 {ROLE_LABELS[role]} 发送停止信号，但端口 {port} "
+                f"仍被 PID {', '.join(str(pid) for pid in remaining)} 占用；"
+                "未使用强制终止。"
+            )
+        return True
+
+    def stop_unmanaged_project_services(
+        self,
+        *,
+        classified: dict[str, tuple[str, list[int]]] | None = None,
+        announce: bool,
+    ) -> bool:
+        results = classified or {
+            "api": classify_port("api", self.api_port),
+            "web": classify_port("web", self.web_port),
+        }
+        for role, (classification, pids) in results.items():
+            if classification == "unknown":
+                port = self.api_port if role == "api" else self.web_port
+                report_unknown_port(role, port, pids)
+                raise DevManagerError(
+                    "端口上存在无法确认身份的进程，本次没有终止任何未知软件。"
+                )
+
+        stopped = False
+        for role in ("web", "api"):
+            classification, pids = results[role]
+            if classification != "project":
+                continue
+            port = self.api_port if role == "api" else self.web_port
+            stopped = (
+                self.terminate_verified_listeners(
+                    role=role,
+                    port=port,
+                    pids=pids,
+                )
+                or stopped
+            )
+        if stopped and announce:
+            print("已停止可确认属于本项目的 API/Web 服务。")
+        return stopped
 
     def terminate_managed_group(
         self, state: dict[str, Any], role: str
@@ -366,8 +446,15 @@ class DevManager:
             return False
         if pgid != pid:
             return False
-        with contextlib.suppress(ProcessLookupError):
+        try:
             os.killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            return False
+        except PermissionError as exc:
+            raise DevManagerError(
+                f"当前窗口没有权限停止已确认的本项目 {ROLE_LABELS[role]} "
+                f"进程组 PID {pid}。请在你自己的终端运行同一条命令。"
+            ) from exc
         return True
 
     def wait_for_pid_exit(self, pid: int, timeout: float = 5.0) -> bool:
@@ -402,16 +489,10 @@ class DevManager:
             if state and self.stop_state(state, announce=True):
                 return 0
 
-            api_class, _ = classify_port("api", self.api_port)
-            web_class, _ = classify_port("web", self.web_port)
-            if "project" in (api_class, web_class):
-                raise DevManagerError(
-                    "检测到本项目服务，但它不是由当前 dev.sh 状态文件管理；"
-                    "为保证安全，本次没有终止。\n"
-                    "请回到启动它的终端按 Ctrl+C，然后再使用 ./scripts/dev.sh 启动。"
-                )
-            else:
-                print("没有发现由 ./scripts/dev.sh 管理的运行实例。")
+            if self.stop_unmanaged_project_services(announce=True):
+                self.clear_state()
+                return 0
+            print("没有发现 Quant Research Lab 本地服务。")
         return 0
 
     def wait_until_ready(
@@ -425,7 +506,9 @@ class DevManager:
         while time.monotonic() < deadline:
             if process.poll() is not None:
                 raise DevManagerError(f"{ROLE_LABELS[role]} 启动进程已提前退出。")
-            if managed_listener_exists(role, port, run_id):
+            if process_group_listens(process.pid, port) or managed_listener_exists(
+                role, port, run_id
+            ):
                 return
             pids = listener_pids(port)
             if pids:
@@ -568,8 +651,24 @@ class DevManager:
                     self.state_port(state, "api"),
                     self.state_port(state, "web"),
                 )
-            else:
-                print("没有发现由 ./scripts/dev.sh 管理的完整运行实例。")
+                return 0
+
+            api_class, api_pids = classify_port("api", self.api_port)
+            web_class, web_pids = classify_port("web", self.web_port)
+            if "unknown" in (api_class, web_class):
+                if api_class == "unknown":
+                    report_unknown_port("api", self.api_port, api_pids)
+                if web_class == "unknown":
+                    report_unknown_port("web", self.web_port, web_pids)
+                return 1
+            if "project" in (api_class, web_class):
+                print(
+                    "发现本项目手动启动或失去状态文件的服务。"
+                    "可直接运行 ./scripts/dev.sh start 重新纳管，"
+                    "或运行 ./scripts/dev.sh stop 安全停止。"
+                )
+                return 0
+            print("没有发现 Quant Research Lab 本地服务。")
         return 0
 
 

@@ -82,19 +82,54 @@ def test_managed_process_rejects_missing_run_id_when_command_is_visible() -> Non
         assert not dev_manager.process_is_managed(101, "api", "run-id", 18000)
 
 
-def test_existing_project_service_is_reused(tmp_path: Path) -> None:
+def test_wait_until_ready_accepts_listener_from_spawned_process_group(
+    tmp_path: Path,
+) -> None:
     manager = make_manager(tmp_path)
-
-    def listeners(port: int) -> list[int]:
-        return [101] if port == manager.api_port else [202]
+    process = type(
+        "Process",
+        (),
+        {"pid": 91, "poll": lambda self: None},
+    )()
 
     with (
-        patch.object(dev_manager, "listener_pids", side_effect=listeners),
-        patch.object(dev_manager, "process_matches_role", return_value=True),
-        patch.object(manager, "print_running") as print_running,
+        patch.object(dev_manager, "process_group_listens", return_value=True),
+        patch.object(dev_manager, "managed_listener_exists") as managed,
     ):
-        assert manager.preflight() == "reuse"
-        print_running.assert_called_once_with(manager.api_port, manager.web_port)
+        manager.wait_until_ready(
+            process,
+            role="web",
+            port=manager.web_port,
+            run_id="run-id",
+        )
+        managed.assert_not_called()
+
+
+def test_existing_project_service_is_stopped_before_managed_restart(
+    tmp_path: Path,
+) -> None:
+    manager = make_manager(tmp_path)
+
+    with (
+        patch.object(
+            dev_manager,
+            "classify_port",
+            side_effect=[("project", [101]), ("project", [202])],
+        ),
+        patch.object(
+            manager,
+            "stop_unmanaged_project_services",
+            return_value=True,
+        ) as stop_unmanaged,
+    ):
+        assert manager.preflight() == "start"
+        stop_unmanaged.assert_called_once_with(
+            classified={
+                "api": ("project", [101]),
+                "web": ("project", [202]),
+            },
+            announce=False,
+        )
 
 
 def test_unknown_port_occupant_is_reported_without_kill(tmp_path: Path) -> None:
@@ -163,21 +198,60 @@ def test_safe_stop_targets_confirmed_process_group(tmp_path: Path) -> None:
         killpg.assert_called_once_with(606, signal.SIGTERM)
 
 
-def test_stop_refuses_unmanaged_project_service(tmp_path: Path) -> None:
+def test_safe_stop_reports_permission_error_without_traceback(
+    tmp_path: Path,
+) -> None:
+    manager = make_manager(tmp_path)
+    state = {
+        "run_id": "run-id",
+        "api_pid": 606,
+        "api_port": manager.api_port,
+    }
+
+    with (
+        patch.object(dev_manager, "process_is_managed", return_value=True),
+        patch.object(dev_manager.os, "getpgid", return_value=606),
+        patch.object(
+            dev_manager.os,
+            "killpg",
+            side_effect=PermissionError,
+        ),
+    ):
+        try:
+            manager.terminate_managed_group(state, "api")
+        except dev_manager.DevManagerError as error:
+            assert "当前窗口没有权限" in str(error)
+        else:
+            raise AssertionError("permission error should be explained")
+
+
+def test_verified_unmanaged_listener_is_stopped_without_process_group_kill(
+    tmp_path: Path,
+) -> None:
     manager = make_manager(tmp_path)
 
     with (
-        patch.object(
-            dev_manager,
-            "classify_port",
-            side_effect=[("project", [707]), ("free", [])],
-        ),
+        patch.object(dev_manager, "listener_pids", side_effect=[[707], [], []]),
+        patch.object(dev_manager, "process_matches_role", return_value=True),
+        patch.object(dev_manager.os, "kill") as kill,
         patch.object(dev_manager.os, "killpg") as killpg,
     ):
-        try:
-            manager.stop()
-        except dev_manager.DevManagerError:
-            pass
-        else:
-            raise AssertionError("unmanaged project service should not be stopped")
+        assert manager.terminate_verified_listeners(
+            role="api",
+            port=manager.api_port,
+            pids=[707],
+        )
+        kill.assert_called_once_with(707, signal.SIGTERM)
         killpg.assert_not_called()
+
+
+def test_stop_recovers_unmanaged_project_service(tmp_path: Path) -> None:
+    manager = make_manager(tmp_path)
+
+    with patch.object(
+        manager,
+        "stop_unmanaged_project_services",
+        return_value=True,
+    ) as stop_unmanaged:
+        assert manager.stop() == 0
+        stop_unmanaged.assert_called_once_with(announce=True)

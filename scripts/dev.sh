@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/env.sh"
 PYTHON="$ROOT/.venv/bin/python"
 
 if [[ ! -x "$PYTHON" ]]; then

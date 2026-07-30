@@ -109,14 +109,14 @@ from .schemas import (
 
 
 def local_origins() -> list[str]:
-    configured_port = os.environ.get("QUANT_LAB_WEB_PORT", "3000")
+    configured_port = os.environ.get("QUANT_LAB_WEB_PORT", "3100")
     try:
         port = int(configured_port)
     except ValueError:
-        port = 3000
+        port = 3100
     if not 1 <= port <= 65535:
-        port = 3000
-    ports = sorted({3000, port})
+        port = 3100
+    ports = sorted({3000, 3100, port})
     return [
         origin
         for current_port in ports
@@ -250,7 +250,7 @@ def create_app(
     @application.get("/", include_in_schema=False)
     def api_root() -> dict[str, Any]:
         web_studio = (
-            f"http://127.0.0.1:{os.environ.get('QUANT_LAB_WEB_PORT', '3000')}/studio"
+            f"http://127.0.0.1:{os.environ.get('QUANT_LAB_WEB_PORT', '3100')}/studio"
         )
         return {
             "service": "Quant Research Lab API",
