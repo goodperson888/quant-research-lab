@@ -1,6 +1,6 @@
-# ETH 永续一年数据扩展记录
+# ETH 永续一年与两年数据扩展记录
 
-状态日期：2026-07-22
+状态日期：2026-07-30
 
 ## 1. 范围与来源
 
@@ -67,3 +67,39 @@ raw 约 13.2 MiB，全部 processed 约 24.3 MiB，Freqtrade 可重建本地数�
 但仍不得声称“长期验证”或未来盈利。funding、mark/index 缺口必须由明示政策
 处理，不得填 0。本轮没有下载 OKX 一年行情，不得把 Binance 结论传播为
 OKX validated。
+
+## 6. 两年扩展
+
+2026-07-30 在用户明确授权公开网络下载后，将 Binance ETHUSDT USDT 本位永续窗口扩展为：
+
+```text
+[2024-07-20T00:00:00Z, 2026-07-20T00:00:00Z)
+```
+
+共 730 个完整 UTC 日。下载计划包含 1,031 个官方归档项：复用 563 个不可变 raw，
+新下载 449 个，19 个官方归档不可用。使用本机代理只访问公开 Binance Vision 文件，
+未使用密钥，代理地址未写入配置。
+
+| 数据集 | 周期 | 实际行数 | 理论行数 | 已知缺口 |
+|---|---:|---:|---:|---|
+| futures OHLCV | 5m | 210,240 | 210,240 | 0 |
+| futures OHLCV | 15m | 70,080 | 70,080 | 0 |
+| futures OHLCV | 1h | 17,520 | 17,520 | 0 |
+| futures OHLCV | 4h | 4,380 | 4,380 | 0 |
+| mark price | 15m | 69,984 | 70,080 | 缺 2026-06-29 全天 96 根 |
+| index price | 15m | 69,984 | 70,080 | 缺 2026-06-29 全天 96 根 |
+| funding rate | 8h event | 2,133 | 2,190 | 缺 57，只到 2026-06-30 16:00 UTC |
+| OI metrics | 5m source | 210,233 | 210,240 | 精确网格缺 58；51 个官方时间戳 off-grid |
+
+权威两年证据：
+
+- 下载配置：`configs/data_downloads/binance_ethusdt_perpetual_2y.yaml`；
+- data version：`binance-vision-ethusdt-perpetual-20240720_20260720-v1`；
+- manifest：`data/manifests/binance_ethusdt_perpetual_20240720_20260720_v2.json`；
+- 质量报告：`reports/data_quality/binance_ethusdt_perpetual_20240720_20260720_v2.md`；
+- processed Parquet：199 个文件，约 40.8 MB；
+- raw Binance Vision：当前合计约 27.2 MB。
+
+两年数据适合更有意义的滚动验证与行情筛选，但仍不等于长期验证，不证明未来盈利。
+OKX 同期历史尚未下载，Binance 结论仍不得传播为 OKX validated。原一年和 90 日数据、
+manifest 与报告均保留，未被覆盖。

@@ -500,9 +500,10 @@ def write_manifest(
     timeframes: tuple[str, ...],
     proxy_used: bool,
 ) -> Path:
+    coverage_days = (end - start).days
     okx_gap = (
         "Official OKX public metadata is reachable through the user-provided local "
-        "proxy; this scoped annual extension did not download OKX history."
+        f"proxy; this scoped {coverage_days}-day extension did not download OKX history."
         if proxy_used
         else "OKX public API was not reachable without a proxy; no OKX history was downloaded."
     )
@@ -568,7 +569,10 @@ def write_manifest(
         ],
         "research_limitations": [
             "Historical coverage is research evidence only and cannot establish future profitability.",
-            "A one-year window improves regime coverage but still does not prove a complete or repeatable market cycle.",
+            (
+                f"A {coverage_days}-day window improves regime coverage but still does not "
+                "prove a complete or repeatable market cycle."
+            ),
             "No future lower-timeframe aggregate may be used at the current decision timestamp.",
         ],
     }
@@ -592,6 +596,7 @@ def write_report(
     report_name: str,
     proxy_used: bool,
 ) -> Path:
+    coverage_days = (end - start).days
     lines = [
         "# ETHUSDT 永续数据质量摘要",
         "",
@@ -625,7 +630,7 @@ def write_report(
             "",
             (
                 "- OKX 公共 metadata 可通过用户指定的本机代理访问；"
-                "本轮范围仅扩展 Binance 一年历史，未下载 OKX 一年数据。"
+                f"本轮范围扩展 Binance {coverage_days} 天历史，未下载 OKX 同期数据。"
                 if proxy_used
                 else "- OKX 直连不可达，未取得 OKX 对照数据。"
             ),

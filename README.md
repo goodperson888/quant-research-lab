@@ -183,21 +183,24 @@ automation/         定时任务模板
 固定版 Freqtrade 可选 extra，用于数据兼容和外部引擎诊断，不是商业核心必需依赖。
 Hyperopt/FreqAI/vectorbt 暂不安装。
 
-当前权威年度数据窗口为 `2025-07-20T00:00:00Z`（含）至
+当前权威两年数据窗口为 `2024-07-20T00:00:00Z`（含）至
 `2026-07-20T00:00:00Z`（不含）：
 
 - Binance ETHUSDT 永续交易 OHLCV：5m/15m/1h/4h 全覆盖；
 - mark/index 15m 各缺 2026-06-29 的 96 根；
 - funding 只覆盖至 2026-06-30 16:00 UTC；
-- OI metrics 在精确 5m 网格缺 56 个时点，其中 51 个官方时间戳偏离网格；
-- OKX/Binance 官方 metadata 可通过本机代理访问，但尚无 OKX 一年历史对照。
+- OI metrics 在精确 5m 网格缺 58 个时点，其中 51 个官方时间戳偏离网格；
+- OKX/Binance 官方 metadata 可通过本机代理访问，但尚无 OKX 同期历史对照。
 
-一年数据改善了 regime screening 和 Walk-forward 设计条件，但仍不能证明长期盈利或
-完整牛熊覆盖。项目已经提供禁用的
-[`两年下载计划模板`](configs/data_downloads/binance_ethusdt_perpetual_2y.example.yaml)
-和 [`两年滚动验证模板`](configs/validation/eth_perpetual_rolling_2y.example.yaml)；
-它们不构成联网授权，尚未下载、尚未执行，也不会覆盖现有一年数据。
-覆盖可重复的完整市场周期。详见
+两年数据改善了 regime screening 和 Walk-forward 设计条件，但仍不能证明长期盈利或
+覆盖可重复的完整市场周期。实际下载配置、滚动验证模板和权威证据为：
+
+- `configs/data_downloads/binance_ethusdt_perpetual_2y.yaml`；
+- `configs/validation/eth_perpetual_rolling_2y.example.yaml`；
+- `data/manifests/binance_ethusdt_perpetual_20240720_20260720_v2.json`；
+- `reports/data_quality/binance_ethusdt_perpetual_20240720_20260720_v2.md`。
+
+原一年和 90 日数据均保留，未被覆盖。详见
 [docs/22-ETH永续一年数据扩展记录.md](docs/22-ETH永续一年数据扩展记录.md)；原 90 日证据
 保留在 [docs/14-ETH永续第一阶段数据记录.md](docs/14-ETH永续第一阶段数据记录.md)。
 
