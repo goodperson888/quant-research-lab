@@ -609,6 +609,7 @@ class ResearchApplicationService:
                     "parameter search requires explicit user approval of the experiment plan"
                 )
             if payload.get("batch_mode") is True:
+                is_correction = plan.correction_of_plan_id is not None
                 if payload.get("locked_test_used") is not False:
                     raise InvalidJobError(
                         "batch parameter search must explicitly exclude locked-test data"
@@ -619,11 +620,16 @@ class ResearchApplicationService:
                             "research batch search requires an approved Proposal and immutable Candidate"
                         )
                     proposal = self.repository.get_proposal(plan.proposal_id)
-                    allowed_proposal_statuses = (
-                        {"executing"}
-                        if payload.get("resume_of_job_id") is not None
-                        else {"approved"}
-                    )
+                    if is_correction:
+                        allowed_proposal_statuses = {
+                            "approved",
+                            "executing",
+                            "evaluated",
+                        }
+                    elif payload.get("resume_of_job_id") is not None:
+                        allowed_proposal_statuses = {"executing"}
+                    else:
+                        allowed_proposal_statuses = {"approved"}
                     if proposal.status not in allowed_proposal_statuses or (
                         proposal.candidate_version_id != plan.candidate_version_id
                     ):
@@ -635,6 +641,44 @@ class ResearchApplicationService:
                     raise InvalidJobError(
                         "batch Trial budget must be positive and within the approved plan"
                     )
+                if is_correction:
+                    if payload.get("correction_of_plan_id") != plan.correction_of_plan_id:
+                        raise InvalidJobError(
+                            "correction Job must identify its original experiment plan"
+                        )
+                    original = self.repository.get_experiment_plan(
+                        str(plan.correction_of_plan_id)
+                    )
+                    if (
+                        original.baseline_version_id != plan.baseline_version_id
+                        or original.candidate_version_id != plan.candidate_version_id
+                        or original.proposal_id != plan.proposal_id
+                    ):
+                        raise ConflictError(
+                            "correction Plan does not preserve original research lineage"
+                        )
+                    correction_of_job_id = payload.get("correction_of_job_id")
+                    if not isinstance(correction_of_job_id, str):
+                        raise ApprovalRequiredError(
+                            "correction Job requires the exact prior Job reference"
+                        )
+                    prior_job = self.repository.get_job(correction_of_job_id)
+                    if (
+                        prior_job.job_type != "parameter_search"
+                        or prior_job.payload.get("experiment_plan_id") != original.id
+                        or prior_job.status not in {"succeeded", "failed", "cancelled"}
+                        or not any(
+                            item.status == "failed"
+                            for item in self.repository.list_trials(original.id)
+                        )
+                    ):
+                        raise ConflictError(
+                            "correction Job requires a terminal prior Job with failed Trials"
+                        )
+                    if payload.get("reuse_reserved_budget") is not True:
+                        raise InvalidJobError(
+                            "correction Job must explicitly reuse the original reservation"
+                        )
                 resume_of = payload.get("resume_of_job_id")
                 related = [
                     item
@@ -660,7 +704,10 @@ class ResearchApplicationService:
                 plan.baseline_version_id
             )
             self._ensure_budget(session_id)
-            if payload.get("resume_of_job_id") is None:
+            if (
+                payload.get("resume_of_job_id") is None
+                and plan.correction_of_plan_id is None
+            ):
                 trials = plan.max_trials or 0
                 compute_minutes = ceil((plan.time_budget_seconds or 0) / 60)
                 try:
@@ -1355,6 +1402,112 @@ class ResearchApplicationService:
                 "status": saved.status,
                 "research_budget_session_id": session_id,
             },
+        )
+        return saved
+
+    def create_correction_experiment_plan(
+        self,
+        *,
+        original_plan_id: str,
+        subject_id: str,
+        confirmed_by_user: bool,
+        parameter_space: Sequence[ParameterSpace],
+        max_trials: int,
+        time_budget_seconds: int,
+        correction_reason: str,
+    ) -> ExperimentPlan:
+        """Create an append-only rerun for prior infrastructure-failed signatures.
+
+        This preserves the original Plan and Trials. It is not a new hypothesis and
+        reuses the original Session reservation, so it does not reserve hypothesis,
+        Trial, or compute-minute budget again.
+        """
+
+        if not confirmed_by_user or subject_id != original_plan_id:
+            raise ApprovalRequiredError(
+                "correction attempt requires explicit approval of the original plan subject"
+            )
+        original = self.repository.get_experiment_plan(original_plan_id)
+        if original.status != "approved" or original.approved_by != "user":
+            raise ApprovalRequiredError(
+                "correction attempt requires an approved original experiment plan"
+            )
+        if not correction_reason.strip():
+            raise ValueError("correction attempt requires an infrastructure reason")
+        if max_trials <= 0 or max_trials > (original.max_trials or 0):
+            raise ValueError("correction Trial count exceeds the original approved budget")
+        if (
+            time_budget_seconds <= 0
+            or time_budget_seconds > (original.time_budget_seconds or 0)
+        ):
+            raise ValueError("correction time exceeds the original approved budget")
+
+        from quant_lab.application.batch_trials import (
+            DeterministicParameterGenerator,
+            parameter_signature,
+        )
+
+        failed_trials = [
+            item
+            for item in self.repository.list_trials(original.id)
+            if item.status == "failed" and item.parameter_signature
+        ]
+        failed_signatures = {str(item.parameter_signature) for item in failed_trials}
+        if not failed_signatures:
+            raise ConflictError("correction attempt requires preserved failed Trials")
+        draft = ExperimentPlan(
+            id=new_id("plan"),
+            baseline_version_id=original.baseline_version_id,
+            hypothesis=original.hypothesis,
+            parameter_space=tuple(parameter_space),
+            objectives=original.objectives,
+            constraints=original.constraints,
+            data_splits=dict(original.data_splits),
+            cost_model=dict(original.cost_model),
+            max_trials=max_trials,
+            time_budget_seconds=time_budget_seconds,
+            stopping_conditions=tuple(original.stopping_conditions)
+            + ("execute only prior infrastructure-failed parameter signatures",),
+            proposal_id=original.proposal_id,
+            candidate_version_id=original.candidate_version_id,
+            correction_of_plan_id=original.id,
+            search_strategy="grid",
+            random_seed=original.random_seed,
+            status="draft",
+            approved_by=None,
+            created_at=utc_now(),
+        )
+        generated = DeterministicParameterGenerator().generate(draft)
+        correction_signatures = {
+            parameter_signature(parameters) for parameters in generated.combinations
+        }
+        if correction_signatures != failed_signatures:
+            raise ConflictError(
+                "correction parameter space must exactly match prior failed signatures"
+            )
+        created = self.repository.create_experiment_plan(draft)
+        approved = created.approve(actor="user")
+        saved = self.repository.approve_experiment_plan(
+            approved,
+            approval_id=new_id("approval"),
+            created_at=utc_now(),
+        )
+        self._audit(
+            event_type="experiment_plan.correction_approved",
+            aggregate_type="experiment_plan",
+            aggregate_id=saved.id,
+            payload={
+                "correction_of_plan_id": original.id,
+                "approval_subject_id": subject_id,
+                "failed_trial_ids": [item.id for item in failed_trials],
+                "failed_parameter_signatures": sorted(failed_signatures),
+                "max_trials": saved.max_trials,
+                "time_budget_seconds": saved.time_budget_seconds,
+                "budget_reused": True,
+                "locked_test_used": False,
+                "correction_reason": correction_reason,
+            },
+            actor_type="external_agent",
         )
         return saved
 

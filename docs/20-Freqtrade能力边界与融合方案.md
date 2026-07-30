@@ -81,3 +81,16 @@ Freqtrade 当前标注为 GPL-3.0。该许可证对最终制品、安装器、�
 安装流程的影响必须在正式收费前交由开源许可证律师复核。项目文档只记录工程事实和待
 审查风险，不作法律结论。商业交付决策详见
 [本地商业交付与模型兼容策略](23-本地商业交付与模型兼容策略.md)。
+
+## 7. 第二引擎逐笔对账入口
+
+Web/API 已提供明确但保守的协议入口：
+
+- `GET /api/engine-reconciliation/status` 检查精确策略、市场和同主体已通过的 viability；
+- `POST /api/engine-reconciliation/jobs` 是受控创建入口；
+- 已 rejected、未通过 viability、缺少明确确认或试图使用 locked test 时必须拒绝；
+- 当前真实 `IStrategy` 转换器和外部执行器尚未接入，因此即使门槛通过也返回
+  `not_connected`，不创建虚假 Job、不运行策略。
+
+该入口只冻结 DTO、门禁与产品状态。Native 仍是快速研究主引擎；Freqtrade 仍由客户自行
+安装并通过外部进程/标准文件协议连接，核心代码不直接 import 或捆绑 Freqtrade。

@@ -13,5 +13,13 @@ if [[ ! -f "$SKILL_VALIDATOR" ]]; then
 fi
 "$ROOT/.venv/bin/python" "$SKILL_VALIDATOR" \
   "$ROOT/.agents/skills/quant-strategy-research"
-bash -n "$ROOT/scripts/dev.sh" "$ROOT/scripts/dev-api.sh" "$ROOT/scripts/dev-web.sh"
+bash -n \
+  "$ROOT/scripts/dev.sh" \
+  "$ROOT/scripts/dev-api.sh" \
+  "$ROOT/scripts/dev-web.sh" \
+  "$ROOT/scripts/dev-worker.sh" \
+  "$ROOT/scripts/freqtrade.sh" \
+  "$ROOT/scripts/check-fast.sh" \
+  "$ROOT/scripts/check-standard.sh" \
+  "$ROOT/scripts/check-release.sh"
 (cd "$ROOT/apps/web" && npm run lint && npm run typecheck)

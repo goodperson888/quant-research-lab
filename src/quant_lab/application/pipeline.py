@@ -552,6 +552,63 @@ class PipelineApplicationService:
     def list_component_candidates(self):
         return self.repository.list_component_candidates()
 
+    def archive_component_candidate(
+        self,
+        *,
+        candidate_id: str,
+        subject_id: str,
+        reason: str,
+        confirmed_by_user: bool,
+    ) -> ComponentCandidate:
+        if subject_id != candidate_id:
+            raise GatePolicyError("component archive requires the exact subject_id")
+        if not confirmed_by_user:
+            raise GatePolicyError("component archive requires explicit user confirmation")
+        current = self.repository.get_component_candidate(candidate_id)
+        if current.archived_at is not None:
+            return current
+        updated = self.repository.set_component_candidate_archive(
+            candidate_id=candidate_id,
+            archived_at=utc_now(),
+            archive_reason=reason.strip() or "user_archived",
+        )
+        self._audit(
+            event_type="component_candidate.archived",
+            aggregate_type="component_candidate",
+            aggregate_id=candidate_id,
+            payload={
+                "reason": updated.archive_reason,
+                "evidence_preserved": True,
+                "physical_delete": False,
+            },
+        )
+        return updated
+
+    def restore_component_candidate(
+        self,
+        *,
+        candidate_id: str,
+        subject_id: str,
+        confirmed_by_user: bool,
+    ) -> ComponentCandidate:
+        if subject_id != candidate_id:
+            raise GatePolicyError("component restore requires the exact subject_id")
+        if not confirmed_by_user:
+            raise GatePolicyError("component restore requires explicit user confirmation")
+        self.repository.get_component_candidate(candidate_id)
+        updated = self.repository.set_component_candidate_archive(
+            candidate_id=candidate_id,
+            archived_at=None,
+            archive_reason=None,
+        )
+        self._audit(
+            event_type="component_candidate.restored",
+            aggregate_type="component_candidate",
+            aggregate_id=candidate_id,
+            payload={"evidence_preserved": True},
+        )
+        return updated
+
     def list_component_evidence(self):
         return self.repository.list_component_evidence()
 

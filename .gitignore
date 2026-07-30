@@ -17,6 +17,7 @@ runtime/app/*.sqlite3-*
 runtime/app/*.db
 runtime/app/*.db-*
 runtime/app/logs/
+runtime/dev/
 
 # Next.js / Node local state
 apps/web/node_modules/
@@ -55,6 +56,8 @@ reports/weekly/**
 reports/backtests/**
 reports/correctness/**
 reports/diagnostics/**
+reports/experiments/**
+reports/proposals/**
 reports/risk/**
 !reports/**/.gitkeep
 

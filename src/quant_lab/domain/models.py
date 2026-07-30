@@ -454,6 +454,7 @@ class ExperimentPlan:
     stopping_conditions: tuple[str, ...]
     proposal_id: str | None = None
     candidate_version_id: str | None = None
+    correction_of_plan_id: str | None = None
     search_strategy: Literal["grid", "random"] = "grid"
     random_seed: int = 0
     status: Literal["draft", "approved", "rejected"] = "draft"
@@ -652,6 +653,8 @@ class ComponentCandidate:
     logic_signature: str = ""
     target_market_profile: str = ""
     timeframe: str = ""
+    archived_at: str | None = None
+    archive_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

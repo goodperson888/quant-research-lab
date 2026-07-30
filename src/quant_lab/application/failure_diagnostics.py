@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 import numpy as np
@@ -174,7 +175,12 @@ class ArtifactLossAttribution:
 
 
 class DeterministicComponentHypothesisGenerator:
-    """Generate no more than three transparent, rule-based diagnostic drafts."""
+    """Rank transparent diagnostic drafts without rerunning the strategy.
+
+    Directions are scored by observed impact, sample support and how directly one
+    isolated component can be changed.  Only one direction per component category
+    survives, so a weak strategy does not receive three near-identical exit tweaks.
+    """
 
     def generate(
         self,
@@ -185,82 +191,187 @@ class DeterministicComponentHypothesisGenerator:
         evidence_refs: tuple[str, ...],
     ) -> tuple[ComponentHypothesis, ...]:
         validation = attribution["splits"].get("validation", {})
-        drafts: list[ComponentHypothesis] = []
+        funnel = attribution.get("signal_funnel", {}).get("validation", {})
+        directions: list[_DiagnosticDirection] = []
+
+        filter_reasons = funnel.get("filter_or_cancel_reasons", {})
+        if isinstance(filter_reasons, Mapping) and filter_reasons:
+            reason, count = max(
+                ((str(name), int(value)) for name, value in filter_reasons.items()),
+                key=lambda item: item[1],
+            )
+            denominator = max(
+                int(funnel.get("entry_candidates") or 0),
+                int(funnel.get("trigger_records_5m") or 0),
+                sum(int(value) for value in filter_reasons.values()),
+                1,
+            )
+            ratio = count / denominator
+            parameter_name, title, explanation = _filter_direction(reason)
+            directions.append(
+                _DiagnosticDirection(
+                    category="filter",
+                    score=_diagnostic_score(ratio, count, 0.95),
+                    title=title,
+                    hypothesis=(
+                        f"验证样本中“{explanation}”拦截 {count} 次，"
+                        "只调整这一项可判断入场筛选是否过严或是否在保护策略。"
+                    ),
+                    component_type="filter",
+                    expected_improvement=(
+                        "增加有效入场机会，同时检查新增交易是否只是放大费用和低质量信号。"
+                    ),
+                    parameter_space={parameter_name: ["current", "tighter", "looser"]},
+                    failure_conditions=(
+                        "交易数增加但验证净收益、盈亏效率和单笔期望未改善",
+                        "新增交易主要集中在同一时段或少数异常样本",
+                        "最大回撤或费用占比明显恶化",
+                    ),
+                )
+            )
+
         by_side = validation.get("by_side", {})
         if len(by_side) >= 2:
             worst_side = min(
                 by_side,
                 key=lambda name: float(by_side[name].get("net_return", 0.0)),
             )
-            drafts.append(
-                self._draft(
-                    session_id=session_id,
-                    subject_id=subject_id,
+            metrics = by_side[worst_side]
+            trade_count = int(metrics.get("trade_count", 0))
+            impact = abs(float(metrics.get("net_return", 0.0)))
+            directions.append(
+                _DiagnosticDirection(
+                    category="direction",
+                    score=_diagnostic_score(impact, trade_count, 0.65),
                     title=f"诊断性 {worst_side} 方向开关",
                     hypothesis=(
-                        f"暂时关闭 validation 中净收益更弱的 {worst_side} 方向，"
-                        "可判断方向不对称是否是主要损失来源。"
+                        f"暂时关闭验证样本中净收益更弱的 {worst_side} 方向，"
+                        "仅用于判断多空不对称是否是主要损失来源。"
                     ),
                     component_type="filter",
-                    evidence_refs=evidence_refs,
                     expected_improvement="减少弱方向损失，但必须警惕交易数下降和样本选择偏差。",
                     parameter_space={"enabled_side": ["both", f"exclude_{worst_side}"]},
-                    suggested_trials=3,
                     failure_conditions=(
-                        "validation净收益未改善",
+                        "验证净收益未改善",
                         "交易数低于诊断最低样本",
                         "改善只来自单笔异常交易",
                     ),
                 )
             )
+
         reentry = validation.get("by_first_entry_or_reentry", {})
         if "reentry" in reentry:
-            drafts.append(
-                self._draft(
-                    session_id=session_id,
-                    subject_id=subject_id,
+            metrics = reentry["reentry"]
+            trade_count = int(metrics.get("trade_count", 0))
+            impact = abs(min(0.0, float(metrics.get("net_return", 0.0))))
+            directions.append(
+                _DiagnosticDirection(
+                    category="entry",
+                    score=_diagnostic_score(impact, trade_count, 0.9),
                     title="再入组件开关消融",
                     hypothesis="关闭同一趋势腿再入，可能减少连续止损和手续费拖累。",
                     component_type="entry",
-                    evidence_refs=evidence_refs,
                     expected_improvement="降低再入损失与成本；若错失主要盈利段则假设失败。",
                     parameter_space={"max_reentries_per_trend_leg": [0, 1, 2]},
-                    suggested_trials=3,
                     failure_conditions=(
-                        "validation PF 不改善",
-                        "净收益改善但 expectancy 继续为负",
+                        "验证盈亏效率不改善",
+                        "净收益改善但单笔期望继续为负",
                         "改善来自不足 30 笔交易",
                     ),
                 )
             )
+
         exits = validation.get("by_exit_reason", {})
         if exits:
             worst_exit = min(
                 exits,
                 key=lambda name: float(exits[name].get("net_return", 0.0)),
             )
-            drafts.append(
-                self._draft(
-                    session_id=session_id,
-                    subject_id=subject_id,
+            metrics = exits[worst_exit]
+            trade_count = int(metrics.get("trade_count", 0))
+            impact = abs(min(0.0, float(metrics.get("net_return", 0.0))))
+            directions.append(
+                _DiagnosticDirection(
+                    category="exit",
+                    score=_diagnostic_score(impact, trade_count, 0.8),
                     title=f"{worst_exit} 退出规则小范围消融",
                     hypothesis=(
                         f"仅调整 {worst_exit} 对应的退出组件，"
                         "可能改善持仓时间与损失尾部而不改变入场。"
                     ),
                     component_type="exit",
-                    evidence_refs=evidence_refs,
                     expected_improvement="减少该退出类别的损失，同时保持其他规则固定。",
                     parameter_space={"exit_rule_variant": ["current", "tighter", "looser"]},
-                    suggested_trials=3,
                     failure_conditions=(
-                        "train 与 validation 改善方向不一致",
+                        "训练与验证改善方向不一致",
                         "最大回撤恶化",
                         "费用占毛盈利比例上升",
                     ),
                 )
             )
-        return tuple(drafts[:3])
+
+        costs = validation.get("costs", {})
+        fee_fraction = costs.get("fees_as_fraction_of_gross_positive_price_pnl")
+        validation_trade_count = int(
+            validation.get("summary", {}).get("trade_count", 0)
+        )
+        if isinstance(fee_fraction, (int, float)) and fee_fraction > 0:
+            directions.append(
+                _DiagnosticDirection(
+                    category="cost",
+                    score=_diagnostic_score(
+                        min(float(fee_fraction), 2.0),
+                        validation_trade_count,
+                        0.85,
+                    ),
+                    title="交易频率与成本负担消融",
+                    hypothesis=(
+                        f"费用约占毛正收益的 {float(fee_fraction):.1%}；"
+                        "减少边缘入场或重复入场，可能比继续微调退出更有效。"
+                    ),
+                    component_type="execution",
+                    expected_improvement="降低成本侵蚀，同时保留主要盈利交易。",
+                    parameter_space={"entry_selectivity": ["current", "higher"]},
+                    failure_conditions=(
+                        "费用下降但净收益和单笔期望未改善",
+                        "交易数下降后结果被少数交易主导",
+                        "主要盈利段被过滤",
+                    ),
+                )
+            )
+
+        selected: list[_DiagnosticDirection] = []
+        used_categories: set[str] = set()
+        used_component_types: set[str] = set()
+        for direction in sorted(directions, key=lambda item: item.score, reverse=True):
+            if direction.category in used_categories:
+                continue
+            if (
+                direction.component_type in used_component_types
+                and direction.component_type == "filter"
+            ):
+                continue
+            selected.append(direction)
+            used_categories.add(direction.category)
+            used_component_types.add(direction.component_type)
+            if len(selected) == 3:
+                break
+
+        return tuple(
+            self._draft(
+                session_id=session_id,
+                subject_id=subject_id,
+                title=item.title,
+                hypothesis=item.hypothesis,
+                component_type=item.component_type,
+                evidence_refs=evidence_refs,
+                expected_improvement=item.expected_improvement,
+                parameter_space=item.parameter_space,
+                suggested_trials=3,
+                failure_conditions=item.failure_conditions,
+            )
+            for item in selected
+        )
 
     @staticmethod
     def _draft(
@@ -294,6 +405,44 @@ class DeterministicComponentHypothesisGenerator:
             status="draft",
             created_at=utc_now(),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _DiagnosticDirection:
+    category: str
+    score: float
+    title: str
+    hypothesis: str
+    component_type: str
+    expected_improvement: str
+    parameter_space: Mapping[str, Any]
+    failure_conditions: tuple[str, ...]
+
+
+def _diagnostic_score(impact: float, sample_count: int, actionability: float) -> float:
+    sample_support = min(max(sample_count, 0) / 30.0, 1.0)
+    return max(float(impact), 0.0) * sample_support * actionability
+
+
+def _filter_direction(reason: str) -> tuple[str, str, str]:
+    normalized = reason.lower()
+    if "reward" in normalized or "target_space" in normalized:
+        return (
+            "minimum_reward_r",
+            "最低目标空间小范围消融",
+            "目标收益风险空间不足",
+        )
+    if "stop_distance" in normalized or "stop" in normalized:
+        return (
+            "max_stop_distance_fraction",
+            "最大止损距离小范围消融",
+            "止损距离不符合上限",
+        )
+    return (
+        f"filter_{normalized}",
+        f"{reason} 过滤规则小范围消融",
+        reason,
+    )
 
 
 def _streak_summary(values: pd.Series) -> dict[str, float]:

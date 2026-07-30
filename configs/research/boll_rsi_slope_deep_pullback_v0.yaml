@@ -1,0 +1,81 @@
+schema_version: 1
+strategy_spec_id: boll_rsi_slope_deep_pullback_v0
+session_id: session_ef8f1fe0cb4e4476a0e51f77c7e7cc05
+strategy_version_id: version_9884c435437a479a82effa2071f7f7ac
+strategy_artifact_key: strategies/research/boll-rsi-slope-deep-pullback/baseline-v0.yaml
+market_profile: crypto_perpetual.binance.eth
+data_manifest_key: data/manifests/binance_ethusdt_perpetual_20250720_20260720_v2.json
+execution_model_id: conservative_crypto_perpetual_v1
+
+diagnostic_reference:
+  baseline_manifest_artifact_key: experiments/runs/20260728T134742Z-boll-rsi-fast-screen-9f1d8a89/manifest.json
+  baseline_metrics_artifact_key: experiments/runs/20260728T134742Z-boll-rsi-fast-screen-9f1d8a89/metrics.json
+  validation_evidence_status: screening_contaminated
+  locked_test_used: false
+
+smoke:
+  warmup_start_utc_inclusive: "2025-07-20T00:00:00Z"
+  start_utc_inclusive: "2025-07-27T00:00:00Z"
+  end_utc_exclusive: "2025-08-10T00:00:00Z"
+
+time_splits:
+  train:
+    warmup_start_utc_inclusive: "2025-07-20T00:00:00Z"
+    start_utc_inclusive: "2025-07-27T00:00:00Z"
+    end_utc_exclusive: "2026-03-20T00:00:00Z"
+  validation:
+    warmup_start_utc_inclusive: "2026-03-13T00:00:00Z"
+    start_utc_inclusive: "2026-03-20T00:00:00Z"
+    end_utc_exclusive: "2026-06-20T00:00:00Z"
+  locked_test:
+    start_utc_inclusive: "2026-06-20T00:00:00Z"
+    end_utc_exclusive: "2026-07-20T00:00:00Z"
+    use_in_this_authorization: false
+    status: reserved_uninspected
+
+indicators:
+  bollinger_period: 20
+  bollinger_stddev: 2.0
+  trend_slope_lookback_1h_bars: 5
+  rsi_period_15m: 7
+  long_rsi_extreme: 30.0
+  long_rsi_recovery: 35.0
+  short_rsi_extreme: 70.0
+  short_rsi_recovery: 65.0
+
+cost_model:
+  execution: taker
+  fee_per_side: 0.0005
+  slippage_bps_per_side: 2.0
+
+funding:
+  required: true
+  missing_policy: adverse_p99_abs_observed
+  zero_funding_fallback_allowed: false
+
+execution:
+  initial_equity: 10000.0
+  leverage: 1.0
+  leverage_explicitly_requested: false
+  margin_mode: isolated
+  risk_per_trade_fraction: 0.0025
+  max_trades_per_day: 10
+  cooldown_minutes: 0
+  cooldown_after_loss_minutes: 0
+  max_stop_distance_fraction: 0.0045
+  stop_buffer_fraction: 0.0005
+  minimum_reward_r: 1.0
+  early_exit_bars_5m: 3
+  early_exit_min_mfe_r: 0.3
+  max_holding_bars_5m: 6
+  max_trigger_bars_5m: 3
+
+random_seed: 20260728
+
+limitations:
+  - This is Native Engine research on Binance reference data only; it is not OKX validation.
+  - The locked interval is reserved and excluded from correctness, smoke, fast_screen and viability.
+  - Baseline v0 uses the deep opposite-band pullback without a volume filter.
+  - Shallow pullback and volume confirmation remain separate, unapproved ablation hypotheses.
+  - Funding is required and cannot be silently replaced with zero.
+  - No parameter search, cost stress, regime validation, dry-run or live trade is authorized.

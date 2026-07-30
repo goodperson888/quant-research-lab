@@ -1,0 +1,45 @@
+schema_version: 1
+strategy_id: boll_rsi_slope_deep_pullback_continuation_v0
+strategy_version_id: version_9884c435437a479a82effa2071f7f7ac
+status: baseline
+immutable: true
+market_profile: crypto_perpetual.binance.eth
+symbol: ETHUSDT
+timeframes:
+  trend: 1h
+  setup: 15m
+  trigger: 5m
+rules:
+  trend:
+    basis: closed 1h Bollinger SMA20
+    slope: (basis_t / basis_t_minus_4 - 1) / 4
+    long: slope positive and close above basis
+    short: slope negative and close below basis
+  long_setup:
+    - closed 15m low touches or breaches lower Bollinger band
+    - RSI7 is at or below 30 on the setup bar or prior two closed bars
+    - setup bar closes back inside the lower band
+    - RSI7 crosses above 35
+  short_setup:
+    - closed 15m high touches or breaches upper Bollinger band
+    - RSI7 is at or above 70 on the setup bar or prior two closed bars
+    - setup bar closes back inside the upper band
+    - RSI7 crosses below 65
+  trigger:
+    - within three closed 5m bars, close breaks the previous 5m high or low
+    - enter at the next 5m open
+  stop:
+    - use only the already-observed pullback and trigger extreme
+    - add a 0.05 percent adverse buffer
+    - skip when distance exceeds 0.45 percent
+  exit:
+    - static 15m middle band observed at setup confirmation
+    - require at least 1R reward before entry
+    - early time exit after 15 minutes when MFE is below 0.3R
+    - maximum holding time 30 minutes
+research_boundaries:
+  leverage: 1.0
+  risk_per_trade_equity_fraction: 0.0025
+  volume_filter_enabled: false
+  locked_test_allowed: false
+  live_trading_enabled: false

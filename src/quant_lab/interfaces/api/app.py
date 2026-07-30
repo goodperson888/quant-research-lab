@@ -16,6 +16,7 @@ from quant_lab.application.guided_research import GuidedResearchService
 from quant_lab.application.component_attribution import DefaultComponentEvidenceAggregator
 from quant_lab.application.batch_trials import summarize_stable_ranges
 from quant_lab.application.backtest_engines import BacktestEngineRegistry
+from quant_lab.application.equity_series import RunBundleEquityReader
 from quant_lab.application.pipeline import (
     PipelineApplicationService,
     PipelineProfileCatalog,
@@ -59,6 +60,7 @@ from quant_lab.paths import app_database_path, project_root
 
 from .schemas import (
     AuditEventResponse,
+    ComponentArchiveRequest,
     ComponentCandidateResponse,
     ComponentEvidenceResponse,
     ComponentTriageResponse,
@@ -70,6 +72,7 @@ from .schemas import (
     CreateResearchAuthorizationRequest,
     CreateResearchDiagnosticJobRequest,
     CreateCorrectnessDiagnosticJobRequest,
+    CreateEngineReconciliationRequest,
     CreateStrategyOutcomeRequest,
     CreateIntakeRequest,
     CreateExperimentPlanRequest,
@@ -148,6 +151,7 @@ def create_app(
     data_reader = DataSummaryReader(resolved_root)
     storage_reporter = StorageReporter(resolved_root)
     artifact_store = LocalArtifactStore(resolved_root)
+    equity_reader = RunBundleEquityReader(repository, artifact_store)
     versioning_reader = VersioningPolicyReader(resolved_root)
     execution_model_catalog = ExecutionModelCatalog(resolved_root)
     engine_registry = BacktestEngineRegistry(
@@ -505,6 +509,74 @@ def create_app(
     def backtest_engines() -> list[dict[str, Any]]:
         return [asdict(item) for item in engine_registry.capabilities()]
 
+    def reconciliation_status(subject_id: str, market_profile: str) -> dict[str, Any]:
+        viability = next(
+            (
+                item
+                for item in pipeline_service.list_gate_results(subject_id=subject_id)
+                if item.gate_name == "viability"
+                and item.status == "passed"
+                and item.market_profile == market_profile
+            ),
+            None,
+        )
+        rejected = any(
+            item.strategy_version_id == subject_id
+            and item.market_profile == market_profile
+            and item.outcome_type == "rejected"
+            for item in pipeline_service.list_strategy_outcomes()
+        )
+        if rejected:
+            reason = "该策略已被拒绝，禁止重新执行第二引擎对账。"
+        elif viability is None:
+            reason = "同一策略与市场尚未通过可行性门槛。"
+        else:
+            reason = (
+                "可行性门槛已通过，但真实 Freqtrade IStrategy 转换与外部执行器尚未接入。"
+            )
+        return {
+            "subject_id": subject_id,
+            "market_profile": market_profile,
+            "viability_gate_result_id": viability.id if viability else None,
+            "eligible": bool(viability and not rejected),
+            "engine_id": "freqtrade_2026_6",
+            "engine_boundary": "optional_external_process",
+            "implementation_status": "not_connected",
+            "job_created": False,
+            "reason": reason,
+            "locked_test_allowed": False,
+            "live_trade_available": False,
+        }
+
+    @application.get(
+        "/api/engine-reconciliation/status",
+        tags=["research-pipeline"],
+    )
+    def get_engine_reconciliation_status(
+        subject_id: str = Query(min_length=1),
+        market_profile: str = Query(min_length=1),
+    ) -> dict[str, Any]:
+        return reconciliation_status(subject_id, market_profile)
+
+    @application.post(
+        "/api/engine-reconciliation/jobs",
+        tags=["research-pipeline"],
+    )
+    def create_engine_reconciliation_job(
+        body: CreateEngineReconciliationRequest,
+    ) -> dict[str, Any]:
+        if not body.confirmed_by_user:
+            raise ApprovalRequiredError(
+                "engine reconciliation requires explicit user confirmation"
+            )
+        current = reconciliation_status(body.subject_id, body.market_profile)
+        if not current["eligible"]:
+            raise GatePolicyError(str(current["reason"]))
+        raise ConflictError(
+            "Freqtrade external reconciliation executor is not connected; "
+            "no Job was created and no strategy was run"
+        )
+
     @application.get("/api/execution-models", tags=["research-pipeline"])
     def execution_models() -> list[dict[str, Any]]:
         """Expose reviewed research-only execution semantics; never submit orders."""
@@ -713,8 +785,11 @@ def create_app(
     )
     def component_candidates(
         source_strategy_version_id: str | None = Query(default=None),
+        include_archived: bool = Query(default=False),
     ) -> Any:
         candidates = list(pipeline_service.list_component_candidates())
+        if not include_archived:
+            candidates = [item for item in candidates if item.archived_at is None]
         if source_strategy_version_id is None:
             return candidates
         evidence_ids = {
@@ -723,6 +798,35 @@ def create_app(
             if item.source_strategy_version_id == source_strategy_version_id
         }
         return [item for item in candidates if item.evidence_id in evidence_ids]
+
+    @application.post(
+        "/api/component-candidates/{candidate_id}/archive",
+        response_model=ComponentCandidateResponse,
+        tags=["research-components"],
+    )
+    def archive_component_candidate(
+        candidate_id: str, body: ComponentArchiveRequest
+    ) -> Any:
+        return pipeline_service.archive_component_candidate(
+            candidate_id=candidate_id,
+            subject_id=body.subject_id,
+            reason=body.reason,
+            confirmed_by_user=body.confirmed_by_user,
+        )
+
+    @application.post(
+        "/api/component-candidates/{candidate_id}/restore",
+        response_model=ComponentCandidateResponse,
+        tags=["research-components"],
+    )
+    def restore_component_candidate(
+        candidate_id: str, body: ComponentArchiveRequest
+    ) -> Any:
+        return pipeline_service.restore_component_candidate(
+            candidate_id=candidate_id,
+            subject_id=body.subject_id,
+            confirmed_by_user=body.confirmed_by_user,
+        )
 
     @application.get(
         "/api/component-evidence",
@@ -909,6 +1013,13 @@ def create_app(
             )
         return bundles
 
+    @application.get("/api/run-bundles/{bundle_id}/chart-series", tags=["reports"])
+    def run_bundle_chart_series(
+        bundle_id: str,
+        max_points: int = Query(default=800, ge=50, le=2_000),
+    ) -> dict[str, Any]:
+        return equity_reader.read(bundle_id=bundle_id, max_points=max_points)
+
     @application.get("/api/research-diagnostics/latest", tags=["reports"])
     def latest_research_diagnostic(subject_id: str = Query(min_length=1)) -> dict[str, Any]:
         jobs = {item.id: item for item in repository.list_jobs()}
@@ -1069,6 +1180,35 @@ def create_app(
             if batch_job is not None
             else "unavailable"
         )
+        job_report = (
+            repository.list_reports(job_id=batch_job.id)[0]
+            if batch_job is not None
+            and repository.list_reports(job_id=batch_job.id)
+            else None
+        )
+        runner_summary = (
+            dict(job_report.summary)
+            if job_report is not None
+            else {}
+        )
+        status_counts = {
+            state: sum(1 for trial in trials if trial.status == state)
+            for state in ("queued", "running", "succeeded", "failed", "cancelled")
+        }
+        completed = (
+            status_counts["succeeded"]
+            + status_counts["failed"]
+            + status_counts["cancelled"]
+        )
+        total = int(
+            runner_summary.get("generated_combinations")
+            or plan.max_trials
+            or len(trials)
+        )
+        stop_reason = (
+            runner_summary.get("stop_reason")
+            or (batch_job.error if batch_job is not None else None)
+        )
         return {
             "experiment_plan_id": plan_id,
             "baseline_version_id": plan.baseline_version_id,
@@ -1078,6 +1218,30 @@ def create_app(
             "baseline_metrics": None,
             "evidence_mode": evidence_mode,
             "research_conclusion_allowed": evidence_mode == "research",
+            "job_id": batch_job.id if batch_job else None,
+            "job_status": batch_job.status if batch_job else "not_queued",
+            "total_trials": total,
+            "completed_trials": completed,
+            "succeeded_trials": status_counts["succeeded"],
+            "failed_trials": status_counts["failed"],
+            "cancelled_trials": status_counts["cancelled"],
+            "running_trials": status_counts["running"],
+            "queued_trials": status_counts["queued"],
+            "remaining_trials": max(total - completed, 0),
+            "concurrency": int(
+                runner_summary.get("concurrency")
+                or (batch_job.payload.get("max_concurrent_trials", 1) if batch_job else 1)
+            ),
+            "elapsed_seconds": float(runner_summary.get("elapsed_seconds") or 0.0),
+            "peak_rss_mb": float(runner_summary.get("peak_rss_mb") or 0.0),
+            "stop_reason": stop_reason,
+            "continue_reason": (
+                "仍有已批准且未完成的参数方案。"
+                if batch_job is not None
+                and batch_job.status in {"queued", "running"}
+                and completed < total
+                else None
+            ),
             **summarize_stable_ranges(trials, plan.constraints),
         }
 

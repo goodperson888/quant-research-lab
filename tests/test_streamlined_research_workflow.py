@@ -366,6 +366,57 @@ def test_component_hypotheses_are_bounded_and_contaminated_screening() -> None:
     assert all(item.status == "draft" for item in drafts)
 
 
+def test_component_hypotheses_rank_distinct_filter_exit_and_cost_directions() -> None:
+    attribution = {
+        "splits": {
+            "validation": {
+                "summary": {"trade_count": 60},
+                "by_side": {
+                    "long": {"net_return": -0.01, "trade_count": 30},
+                    "short": {"net_return": -0.012, "trade_count": 30},
+                },
+                "by_first_entry_or_reentry": {},
+                "by_exit_reason": {
+                    "time_stop": {"net_return": -0.08, "trade_count": 40},
+                    "take_profit": {"net_return": 0.01, "trade_count": 20},
+                },
+                "costs": {
+                    "fees_as_fraction_of_gross_positive_price_pnl": 0.75,
+                },
+            }
+        },
+        "signal_funnel": {
+            "validation": {
+                "entry_candidates": 120,
+                "trigger_records_5m": 100,
+                "filter_or_cancel_reasons": {
+                    "insufficient_reward": 72,
+                    "stop_distance_ineligible": 12,
+                },
+            }
+        },
+    }
+    drafts = DeterministicComponentHypothesisGenerator().generate(
+        session_id="session_fixture",
+        subject_id="version_fixture",
+        attribution=attribution,
+        evidence_refs=("reports/diagnostics/fixture.json",),
+    )
+
+    assert len(drafts) == 3
+    assert {item.component_type for item in drafts} == {
+        "filter",
+        "exit",
+        "execution",
+    }
+    assert any(
+        "minimum_reward_r" in item.parameter_space
+        for item in drafts
+    )
+    assert all(item.source == "deterministic_rule_analyzer" for item in drafts)
+    assert all(item.contamination_status == "screening_contaminated" for item in drafts)
+
+
 def test_strategy_plugin_registry_and_single_component_guard() -> None:
     routed: list[str] = []
 

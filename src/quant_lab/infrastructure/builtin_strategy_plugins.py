@@ -5,12 +5,16 @@ from pathlib import Path
 from quant_lab.domain.repositories import ProductRepository
 
 from .baseline_backtest_runner import BaselineBacktestRunner
+from .boll_rsi_slope_runner import BollRsiSlopeRunner
 from .ema_mtf_scalp_runner import EmaMtfScalpRunner
 from .selective_reentry_smoke_runner import (
     SelectiveReentryFastScreenRunner,
     SelectiveReentrySmokeRunner,
 )
 from .strategy_evaluators import (
+    BollRsiSlopeExitComponentEvaluator,
+    BollRsiSlopeMinimumRewardComponentEvaluator,
+    BollRsiSlopeStopDistanceComponentEvaluator,
     DeterministicFixtureStrategyEvaluator,
     EmaMtfScalpComponentEvaluator,
     SelectiveReentryComponentEvaluator,
@@ -26,6 +30,7 @@ def build_builtin_strategy_plugins(
     """Single reviewed discovery point; Worker routing stays strategy-agnostic."""
 
     ema_runner = EmaMtfScalpRunner(root, repository)
+    boll_runner = BollRsiSlopeRunner(root, repository)
     return StrategyPluginRegistry(
         (
             StrategySpec(
@@ -46,6 +51,18 @@ def build_builtin_strategy_plugins(
                 },
                 evaluator_ids=("ema_mtf_scalp_exit_component_v1",),
             ),
+            StrategySpec(
+                strategy_spec_id="boll_rsi_slope_deep_pullback_v0",
+                backtest_handlers={
+                    "boll_rsi_slope_smoke": boll_runner,
+                    "boll_rsi_slope_fast_screen": boll_runner,
+                },
+                evaluator_ids=(
+                    "boll_rsi_slope_exit_component_v1",
+                    "boll_rsi_slope_stop_distance_component_v1",
+                    "boll_rsi_slope_minimum_reward_component_v1",
+                ),
+            ),
         ),
         fallback=BaselineBacktestRunner(root, repository),
     )
@@ -61,6 +78,27 @@ def build_builtin_evaluator_registry(
                 root,
                 repository,
                 config_artifact_key="configs/research/ema_mtf_scalp_20x_v0.yaml",
+            ),
+            BollRsiSlopeExitComponentEvaluator(
+                root,
+                repository,
+                config_artifact_key=(
+                    "configs/research/boll_rsi_slope_deep_pullback_v0.yaml"
+                ),
+            ),
+            BollRsiSlopeStopDistanceComponentEvaluator(
+                root,
+                repository,
+                config_artifact_key=(
+                    "configs/research/boll_rsi_slope_deep_pullback_v0.yaml"
+                ),
+            ),
+            BollRsiSlopeMinimumRewardComponentEvaluator(
+                root,
+                repository,
+                config_artifact_key=(
+                    "configs/research/boll_rsi_slope_deep_pullback_v0.yaml"
+                ),
             ),
             SelectiveReentryComponentEvaluator(
                 root,

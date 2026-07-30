@@ -1,0 +1,40 @@
+schema_version: 1
+validation_id: eth_perpetual_rolling_2y_plan
+enabled: false
+market_profile: crypto_perpetual.binance.eth
+data_version: binance-vision-ethusdt-perpetual-2y-planned-v1
+timestamp_semantics: utc_closed_bar_only
+method: rolling_walk_forward
+timeframes:
+  execution: 5m
+  signal: 15m
+  regime: [1h, 4h]
+folds:
+  train_days: 180
+  validation_days: 30
+  step_days: 30
+  warmup_days: 14
+  purge_days: 1
+  minimum_folds: 6
+cost_model: configs/execution_models/conservative_crypto_perpetual_v1.yaml
+search:
+  train_and_validation_only: true
+  validation_reuse_after_hypothesis_generation: screening_contaminated
+  deterministic_seed_required: true
+locked_test:
+  enabled: false
+  search_allowed: false
+  exact_subject_approval_required: true
+  contamination_requires_newer_period: true
+outputs:
+  preserve_each_fold_manifest: true
+  preserve_each_fold_metrics: true
+  retain_full_equity_for:
+    - baseline
+    - key_candidate
+    - explicit_retain
+  report_artifact_key: reports/validation/eth_perpetual_rolling_2y_planned_v1.md
+limitations:
+  - "This template has not been executed."
+  - "Rolling validation is not an independent locked test."
+  - "Multi-timeframe signals must use only completed higher-timeframe bars."

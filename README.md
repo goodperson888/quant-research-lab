@@ -15,7 +15,7 @@
 - [产品化目标架构 v1](docs/16-产品化目标架构-v1.md)：查看 Web、External Agent、API、Worker 和审计控制平面；
 - [架构重构实施计划](docs/17-架构重构实施计划.md)：查看阶段0纵切和后续功能渐进路线。
 - [Agent 与 Skill 执行架构](docs/18-Agent与Skill执行架构.md)：查看 Agent、Skill、文档路由、工具白名单和状态机如何共同约束执行。
-- [本地启动与操作手册](docs/19-本地启动与操作手册.md)：两个终端启动 API/Web、one-shot Worker、排错与备份。
+- [本地启动与操作手册](docs/19-本地启动与操作手册.md)：单实例启动/停止 API 与 Web、one-shot Worker、排错与备份。
 - [Freqtrade 能力边界与融合方案](docs/20-Freqtrade能力边界与融合方案.md)：区分 Native 与 Freqtrade 引擎职责；
 - [存储治理与保留策略](docs/21-存储治理与保留策略.md)：查看权威、可重建、可归档数据和 Trial 保留规则；
 - [ETH 永续一年数据扩展记录](docs/22-ETH永续一年数据扩展记录.md)：查看当前年度数据、缺口、metadata 和代理结果。
@@ -35,7 +35,17 @@
 ./scripts/dev.sh
 ```
 
-启动后访问 `http://127.0.0.1:3000/studio`，在同一终端按 `Ctrl+C` 会同时关闭 API 和 Web。
+启动后访问 `http://127.0.0.1:3000/studio`。重复执行时，如果两个端口已经是本项目服务，
+脚本会打印“已经运行，可直接访问”并成功退出，不会重复启动。
+
+```bash
+./scripts/dev.sh stop       # 只停止可确认由本脚本管理的实例
+./scripts/dev.sh restart    # 安全停止后重新启动
+./scripts/dev.sh status     # 查看托管实例状态
+```
+
+前台启动终端按 `Ctrl+C` 仍会同时关闭 API 和 Web。运行状态保存在被 Git 忽略的
+`runtime/dev/`；端口被其他软件占用时只报告端口、PID/进程和处理建议，不会自动杀进程。
 需要单独排错时仍可分别运行：
 
 ```bash
@@ -47,6 +57,11 @@
 API 默认仅监听 `127.0.0.1:8000`，Web 默认监听 `127.0.0.1:3000`。根页面进入 `/studio`。
 `dev-worker.sh` 是 one-shot：无 `--job-id` 只打印 status 并退出，不是正在运行的常驻队列。
 指定 `--job-id job_xxx` 时才执行一个白名单 Job。
+
+Studio 当前采用“结论优先”的单一研究流程：首页先显示当前结论、停止原因与下一步，
+再展示亏损瓶颈、最多三个不同类别的改进方向、批量参数进度、资金曲线/回撤和规则分析器
+中文总结。技术 ID、Artifact 路径和英文协议字段收在可折叠技术详情中。网页模型未配置时，
+输入只保存为策略原文或研究指令，不伪造 AI 回复。
 
 商业首版计划以客户本地安装包或受管容器交付 Web Studio，不交付 Git 仓库。Native
 Engine 是默认核心；Freqtrade 是客户自行安装、通过独立进程/标准文件协议连接的可选
@@ -178,6 +193,10 @@ Hyperopt/FreqAI/vectorbt 暂不安装。
 - OKX/Binance 官方 metadata 可通过本机代理访问，但尚无 OKX 一年历史对照。
 
 一年数据改善了 regime screening 和 Walk-forward 设计条件，但仍不能证明长期盈利或
+完整牛熊覆盖。项目已经提供禁用的
+[`两年下载计划模板`](configs/data_downloads/binance_ethusdt_perpetual_2y.example.yaml)
+和 [`两年滚动验证模板`](configs/validation/eth_perpetual_rolling_2y.example.yaml)；
+它们不构成联网授权，尚未下载、尚未执行，也不会覆盖现有一年数据。
 覆盖可重复的完整市场周期。详见
 [docs/22-ETH永续一年数据扩展记录.md](docs/22-ETH永续一年数据扩展记录.md)；原 90 日证据
 保留在 [docs/14-ETH永续第一阶段数据记录.md](docs/14-ETH永续第一阶段数据记录.md)。

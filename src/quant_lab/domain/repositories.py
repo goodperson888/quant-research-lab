@@ -276,6 +276,16 @@ class ProductRepository(Protocol):
 
     def list_component_candidates(self) -> Sequence[ComponentCandidate]: ...
 
+    def get_component_candidate(self, candidate_id: str) -> ComponentCandidate: ...
+
+    def set_component_candidate_archive(
+        self,
+        *,
+        candidate_id: str,
+        archived_at: str | None,
+        archive_reason: str | None,
+    ) -> ComponentCandidate: ...
+
     def create_component_hypothesis(
         self, hypothesis: ComponentHypothesis
     ) -> ComponentHypothesis: ...

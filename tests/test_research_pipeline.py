@@ -239,3 +239,177 @@ def test_pipeline_api_and_explicit_approval_subject(tmp_path: Path) -> None:
     assert client.get("/api/component-candidates").json() == []
     assert client.get("/api/component-evidence").json() == []
     assert client.get("/api/regime-validations").json() == []
+
+
+def test_component_candidate_soft_archive_preserves_evidence_and_audit(
+    tmp_path: Path,
+) -> None:
+    shutil.copytree(ROOT / "configs/pipelines", tmp_path / "configs/pipelines")
+    client = TestClient(
+        create_app(root=tmp_path, database_path=tmp_path / "runtime/app/api.sqlite3")
+    )
+    session = client.post("/api/research/sessions", json={"title": "archive test"}).json()
+    draft = client.post(
+        f"/api/research/sessions/{session['id']}/intakes",
+        json={"source_type": "natural_language", "raw_content": "rule"},
+    ).json()
+    baseline = client.post(
+        f"/api/strategy-drafts/{draft['id']}/freeze-baseline",
+        json={"confirmed_by_user": True, "subject_id": draft["id"]},
+    ).json()
+    created = client.post(
+        "/api/component-candidates",
+        json={
+            "source_strategy_version_id": baseline["id"],
+            "lineage": {"source": "diagnostic"},
+            "component_type": "filter",
+            "target_market_profile": "crypto_perpetual.binance.eth",
+            "incremental_metrics": {"validation_net_return_delta": 0.01},
+            "out_of_sample_status": "screening",
+            "failure_conditions": [],
+            "name": "minimum reward filter",
+            "status": "diagnostic_improvement",
+        },
+    ).json()
+
+    mismatch = client.post(
+        f"/api/component-candidates/{created['id']}/archive",
+        json={
+            "subject_id": "component_other",
+            "confirmed_by_user": True,
+            "reason": "user archived",
+        },
+    )
+    assert mismatch.status_code == 400
+    archived = client.post(
+        f"/api/component-candidates/{created['id']}/archive",
+        json={
+            "subject_id": created["id"],
+            "confirmed_by_user": True,
+            "reason": "user archived",
+        },
+    )
+    assert archived.status_code == 200
+    assert archived.json()["archived_at"] is not None
+    assert client.get("/api/component-candidates").json() == []
+    assert len(client.get("/api/component-evidence").json()) == 1
+    assert len(
+        client.get("/api/component-candidates?include_archived=true").json()
+    ) == 1
+
+    restored = client.post(
+        f"/api/component-candidates/{created['id']}/restore",
+        json={
+            "subject_id": created["id"],
+            "confirmed_by_user": True,
+            "reason": "user restored",
+        },
+    )
+    assert restored.status_code == 200
+    assert restored.json()["archived_at"] is None
+    events = client.get("/api/audit/events?limit=100").json()
+    assert {item["event_type"] for item in events} >= {
+        "component_candidate.archived",
+        "component_candidate.restored",
+    }
+
+
+def test_engine_reconciliation_entry_requires_viability_and_never_fakes_job(
+    tmp_path: Path,
+) -> None:
+    shutil.copytree(ROOT / "configs/pipelines", tmp_path / "configs/pipelines")
+    app = create_app(
+        root=tmp_path, database_path=tmp_path / "runtime/app/api.sqlite3"
+    )
+    client = TestClient(app)
+    session = client.post("/api/research/sessions", json={"title": "engine test"}).json()
+    draft = client.post(
+        f"/api/research/sessions/{session['id']}/intakes",
+        json={"source_type": "natural_language", "raw_content": "rule"},
+    ).json()
+    baseline = client.post(
+        f"/api/strategy-drafts/{draft['id']}/freeze-baseline",
+        json={"confirmed_by_user": True, "subject_id": draft["id"]},
+    ).json()
+    market = "crypto_perpetual.binance.eth"
+
+    blocked = client.post(
+        "/api/engine-reconciliation/jobs",
+        json={
+            "subject_id": baseline["id"],
+            "market_profile": market,
+            "native_run_bundle_id": "report_fixture",
+            "confirmed_by_user": True,
+            "locked_test_used": False,
+        },
+    )
+    assert blocked.status_code == 400
+    assert "尚未通过可行性" in blocked.json()["detail"]
+
+    pipeline = app.state.pipeline_service
+    pass_fast_screen(pipeline, baseline["id"])
+    viability = pipeline.evaluate_gate(
+        profile_id="fast_screen",
+        gate_name="viability",
+        subject_type="strategy_version",
+        subject_id=baseline["id"],
+        market_profile=market,
+        strategy_objective="standalone",
+        metrics={
+            "validation_net_return": 0.02,
+            "validation_profit_factor": 1.3,
+            "validation_expectancy": 0.001,
+            "validation_trade_count": 80,
+            "validation_max_drawdown_abs": 0.05,
+        },
+        checks={},
+    )
+    assert viability.status == "passed"
+    client.post(
+        "/api/strategy-outcomes",
+        json={
+            "strategy_version_id": baseline["id"],
+            "market_profile": "crypto_perpetual.other_venue.eth",
+            "pipeline_profile_id": "fast_screen",
+            "outcome_type": "rejected",
+            "notes": "A rejection in another market profile must remain isolated.",
+        },
+    )
+    status_response = client.get(
+        "/api/engine-reconciliation/status",
+        params={"subject_id": baseline["id"], "market_profile": market},
+    )
+    assert status_response.json()["eligible"] is True
+    assert status_response.json()["implementation_status"] == "not_connected"
+
+    unavailable = client.post(
+        "/api/engine-reconciliation/jobs",
+        json={
+            "subject_id": baseline["id"],
+            "market_profile": market,
+            "native_run_bundle_id": "report_fixture",
+            "confirmed_by_user": True,
+            "locked_test_used": False,
+        },
+    )
+    assert unavailable.status_code == 409
+    assert "no Job was created" in unavailable.json()["detail"]
+    assert client.get("/api/jobs").json() == []
+
+    same_market_rejection = client.post(
+        "/api/strategy-outcomes",
+        json={
+            "strategy_version_id": baseline["id"],
+            "market_profile": market,
+            "pipeline_profile_id": "fast_screen",
+            "outcome_type": "rejected",
+            "notes": "Same-market rejection blocks reconciliation.",
+        },
+    )
+    assert same_market_rejection.status_code == 201
+    blocked_status = client.get(
+        "/api/engine-reconciliation/status",
+        params={"subject_id": baseline["id"], "market_profile": market},
+    ).json()
+    assert blocked_status["eligible"] is False
+    assert "已被拒绝" in blocked_status["reason"]

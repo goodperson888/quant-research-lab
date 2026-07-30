@@ -50,6 +50,11 @@
 | [存储治理与保留策略](21-存储治理与保留策略.md) | 数据与实验维护者 | 说明磁盘报告、小文件阈值、证据保留和备份优先级 |
 | [ETH 永续一年数据扩展记录](22-ETH永续一年数据扩展记录.md) | 当前项目用户 | 当前权威年度窗口、行数、缺口和 metadata 快照 |
 
+计划模板（未执行）：
+
+- [Binance ETHUSDT 永续两年下载计划](../configs/data_downloads/binance_ethusdt_perpetual_2y.example.yaml)：默认禁用、只追加、不覆盖现有一年数据；
+- [ETH 永续两年滚动验证计划](../configs/validation/eth_perpetual_rolling_2y.example.yaml)：训练/验证滚动切分，最终保留测试隔离并需单独审批。
+
 ## 因子与治理
 
 | 文档 | 适合读者 | 作用 |

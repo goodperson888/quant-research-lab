@@ -377,6 +377,126 @@ def test_batch_retry_preserves_completed_trials_and_resource_failures(tmp_path: 
     assert failed[0].peak_rss_mb >= 9999.0
 
 
+def test_correction_attempt_preserves_failed_trials_and_reuses_budget(
+    tmp_path: Path,
+) -> None:
+    repository = SQLiteProductRepository(tmp_path / "runtime/app/test.sqlite3")
+    service, session, _, _, plan = _approved_plan(repository)
+    original_job = service.create_job(
+        job_type="parameter_search",
+        payload={
+            "experiment_plan_id": plan.id,
+            "batch_mode": True,
+            "locked_test_used": False,
+            "max_trials": 3,
+            "evaluator_id": "deterministic_fixture",
+            "evidence_mode": "fixture",
+            "data_version": "fixture-v1",
+        },
+    )
+    original_trials = (
+        service.record_trial(
+            experiment_plan_id=plan.id,
+            parameters={"window": 10},
+            data_version="fixture-v1",
+            candidate_version_id=plan.candidate_version_id,
+            parameter_signature=parameter_signature({"window": 10}),
+            status="succeeded",
+            metrics={"validation_trade_count": 30.0},
+        ),
+        service.record_trial(
+            experiment_plan_id=plan.id,
+            parameters={"window": 20},
+            data_version="fixture-v1",
+            candidate_version_id=plan.candidate_version_id,
+            parameter_signature=parameter_signature({"window": 20}),
+            status="failed",
+            metrics={},
+        ),
+        service.record_trial(
+            experiment_plan_id=plan.id,
+            parameters={"window": 30},
+            data_version="fixture-v1",
+            candidate_version_id=plan.candidate_version_id,
+            parameter_signature=parameter_signature({"window": 30}),
+            status="failed",
+            metrics={},
+        ),
+    )
+    repository.update_job(
+        original_job.id,
+        status="succeeded",
+        updated_at=original_job.updated_at,
+    )
+    budget_before = service.get_research_budget(session.id)
+
+    correction = service.create_correction_experiment_plan(
+        original_plan_id=plan.id,
+        subject_id=plan.id,
+        confirmed_by_user=True,
+        parameter_space=(
+            ParameterSpace(name="window", kind="integer", values=(20, 30)),
+        ),
+        max_trials=2,
+        time_budget_seconds=300,
+        correction_reason="reviewed evaluator contract mismatch",
+    )
+    correction_job = service.create_job(
+        job_type="parameter_search",
+        payload={
+            "experiment_plan_id": correction.id,
+            "correction_of_plan_id": plan.id,
+            "correction_of_job_id": original_job.id,
+            "reuse_reserved_budget": True,
+            "batch_mode": True,
+            "locked_test_used": False,
+            "max_trials": 2,
+            "evaluator_id": "deterministic_fixture",
+            "evidence_mode": "fixture",
+            "data_version": "fixture-v1",
+        },
+    )
+    result = BatchParameterSearchRunner(
+        repository,
+        evaluator_registry=StrategyEvaluatorRegistry(
+            (DeterministicFixtureStrategyEvaluator(),)
+        ),
+        executor=InProcessTrialExecutor(),
+        metrics_sink=MemoryMetricsSink(),
+        resource_policy=WorkerResourcePolicy(
+            policy_id="test",
+            max_rss_mb=4096,
+            max_concurrent_trials=1,
+            max_job_minutes=5,
+            parquet_batch_rows=100,
+            kill_on_memory_limit=True,
+        ),
+    )(correction_job)
+
+    assert correction.correction_of_plan_id == plan.id
+    assert result["correction_of_plan_id"] == plan.id
+    assert [item.status for item in repository.list_trials(plan.id)] == [
+        "succeeded",
+        "failed",
+        "failed",
+    ]
+    assert tuple(repository.list_trials(plan.id)) == original_trials
+    corrected_trials = repository.list_trials(correction.id)
+    assert [dict(item.parameters) for item in corrected_trials] == [
+        {"window": 20},
+        {"window": 30},
+    ]
+    assert all(item.status == "succeeded" for item in corrected_trials)
+    budget_after = service.get_research_budget(session.id)
+    assert budget_after.used_hypotheses == budget_before.used_hypotheses
+    assert budget_after.reserved_trials == budget_before.reserved_trials
+    assert (
+        budget_after.reserved_compute_minutes
+        == budget_before.reserved_compute_minutes
+    )
+    assert budget_after.used_locked_test_uses == 0
+
+
 def test_batch_api_is_structured_and_openapi_remains_non_live(tmp_path: Path) -> None:
     app = create_app(root=tmp_path, database_path=tmp_path / "runtime/app/api.sqlite3")
     client = TestClient(app)

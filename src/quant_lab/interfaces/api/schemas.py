@@ -369,6 +369,14 @@ class ComponentCandidateResponse(StrictModel):
     logic_signature: str
     target_market_profile: str
     timeframe: str
+    archived_at: str | None
+    archive_reason: str | None
+
+
+class ComponentArchiveRequest(StrictModel):
+    subject_id: str = Field(min_length=1)
+    confirmed_by_user: bool
+    reason: str = Field(default="user_archived", min_length=1, max_length=500)
 
 
 class ComponentEvidenceResponse(StrictModel):
@@ -553,6 +561,14 @@ class ProposalBudgetRequest(StrictModel):
 class JobActionRequest(StrictModel):
     subject_id: str
     confirmed_by_user: bool
+
+
+class CreateEngineReconciliationRequest(StrictModel):
+    subject_id: str = Field(min_length=1)
+    market_profile: str = Field(min_length=1)
+    native_run_bundle_id: str = Field(min_length=1)
+    confirmed_by_user: bool
+    locked_test_used: Literal[False] = False
 
 
 class TrialResponse(StrictModel):

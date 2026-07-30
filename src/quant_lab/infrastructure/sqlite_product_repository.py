@@ -40,7 +40,7 @@ from quant_lab.domain.models import (
 )
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 10
 
 
 class SQLiteProductRepository:
@@ -319,6 +319,7 @@ class SQLiteProductRepository:
                     stopping_conditions_json TEXT NOT NULL,
                     proposal_id TEXT,
                     candidate_version_id TEXT,
+                    correction_of_plan_id TEXT,
                     search_strategy TEXT NOT NULL DEFAULT 'grid',
                     random_seed INTEGER NOT NULL DEFAULT 0,
                     status TEXT NOT NULL,
@@ -441,6 +442,8 @@ class SQLiteProductRepository:
                     logic_signature TEXT NOT NULL DEFAULT '',
                     target_market_profile TEXT NOT NULL DEFAULT '',
                     timeframe TEXT NOT NULL DEFAULT '',
+                    archived_at TEXT,
+                    archive_reason TEXT,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (evidence_id) REFERENCES component_evidence(id)
                 );
@@ -532,6 +535,7 @@ class SQLiteProductRepository:
                 "experiment_plans": {
                     "proposal_id": "TEXT",
                     "candidate_version_id": "TEXT",
+                    "correction_of_plan_id": "TEXT",
                     "search_strategy": "TEXT NOT NULL DEFAULT 'grid'",
                     "random_seed": "INTEGER NOT NULL DEFAULT 0",
                 },
@@ -561,6 +565,8 @@ class SQLiteProductRepository:
                     "logic_signature": "TEXT NOT NULL DEFAULT ''",
                     "target_market_profile": "TEXT NOT NULL DEFAULT ''",
                     "timeframe": "TEXT NOT NULL DEFAULT ''",
+                    "archived_at": "TEXT",
+                    "archive_reason": "TEXT",
                 },
             }
             for table, columns in migrations.items():
@@ -1731,8 +1737,9 @@ class SQLiteProductRepository:
                     objectives_json, constraints_json, data_splits_json,
                     cost_model_json, max_trials, time_budget_seconds,
                     stopping_conditions_json, proposal_id, candidate_version_id,
-                    search_strategy, random_seed, status, approved_by, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    correction_of_plan_id, search_strategy, random_seed, status,
+                    approved_by, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     plan.id,
@@ -1748,6 +1755,7 @@ class SQLiteProductRepository:
                     json.dumps(plan.stopping_conditions),
                     plan.proposal_id,
                     plan.candidate_version_id,
+                    plan.correction_of_plan_id,
                     plan.search_strategy,
                     plan.random_seed,
                     plan.status,
@@ -2193,6 +2201,37 @@ class SQLiteProductRepository:
             ).fetchall()
         return [self._component_candidate(row) for row in rows]
 
+    def get_component_candidate(self, candidate_id: str) -> ComponentCandidate:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM component_candidates WHERE id = ?", (candidate_id,)
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(f"component candidate not found: {candidate_id}")
+        return self._component_candidate(row)
+
+    def set_component_candidate_archive(
+        self,
+        *,
+        candidate_id: str,
+        archived_at: str | None,
+        archive_reason: str | None,
+    ) -> ComponentCandidate:
+        with self._connect() as connection:
+            updated = connection.execute(
+                """
+                UPDATE component_candidates
+                SET archived_at = ?, archive_reason = ?
+                WHERE id = ?
+                """,
+                (archived_at, archive_reason, candidate_id),
+            )
+            if updated.rowcount != 1:
+                raise NotFoundError(
+                    f"component candidate not found: {candidate_id}"
+                )
+        return self.get_component_candidate(candidate_id)
+
     def create_component_hypothesis(
         self, hypothesis: ComponentHypothesis
     ) -> ComponentHypothesis:
@@ -2519,6 +2558,8 @@ class SQLiteProductRepository:
             logic_signature=row["logic_signature"],
             target_market_profile=row["target_market_profile"],
             timeframe=row["timeframe"],
+            archived_at=row["archived_at"],
+            archive_reason=row["archive_reason"],
         )
 
     @staticmethod
@@ -2640,6 +2681,7 @@ class SQLiteProductRepository:
             stopping_conditions=tuple(json.loads(row["stopping_conditions_json"])),
             proposal_id=row["proposal_id"],
             candidate_version_id=row["candidate_version_id"],
+            correction_of_plan_id=row["correction_of_plan_id"],
             search_strategy=row["search_strategy"],
             random_seed=row["random_seed"],
             status=row["status"],

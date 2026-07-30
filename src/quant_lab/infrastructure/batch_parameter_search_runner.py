@@ -246,6 +246,7 @@ class BatchParameterSearchRunner:
         summary.update(
             {
                 "experiment_plan_id": plan.id,
+                "correction_of_plan_id": plan.correction_of_plan_id,
                 "baseline_version_id": plan.baseline_version_id,
                 "candidate_version_id": plan.candidate_version_id,
                 "search_strategy": plan.search_strategy,

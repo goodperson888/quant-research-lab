@@ -315,6 +315,8 @@ export type ComponentCandidate = {
   logic_signature: string;
   target_market_profile: string;
   timeframe: string;
+  archived_at: string | null;
+  archive_reason: string | null;
 };
 
 export type ComponentEvidence = {
@@ -527,6 +529,56 @@ export type BatchSummary = {
   evidence_mode: "research" | "fixture" | "unavailable";
   research_conclusion_allowed: boolean;
   locked_test_used: boolean;
+  job_id?: string | null;
+  job_status?: string;
+  total_trials?: number;
+  completed_trials?: number;
+  succeeded_trials?: number;
+  failed_trials?: number;
+  cancelled_trials?: number;
+  running_trials?: number;
+  queued_trials?: number;
+  remaining_trials?: number;
+  concurrency?: number;
+  elapsed_seconds?: number;
+  peak_rss_mb?: number;
+  stop_reason?: string | null;
+  continue_reason?: string | null;
+};
+
+export type EquityChartSeries = {
+  series_id: string;
+  label: string;
+  kind: string;
+  points: Array<{
+    t: string;
+    normalized_equity: number;
+    drawdown: number;
+  }>;
+  source_artifact_key: string;
+  evidence_mode: string;
+};
+
+export type RunBundleChart = {
+  available: boolean;
+  bundle_id: string;
+  series: EquityChartSeries[];
+  reason?: string;
+  limitations: string[];
+};
+
+export type EngineReconciliationStatus = {
+  subject_id: string;
+  market_profile: string;
+  viability_gate_result_id: string | null;
+  eligible: boolean;
+  engine_id: string;
+  engine_boundary: "optional_external_process";
+  implementation_status: "not_connected";
+  job_created: false;
+  reason: string;
+  locked_test_allowed: false;
+  live_trade_available: false;
 };
 
 export type RegimeValidation = {
