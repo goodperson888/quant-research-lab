@@ -14,13 +14,7 @@ import {
   TechnicalId,
 } from "@/components/studio/studio-primitives";
 
-export function ResearchCharts({
-  bundles,
-  trials,
-}: {
-  bundles: RunBundle[];
-  trials: Trial[];
-}) {
+export function PerformanceCharts({ bundles }: { bundles: RunBundle[] }) {
   const chartQueries = useQueries({
     queries: bundles.slice(0, 8).map((bundle) => ({
       queryKey: ["run-bundle-chart", bundle.bundle_id],
@@ -46,9 +40,6 @@ export function ResearchCharts({
     .flatMap((query) => (query.data?.available ? query.data.series : []))
     .slice(0, 6);
   const [visible, setVisible] = useState<Record<string, boolean>>({});
-  const [activeTab, setActiveTab] = useState<
-    "equity" | "drawdown" | "parameters"
-  >("equity");
   const coloredSeries = allSeries.map((item, index) => ({
     ...item,
     color: CHART_COLORS[index % CHART_COLORS.length],
@@ -59,52 +50,19 @@ export function ResearchCharts({
 
   return (
     <div className="space-y-5">
-      <div>
-        <div className="mb-1 text-sm font-medium text-slate-200">
-          研究图表
-        </div>
-        <div className="text-xs leading-5 text-slate-500">
-          点击标签切换视角。图表只读取当前研究会话、当前策略版本的真实结果；不同会话不会自动混线，同一策略的试跑、训练和验证结果可以主动叠加比较。
-        </div>
-      </div>
-      <div
-        className="inline-flex max-w-full gap-1 overflow-x-auto rounded-xl border border-white/10 bg-black/10 p-1"
-        role="tablist"
-        aria-label="研究图表类型"
-      >
-        <ChartTabButton
-          active={activeTab === "equity"}
-          onClick={() => setActiveTab("equity")}
-        >
-          行情与资金
-        </ChartTabButton>
-        <ChartTabButton
-          active={activeTab === "drawdown"}
-          onClick={() => setActiveTab("drawdown")}
-        >
-          策略回撤
-        </ChartTabButton>
-        <ChartTabButton
-          active={activeTab === "parameters"}
-          onClick={() => setActiveTab("parameters")}
-        >
-          参数对比
-        </ChartTabButton>
-      </div>
-      {activeTab === "parameters" ? (
-        <TrialMetricComparison trials={trials} />
-      ) : chart?.available && series.length ? (
+      {chart?.available && series.length ? (
         <>
           {selectedBundle && selectedChartIndex > 0 ? (
             <div className="rounded-lg border border-sky-300/15 bg-sky-300/[0.07] px-3 py-2 text-xs leading-5 text-sky-100">
               最新报告未保存资金曲线，已自动采用最近一份有真实曲线的研究结果。
             </div>
           ) : null}
+          <PerformanceSummaryTable series={coloredSeries} />
           <div className="flex flex-wrap gap-2">
             {coloredSeries.map((item) => (
               <label
                 key={item.series_id}
-                className="flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs text-slate-300"
+                className="flex min-h-11 cursor-pointer items-center gap-2 rounded-full border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:border-white/20 hover:bg-white/[0.03]"
               >
                 <input
                   type="checkbox"
@@ -124,55 +82,36 @@ export function ResearchCharts({
               </label>
             ))}
           </div>
-          {activeTab === "equity" ? (
-            chart.market_series ? (
-              <SvgMarketComparisonChart
-                market={chart.market_series}
-                series={series.map((item) => ({
-                  id: item.series_id,
-                  label: item.label,
-                  color: item.color,
-                  points: item.points.map((point) => ({
-                    t: point.t,
-                    value: point.normalized_equity,
-                  })),
-                }))}
-              />
-            ) : (
-              <SvgLineChart
-                title="策略资金曲线"
-                series={series.map((item) => ({
-                  id: item.series_id,
-                  label: item.label,
-                  color: item.color,
-                  points: item.points.map((point) => ({
-                    t: point.t,
-                    value: point.normalized_equity,
-                  })),
-                }))}
-                baseline={1}
-                formatValue={(value) => formatSignedPercentValue(value - 1)}
-              />
-            )
-          ) : (
-            <SvgLineChart
-              title="策略回撤"
+          {chart.market_series ? (
+            <SvgMarketComparisonChart
+              market={chart.market_series}
               series={series.map((item) => ({
                 id: item.series_id,
                 label: item.label,
                 color: item.color,
                 points: item.points.map((point) => ({
                   t: point.t,
-                  value: point.drawdown,
+                  value: point.normalized_equity,
                 })),
               }))}
-              baseline={0}
-              formatValue={formatSignedPercentValue}
+            />
+          ) : (
+            <SvgLineChart
+              title="策略资金曲线"
+              series={series.map((item) => ({
+                id: item.series_id,
+                label: item.label,
+                color: item.color,
+                points: item.points.map((point) => ({
+                  t: point.t,
+                  value: point.normalized_equity,
+                })),
+              }))}
+              baseline={1}
+              formatValue={(value) => formatSignedPercentValue(value - 1)}
             />
           )}
-          {activeTab === "equity" &&
-          !chart.market_series &&
-          chart.market_reason ? (
+          {!chart.market_series && chart.market_reason ? (
             <div className="text-xs leading-5 text-amber-100/80">
               行情对照暂不可用：{chart.market_reason}
             </div>
@@ -202,29 +141,67 @@ export function ResearchCharts({
   );
 }
 
-function ChartTabButton({
-  active,
-  children,
-  onClick,
+function PerformanceSummaryTable({
+  series,
 }: {
-  active: boolean;
-  children: React.ReactNode;
-  onClick: () => void;
+  series: Array<RunBundleChart["series"][number] & { color: string }>;
 }) {
   return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      className={
-        active
-          ? "whitespace-nowrap rounded-lg bg-sky-300/15 px-3 py-2 text-xs font-medium text-sky-100"
-          : "whitespace-nowrap rounded-lg px-3 py-2 text-xs text-slate-400 transition hover:bg-white/[0.05] hover:text-slate-200"
-      }
-    >
-      {children}
-    </button>
+    <div className="overflow-x-auto rounded-xl border border-white/10">
+      <table className="w-full min-w-[680px] border-collapse text-left text-xs tabular-nums">
+        <thead className="bg-white/[0.04] text-slate-500">
+          <tr>
+            <th className="px-3 py-2.5 font-medium">曲线</th>
+            <th className="px-3 py-2.5 font-medium">累计收益</th>
+            <th className="px-3 py-2.5 font-medium">最大回撤</th>
+            <th className="px-3 py-2.5 font-medium">数据点</th>
+            <th className="px-3 py-2.5 font-medium">覆盖区间</th>
+          </tr>
+        </thead>
+        <tbody>
+          {series.map((item) => {
+            const first = item.points[0];
+            const last = item.points[item.points.length - 1];
+            const maxDrawdown = Math.min(
+              0,
+              ...item.points.map((point) => point.drawdown),
+            );
+            return (
+              <tr
+                key={item.series_id}
+                className="border-t border-white/[0.06] text-slate-300"
+              >
+                <td className="px-3 py-3">
+                  <span className="flex items-center gap-2 text-slate-100">
+                    <span
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: item.color }}
+                    />
+                    {item.label}
+                  </span>
+                </td>
+                <td className="px-3 py-3">
+                  {formatSignedPercentValue(
+                    (last?.normalized_equity ?? 1) - 1,
+                  )}
+                </td>
+                <td className="px-3 py-3 text-amber-200">
+                  {formatSignedPercentValue(maxDrawdown)}
+                </td>
+                <td className="px-3 py-3">
+                  {item.points.length.toLocaleString("zh-CN")}
+                </td>
+                <td className="px-3 py-3 text-slate-400">
+                  {first && last
+                    ? `${formatShortDate(first.t)} — ${formatShortDate(last.t)}`
+                    : "—"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -259,7 +236,7 @@ const TRIAL_METRICS = [
   },
 ] as const;
 
-function TrialMetricComparison({ trials }: { trials: Trial[] }) {
+export function TrialMetricComparison({ trials }: { trials: Trial[] }) {
   const [metricKey, setMetricKey] =
     useState<(typeof TRIAL_METRICS)[number]["key"]>("validation_net_return");
   const succeeded = trials
@@ -310,8 +287,8 @@ function TrialMetricComparison({ trials }: { trials: Trial[] }) {
             onClick={() => setMetricKey(item.key)}
             className={
               metricKey === item.key
-                ? "whitespace-nowrap rounded-full border border-sky-300/25 bg-sky-300/10 px-3 py-1.5 text-xs text-sky-100"
-                : "whitespace-nowrap rounded-full border border-white/10 px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200"
+                ? "min-h-11 cursor-pointer whitespace-nowrap rounded-full border border-sky-300/25 bg-sky-300/10 px-3 py-2 text-xs text-sky-100"
+                : "min-h-11 cursor-pointer whitespace-nowrap rounded-full border border-white/10 px-3 py-2 text-xs text-slate-400 hover:text-slate-200"
             }
           >
             {item.label}
@@ -890,6 +867,11 @@ function formatDateTick(timestamp: number) {
   })
     .format(new Date(timestamp))
     .replaceAll("/", "-");
+}
+
+function formatShortDate(value: string) {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? formatDateTick(timestamp) : value;
 }
 
 function formatSignedPercentValue(value: number) {

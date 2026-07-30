@@ -40,8 +40,7 @@ import { BatchProgressPanel } from "@/components/studio/batch-progress";
 import { ComponentLibrary } from "@/components/studio/component-library";
 import { IntakeComposer } from "@/components/studio/intake-composer";
 import { ImprovementDirections } from "@/components/studio/improvement-directions";
-import { RegimeEvidence } from "@/components/studio/regime-evidence";
-import { ResearchCharts } from "@/components/studio/research-charts";
+import { ResearchAnalysis } from "@/components/studio/research-analysis";
 import {
   buildTopConclusion,
   StudioOverview,
@@ -49,19 +48,12 @@ import {
 import {
   cnActor,
   cnEvent,
-  cnEvidence,
   cnOutcome,
   cnProfile,
   cnResearchMode,
   cnSource,
   cnStage,
   cnStatus,
-  formatNumber,
-  formatPercent,
-  formatSignedPercent,
-  formatTrialParameters,
-  trialConclusion,
-  trialDelta,
 } from "@/components/studio/studio-labels";
 import {
   TechnicalDetails,
@@ -951,72 +943,21 @@ export function StudioWorkspace() {
               </div>
             </div>
           </Panel>
-          <Panel title="批量参数对比">
-            {batchSummary.data?.trial_count ? (
-              <div className="space-y-2 text-xs">
-                <Meta
-                  label="证据类型"
-                  value={cnEvidence(batchSummary.data.evidence_mode)}
-                />
-                <Meta label="完成情况" value={`${batchSummary.data.succeeded_count}/${batchSummary.data.trial_count} 个方案成功`} />
-                <div className="overflow-x-auto rounded-xl border border-white/10">
-                  <table className="min-w-[760px] w-full border-collapse text-left text-[11px]">
-                    <thead className="bg-white/[0.04] text-slate-400">
-                      <tr>
-                        <th className="px-2 py-2 font-medium">参数方案</th>
-                        <th className="px-2 py-2 font-medium">验证收益</th>
-                        <th className="px-2 py-2 font-medium">相对基准</th>
-                        <th className="px-2 py-2 font-medium">盈亏效率</th>
-                        <th className="px-2 py-2 font-medium">单笔期望</th>
-                        <th className="px-2 py-2 font-medium">最大回撤</th>
-                        <th className="px-2 py-2 font-medium">交易数</th>
-                        <th className="px-2 py-2 font-medium">结论</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(trials.data ?? []).map((trial) => (
-                        <tr key={trial.id} className="border-t border-white/[0.06] text-slate-300">
-                          <td className="px-2 py-2 text-slate-100">{formatTrialParameters(trial.parameters)}</td>
-                          <td className="px-2 py-2">{formatPercent(trial.metrics.validation_net_return)}</td>
-                          <td className={`px-2 py-2 ${trialDelta(trial, trials.data ?? []) > 0 ? "text-emerald-200" : trialDelta(trial, trials.data ?? []) < 0 ? "text-rose-200" : "text-slate-400"}`}>
-                            {formatSignedPercent(trialDelta(trial, trials.data ?? []))}
-                          </td>
-                          <td className="px-2 py-2">{formatNumber(trial.metrics.validation_profit_factor, 3)}</td>
-                          <td className="px-2 py-2">{formatPercent(trial.metrics.validation_expectancy)}</td>
-                          <td className="px-2 py-2">{formatPercent(trial.metrics.validation_max_drawdown_abs)}</td>
-                          <td className="px-2 py-2">{formatNumber(trial.metrics.validation_trade_count, 0)}</td>
-                          <td className="px-2 py-2">{trialConclusion(trial, trials.data ?? [])}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <details className="rounded-lg bg-white/[0.03] p-2 leading-5 text-slate-400">
-                  <summary className="cursor-pointer text-slate-300">查看稳定参数区间</summary>
-                  <div className="mt-2 break-words">
-                    {Object.entries(batchSummary.data.stable_parameter_ranges)
-                      .map(([key, value]) => `${key}：${JSON.stringify(value)}`)
-                      .join("；") || "尚未形成连续稳定区间"}
-                  </div>
-                </details>
-                <div className="text-slate-500">
-                  表格并排展示每个参数方案及相对基准差异。“少亏”只记为有改善，不能变成可用策略候选；孤立最高点也不会自动晋升。
-                </div>
-                {!batchSummary.data.research_conclusion_allowed ? (
-                  <div className="rounded-lg border border-amber-300/20 bg-amber-300/10 p-2 leading-5 text-amber-100">
-                    当前是测试或不可用证据，只验证批量执行连线；这些数值不能形成候选、收益或稳定性结论。
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <Empty>尚无真实批量结果。测试数据必须明确标记，不能伪装成盈利候选。</Empty>
-            )}
-            <div className="mt-5 border-t border-white/[0.06] pt-5">
-              <ResearchCharts
-                bundles={runBundles.data ?? []}
-                trials={trials.data ?? []}
-              />
-            </div>
+          <Panel title="结果分析">
+            <ResearchAnalysis
+              bundles={runBundles.data ?? []}
+              trials={trials.data ?? []}
+              batchSummary={batchSummary.data}
+              regimeMetrics={regimeMetrics}
+              regimeEvidenceStatus={
+                diagnosticReport.data?.regime_diagnostic.evidence_status ??
+                latestRegime?.evidence_status ??
+                "screening"
+              }
+              formalRegimeValidation={
+                latestRegime?.mode === "regime_validation"
+              }
+            />
           </Panel>
           <Panel title="亏损归因与多周期漏斗">
             {validationFunnel && validationAttribution ? (
@@ -1088,20 +1029,6 @@ export function StudioWorkspace() {
               onArchive={(candidateId) => archiveComponent.mutate(candidateId)}
               onRestore={(candidateId) => restoreComponent.mutate(candidateId)}
             />
-          </Panel>
-          <Panel title="适合与不适合行情">
-            <RegimeEvidence
-              metrics={regimeMetrics}
-              evidenceStatus={
-                diagnosticReport.data?.regime_diagnostic.evidence_status ??
-                latestRegime?.evidence_status ??
-                "screening"
-              }
-              formalValidation={latestRegime?.mode === "regime_validation"}
-            />
-            <div className="mt-3 border-t border-white/[0.06] pt-3 text-xs leading-5 text-slate-400">
-              Pine 来源先检查语义、重绘、多周期和少量代表交易；完整 TradingView 对账在快速初筛与可行性通过后进行。
-            </div>
           </Panel>
           <Panel title="研究助手总结与技术记录">
             <div className="text-sm leading-6 text-slate-300">
@@ -1184,13 +1111,12 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
       "亏损归因与多周期漏斗": "order-[2]",
       "改进方向（最多 3 个）": "order-[3]",
       "实验计划": "order-[4]",
-      "批量参数对比": "order-[5]",
+      "结果分析": "order-[5]",
       "失败策略中的局部改进": "order-[6]",
-      "适合与不适合行情": "order-[7]",
-      "第二引擎逐笔对账": "order-[8]",
-      "研究流程": "order-[9]",
-      "研究助手总结与技术记录": "order-[10]",
-      "审批与成果": "order-[11]",
+      "第二引擎逐笔对账": "order-[7]",
+      "研究流程": "order-[8]",
+      "研究助手总结与技术记录": "order-[9]",
+      "审批与成果": "order-[10]",
     }[title] ?? "";
   return (
     <section className={`min-w-0 rounded-2xl border border-white/10 bg-[#0a151e]/90 p-4 ${order}`}>
