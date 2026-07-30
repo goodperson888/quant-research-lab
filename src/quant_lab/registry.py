@@ -125,7 +125,8 @@ def list_factors(path: Path) -> Iterable[sqlite3.Row]:
     with connect(path) as connection:
         rows = connection.execute(
             """
-            SELECT factor_id, name, category, version, status, updated_at
+            SELECT factor_id, name, category, version, status, formula_path,
+                   description, metadata_json, created_at, updated_at
             FROM factors
             ORDER BY category, factor_id
             """

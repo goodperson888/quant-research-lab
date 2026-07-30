@@ -57,6 +57,7 @@ from quant_lab.application.storage import StorageReporter
 from quant_lab.infrastructure.sqlite_product_repository import SQLiteProductRepository
 from quant_lab.infrastructure.artifact_store import LocalArtifactStore
 from quant_lab.paths import app_database_path, project_root
+from quant_lab.registry import list_factors
 
 from .schemas import (
     AuditEventResponse,
@@ -396,6 +397,31 @@ def create_app(
     )
     def list_drafts(session_id: str | None = Query(default=None)) -> Any:
         return service.list_strategy_drafts(session_id)
+
+    @application.get(
+        "/api/strategy-versions",
+        response_model=list[StrategyVersionResponse],
+        tags=["strategies"],
+    )
+    def list_strategy_versions(
+        strategy_id: str | None = Query(default=None),
+    ) -> Any:
+        return service.list_strategy_versions(strategy_id)
+
+    @application.get("/api/factors", tags=["research-components"])
+    def factors() -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        registry = resolved_root / "factor_library" / "registry.sqlite3"
+        for row in list_factors(registry):
+            item = dict(row)
+            raw_metadata = item.pop("metadata_json", "{}")
+            try:
+                metadata = json.loads(raw_metadata)
+            except (json.JSONDecodeError, TypeError):
+                metadata = {}
+            item["metadata"] = metadata if isinstance(metadata, dict) else {}
+            result.append(item)
+        return result
 
     @application.post(
         "/api/strategy-drafts/{draft_id}/formalize",

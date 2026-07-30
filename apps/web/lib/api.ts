@@ -192,6 +192,43 @@ export type StrategyDraft = {
   created_at: string;
 };
 
+export type StrategyVersion = {
+  id: string;
+  strategy_id: string;
+  version: number;
+  status:
+    | "baseline"
+    | "candidate"
+    | "validated"
+    | "dry_run"
+    | "degraded"
+    | "retired"
+    | "rejected";
+  content_snapshot: Record<string, unknown>;
+  source_snapshot: string;
+  created_at: string;
+  immutable: boolean;
+};
+
+export type FactorRegistryItem = {
+  factor_id: string;
+  name: string;
+  category: string;
+  version: number;
+  status:
+    | "candidate"
+    | "validated"
+    | "production"
+    | "degraded"
+    | "retired"
+    | "rejected";
+  formula_path: string | null;
+  description: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Job = {
   id: string;
   job_type: string;

@@ -327,6 +327,7 @@ class DevManager:
         print("Quant Research Lab 已经运行，可直接访问：")
         print(f"Web Studio: http://127.0.0.1:{web_port}/studio")
         print(f"API health: http://127.0.0.1:{api_port}/health")
+        print("前端和 Python API 源码热更新已开启，日常修改无需重启。")
         print("停止：./scripts/dev.sh stop    重启：./scripts/dev.sh restart")
 
     def preflight(self) -> str:
@@ -386,10 +387,37 @@ class DevManager:
             time.sleep(0.1)
         remaining = listener_pids(port)
         if remaining:
-            raise DevManagerError(
-                f"已向本项目 {ROLE_LABELS[role]} 发送停止信号，但端口 {port} "
-                f"仍被 PID {', '.join(str(pid) for pid in remaining)} 占用；"
-                "未使用强制终止。"
+            if any(
+                pid not in verified or not process_matches_role(pid, role)
+                for pid in remaining
+            ):
+                raise DevManagerError(
+                    f"{ROLE_LABELS[role]} 端口 {port} 的进程身份在等待退出期间发生变化；"
+                    "本次没有强制终止新出现或身份不明的进程。"
+                )
+            for pid in remaining:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    continue
+                except PermissionError as exc:
+                    raise DevManagerError(
+                        f"本项目 {ROLE_LABELS[role]} 进程 PID {pid} "
+                        "忽略了正常停止信号，当前终端也无权强制结束它。"
+                    ) from exc
+            force_deadline = time.monotonic() + 2.0
+            while listener_pids(port) and time.monotonic() < force_deadline:
+                time.sleep(0.1)
+            remaining = listener_pids(port)
+            if remaining:
+                raise DevManagerError(
+                    f"已确认属于本项目的 {ROLE_LABELS[role]} 进程在正常停止和"
+                    f"强制停止后仍占用端口 {port}："
+                    f"{', '.join(str(pid) for pid in remaining)}。"
+                )
+            print(
+                f"本项目 {ROLE_LABELS[role]} 旧进程未响应正常停止，"
+                "已在身份复核后强制结束。"
             )
         return True
 
@@ -623,6 +651,7 @@ class DevManager:
         print("启动完成：")
         print(f"Web Studio: http://127.0.0.1:{self.web_port}/studio")
         print(f"API health: http://127.0.0.1:{self.api_port}/health")
+        print("前端和 Python API 源码热更新已开启，修改后浏览器会自动刷新。")
         print("按 Ctrl+C 可同时停止 API 和 Web。")
         print("其他终端可运行：./scripts/dev.sh stop 或 ./scripts/dev.sh restart")
 

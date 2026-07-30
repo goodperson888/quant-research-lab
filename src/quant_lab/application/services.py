@@ -346,6 +346,11 @@ class ResearchApplicationService:
     ) -> Sequence[StrategyDraft]:
         return self.repository.list_drafts(session_id)
 
+    def list_strategy_versions(
+        self, strategy_id: str | None = None
+    ) -> Sequence[StrategyVersion]:
+        return self.repository.list_strategy_versions(strategy_id)
+
     def formalize_strategy(
         self,
         *,

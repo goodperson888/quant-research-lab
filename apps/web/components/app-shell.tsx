@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 
 const navigation = [
   { href: "/studio", label: "研究工作台", caption: "策略与研究助手" },
-  { href: "/strategies", label: "策略版本", caption: "来源、基准与候选" },
+  { href: "/strategies", label: "策略与因子", caption: "版本、组件与长期资产" },
   { href: "/jobs", label: "后台任务", caption: "进度、日志与停止原因" },
   { href: "/reports", label: "研究报告", caption: "回测与实验结果" },
   { href: "/data", label: "市场数据", caption: "范围、质量与缺口" },

@@ -1144,6 +1144,19 @@ class SQLiteProductRepository:
             raise NotFoundError(f"strategy version not found: {version_id}")
         return self._strategy_version(row)
 
+    def list_strategy_versions(
+        self, strategy_id: str | None = None
+    ) -> Sequence[StrategyVersion]:
+        query = "SELECT * FROM strategy_versions"
+        parameters: tuple[str, ...] = ()
+        if strategy_id is not None:
+            query += " WHERE strategy_id = ?"
+            parameters = (strategy_id,)
+        query += " ORDER BY created_at DESC, version DESC"
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [self._strategy_version(row) for row in rows]
+
     def create_proposal(self, proposal: Proposal) -> Proposal:
         with self._connect() as connection:
             draft = connection.execute(

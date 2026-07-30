@@ -1,14 +1,14 @@
 import { PageFrame } from "@/components/page-frame";
-import { StrategyList } from "@/components/strategy-list";
+import { ResearchAssetLibrary } from "@/components/research-asset-library";
 
 export default function StrategiesPage() {
   return (
     <PageFrame
-      eyebrow="Strategy Registry"
-      title="策略与不可变版本"
-      description="保存来源、draft、baseline v0 和后续 Proposal。任何改进都创建新版本，不覆盖冻结基准。"
+      eyebrow="Research Asset Library"
+      title="策略与因子资产库"
+      description="统一查看策略版本、研究中自然沉淀的可复用组件和独立因子。候选、诊断证据与已验证结论严格分开，不把“少亏”或单次历史改善误写成有效策略。"
     >
-      <StrategyList />
+      <ResearchAssetLibrary />
     </PageFrame>
   );
 }

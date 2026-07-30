@@ -14,6 +14,7 @@ from quant_lab.domain.models import Constraint, ExperimentPlan, Objective, Param
 from quant_lab.infrastructure.project_readers import DataSummaryReader
 from quant_lab.infrastructure.sqlite_product_repository import SQLiteProductRepository
 from quant_lab.interfaces.api.app import create_app
+from quant_lab.registry import register_factor
 
 
 def build_service(tmp_path: Path) -> ResearchApplicationService:
@@ -169,6 +170,36 @@ def test_api_smoke_and_agent_first_status(tmp_path: Path) -> None:
         "source": "confirmed",
     }
     baseline_id = frozen.json()["id"]
+    versions = client.get("/api/strategy-versions").json()
+    assert versions == [frozen.json()]
+    assert (
+        client.get(f"/api/strategy-versions?strategy_id={draft_id}").json()
+        == versions
+    )
+
+    register_factor(
+        tmp_path / "factor_library" / "registry.sqlite3",
+        factor_id="trend.ema_slope.20",
+        name="EMA slope 20",
+        category="trend",
+        formula_path="factor_library/trend/ema_slope_20.py",
+        description="Twenty-period EMA slope.",
+        metadata={"market_profile": "crypto_perpetual.binance.eth"},
+    )
+    factors = client.get("/api/factors")
+    assert factors.status_code == 200
+    assert factors.json()[0] == {
+        "factor_id": "trend.ema_slope.20",
+        "name": "EMA slope 20",
+        "category": "trend",
+        "version": 1,
+        "status": "candidate",
+        "formula_path": "factor_library/trend/ema_slope_20.py",
+        "description": "Twenty-period EMA slope.",
+        "metadata": {"market_profile": "crypto_perpetual.binance.eth"},
+        "created_at": factors.json()[0]["created_at"],
+        "updated_at": factors.json()[0]["updated_at"],
+    }
     repeated = client.post(
         f"/api/strategy-drafts/{draft_id}/freeze-baseline",
         json={"confirmed_by_user": True},

@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import signal
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -243,6 +243,32 @@ def test_verified_unmanaged_listener_is_stopped_without_process_group_kill(
         )
         kill.assert_called_once_with(707, signal.SIGTERM)
         killpg.assert_not_called()
+
+
+def test_verified_unmanaged_listener_escalates_after_grace_period(
+    tmp_path: Path,
+) -> None:
+    manager = make_manager(tmp_path)
+
+    with (
+        patch.object(
+            dev_manager,
+            "listener_pids",
+            side_effect=[[808], [808], [808], [], []],
+        ),
+        patch.object(dev_manager, "process_matches_role", return_value=True),
+        patch.object(dev_manager.time, "monotonic", side_effect=[0.0, 6.0, 6.0]),
+        patch.object(dev_manager.os, "kill") as kill,
+    ):
+        assert manager.terminate_verified_listeners(
+            role="web",
+            port=manager.web_port,
+            pids=[808],
+        )
+        assert kill.call_args_list == [
+            call(808, signal.SIGTERM),
+            call(808, signal.SIGKILL),
+        ]
 
 
 def test_stop_recovers_unmanaged_project_service(tmp_path: Path) -> None:
