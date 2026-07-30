@@ -977,7 +977,7 @@ export function StudioWorkspace() {
             )}
             <div className="mt-5 border-t border-white/[0.06] pt-5">
               <ResearchCharts
-                bundleId={runBundles.data?.[0]?.bundle_id ?? null}
+                bundles={runBundles.data ?? []}
                 trials={trials.data ?? []}
               />
             </div>

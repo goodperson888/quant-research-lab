@@ -1,9 +1,9 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQueries } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
-import { apiFetch, RunBundleChart, Trial } from "@/lib/api";
+import { apiFetch, RunBundle, RunBundleChart, Trial } from "@/lib/api";
 import {
   formatPercent,
   formatTrialParameters,
@@ -15,36 +15,61 @@ import {
 } from "@/components/studio/studio-primitives";
 
 export function ResearchCharts({
-  bundleId,
+  bundles,
   trials,
 }: {
-  bundleId: string | null;
+  bundles: RunBundle[];
   trials: Trial[];
 }) {
-  const chart = useQuery({
-    queryKey: ["run-bundle-chart", bundleId],
-    queryFn: () =>
-      apiFetch<RunBundleChart>(
-        `/api/run-bundles/${encodeURIComponent(bundleId ?? "")}/chart-series?max_points=500`,
-      ),
-    enabled: Boolean(bundleId),
-    retry: false,
+  const chartQueries = useQueries({
+    queries: bundles.slice(0, 8).map((bundle) => ({
+      queryKey: ["run-bundle-chart", bundle.bundle_id],
+      queryFn: () =>
+        apiFetch<RunBundleChart>(
+          `/api/run-bundles/${encodeURIComponent(bundle.bundle_id)}/chart-series?max_points=500`,
+        ),
+      retry: false,
+    })),
   });
+  const selectedChartIndex = chartQueries.findIndex(
+    (query) => query.data?.available && query.data.series.length,
+  );
+  const chart =
+    selectedChartIndex >= 0 ? chartQueries[selectedChartIndex].data : undefined;
+  const selectedBundle =
+    selectedChartIndex >= 0 ? bundles[selectedChartIndex] : undefined;
+  const isLoading = chartQueries.some((query) => query.isPending);
+  const unavailableReason = chartQueries
+    .map((query) => query.data?.reason)
+    .find(Boolean);
   const [visible, setVisible] = useState<Record<string, boolean>>({});
   const series = useMemo(
     () =>
-      (chart.data?.series ?? []).filter(
+      (chart?.series ?? []).filter(
         (item) => visible[item.series_id] !== false,
       ),
-    [chart.data?.series, visible],
+    [chart?.series, visible],
   );
 
   return (
     <div className="space-y-5">
-      {chart.data?.available && series.length ? (
+      <div>
+        <div className="mb-1 text-sm font-medium text-slate-200">
+          资金曲线与回撤
+        </div>
+        <div className="text-xs leading-5 text-slate-500">
+          系统会自动寻找当前策略最近一份保存了真实逐时点资金数据的研究结果，不会因为最新诊断报告没有曲线而隐藏旧曲线。
+        </div>
+      </div>
+      {chart?.available && series.length ? (
         <>
+          {selectedBundle && selectedChartIndex > 0 ? (
+            <div className="rounded-lg border border-sky-300/15 bg-sky-300/[0.07] px-3 py-2 text-xs leading-5 text-sky-100">
+              最新报告未保存资金曲线，已自动采用最近一份有真实曲线的研究结果。
+            </div>
+          ) : null}
           <div className="flex flex-wrap gap-2">
-            {(chart.data.series ?? []).map((item) => (
+            {(chart.series ?? []).map((item) => (
               <label
                 key={item.series_id}
                 className="flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-xs text-slate-300"
@@ -82,10 +107,10 @@ export function ResearchCharts({
             baseline={0}
           />
           <TechnicalDetails label="曲线来源与限制">
-            {chart.data.limitations.map((item) => (
+            {chart.limitations.map((item) => (
               <p key={item}>{item}</p>
             ))}
-            {chart.data.series.map((item) => (
+            {chart.series.map((item) => (
               <TechnicalId
                 key={item.series_id}
                 label={item.label}
@@ -96,8 +121,10 @@ export function ResearchCharts({
         </>
       ) : (
         <EmptyState>
-          {chart.data?.reason ??
-            "当前研究结果没有可读取的资金曲线。系统不会用参数指标伪造 Top Trial 曲线。"}
+          {isLoading
+            ? "正在读取当前策略的真实资金曲线……"
+            : unavailableReason ??
+              "当前策略还没有保存可读取的逐时点资金曲线。下次运行快速初筛或完整回测后，这里会自动显示折线图。"}
         </EmptyState>
       )}
       <TrialMetricComparison trials={trials} />
