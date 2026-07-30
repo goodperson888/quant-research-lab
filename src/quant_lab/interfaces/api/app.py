@@ -107,7 +107,26 @@ from .schemas import (
 )
 
 
-LOCAL_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+def local_origins() -> list[str]:
+    configured_port = os.environ.get("QUANT_LAB_WEB_PORT", "3000")
+    try:
+        port = int(configured_port)
+    except ValueError:
+        port = 3000
+    if not 1 <= port <= 65535:
+        port = 3000
+    ports = sorted({3000, port})
+    return [
+        origin
+        for current_port in ports
+        for origin in (
+            f"http://localhost:{current_port}",
+            f"http://127.0.0.1:{current_port}",
+        )
+    ]
+
+
+LOCAL_ORIGINS = local_origins()
 
 
 def create_app(

@@ -145,6 +145,18 @@ class DataSummaryReader:
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
         self.summary_path = self.root / "data" / "catalog" / "catalog_summary.json"
+        two_year_v2 = (
+            self.root
+            / "data"
+            / "manifests"
+            / "binance_ethusdt_perpetual_20240720_20260720_v2.json"
+        )
+        two_year_v1 = (
+            self.root
+            / "data"
+            / "manifests"
+            / "binance_ethusdt_perpetual_20240720_20260720_v1.json"
+        )
         annual_v2 = (
             self.root
             / "data"
@@ -164,7 +176,11 @@ class DataSummaryReader:
             / "binance_ethusdt_perpetual_20260421_20260720.json"
         )
         self.manifest_path = (
-            annual_v2
+            two_year_v2
+            if two_year_v2.is_file()
+            else two_year_v1
+            if two_year_v1.is_file()
+            else annual_v2
             if annual_v2.is_file()
             else annual_v1
             if annual_v1.is_file()
@@ -176,6 +192,7 @@ class DataSummaryReader:
             return {"available": False, "reason": "committed data summary not found"}
         summary = json.loads(self.summary_path.read_text(encoding="utf-8"))
         manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        complete_days = int(manifest.get("range", {}).get("complete_utc_days", 0))
         gaps = []
         for dataset in manifest.get("processed_datasets", []):
             missing = dataset.get("quality", {}).get("missing_intervals", 0)
@@ -198,7 +215,7 @@ class DataSummaryReader:
             "datasets": summary,
             "quality_gaps": gaps,
             "research_limit": (
-                "One complete UTC year improves regime coverage but still does not "
-                "demonstrate long-term profitability or a repeatable full market cycle."
+                f"{complete_days} complete UTC days improve regime coverage but still do not "
+                "demonstrate future profitability or a repeatable full market cycle."
             ),
         }

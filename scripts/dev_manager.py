@@ -35,28 +35,38 @@ def process_exists(pid: int) -> bool:
         return False
     try:
         os.kill(pid, 0)
-    except (OSError, ValueError):
+    except PermissionError:
+        return True
+    except (ProcessLookupError, ValueError):
         return False
+    except OSError as error:
+        return error.errno == 1
     return True
 
 
 def command_for_pid(pid: int) -> str:
-    result = subprocess.run(
-        ["ps", "eww", "-p", str(pid), "-o", "command="],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["ps", "eww", "-p", str(pid), "-o", "command="],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
 def cwd_for_pid(pid: int) -> str:
-    result = subprocess.run(
-        ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
     if result.returncode != 0:
         return ""
     return next(
@@ -98,15 +108,41 @@ def process_matches_role(pid: int, role: str) -> bool:
         )
     else:
         return False
-    return command_matches and location_matches
+    if command:
+        return command_matches and location_matches
+    return location_matches
 
 
 def process_has_run_id(pid: int, run_id: str) -> bool:
     return bool(run_id) and f"QUANT_LAB_DEV_INSTANCE_ID={run_id}" in command_for_pid(pid)
 
 
-def process_is_managed(pid: int, role: str, run_id: str) -> bool:
-    return process_matches_role(pid, role) and process_has_run_id(pid, run_id)
+def process_group_listens(pid: int, port: int) -> bool:
+    try:
+        target_pgid = os.getpgid(pid)
+    except OSError:
+        return False
+    for listener_pid in listener_pids(port):
+        try:
+            if os.getpgid(listener_pid) == target_pgid:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def process_is_managed(
+    pid: int,
+    role: str,
+    run_id: str,
+    port: int | None = None,
+) -> bool:
+    if not process_matches_role(pid, role):
+        return False
+    command = command_for_pid(pid)
+    if command:
+        return bool(run_id) and f"QUANT_LAB_DEV_INSTANCE_ID={run_id}" in command
+    return port is not None and process_group_listens(pid, port)
 
 
 def listener_pids(port: int) -> list[int]:
@@ -134,7 +170,7 @@ def classify_port(role: str, port: int) -> tuple[str, list[int]]:
 
 def managed_listener_exists(role: str, port: int, run_id: str) -> bool:
     return any(
-        process_is_managed(pid, role, run_id)
+        process_is_managed(pid, role, run_id, port)
         for pid in listener_pids(port)
     )
 
@@ -259,7 +295,7 @@ class DevManager:
             pid = self.state_pid(state, role)
             port = self.state_port(state, role)
             if (
-                not process_is_managed(pid, role, run_id)
+                not process_is_managed(pid, role, run_id, port)
                 or not managed_listener_exists(role, port, run_id)
             ):
                 return False
@@ -296,7 +332,11 @@ class DevManager:
     ) -> bool:
         run_id = state.get("run_id")
         pid = self.state_pid(state, role)
-        if not isinstance(run_id, str) or not process_is_managed(pid, role, run_id):
+        port = self.state_port(state, role)
+        if (
+            not isinstance(run_id, str)
+            or not process_is_managed(pid, role, run_id, port)
+        ):
             return False
         try:
             pgid = os.getpgid(pid)

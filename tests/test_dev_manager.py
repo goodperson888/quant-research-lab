@@ -30,6 +30,47 @@ def test_free_port_is_available() -> None:
         assert dev_manager.classify_port("api", 18000) == ("free", [])
 
 
+def test_process_exists_treats_permission_denied_as_existing() -> None:
+    with patch.object(
+        dev_manager.os,
+        "kill",
+        side_effect=PermissionError("sandbox denied process signal check"),
+    ):
+        assert dev_manager.process_exists(99)
+
+
+def test_process_details_tolerate_sandbox_permission_errors() -> None:
+    with patch.object(
+        dev_manager.subprocess,
+        "run",
+        side_effect=PermissionError("sandbox denied process inspection"),
+    ):
+        assert dev_manager.command_for_pid(99) == ""
+        assert dev_manager.cwd_for_pid(99) == ""
+        assert "无法读取进程命令" in dev_manager.describe_process(99)
+
+
+def test_managed_process_falls_back_to_project_group_listener() -> None:
+    with (
+        patch.object(dev_manager, "process_matches_role", return_value=True),
+        patch.object(dev_manager, "command_for_pid", return_value=""),
+        patch.object(dev_manager, "process_group_listens", return_value=True),
+    ):
+        assert dev_manager.process_is_managed(101, "api", "run-id", 18000)
+
+
+def test_managed_process_rejects_missing_run_id_when_command_is_visible() -> None:
+    with (
+        patch.object(dev_manager, "process_matches_role", return_value=True),
+        patch.object(
+            dev_manager,
+            "command_for_pid",
+            return_value="uvicorn quant_lab.interfaces.api.app:app",
+        ),
+    ):
+        assert not dev_manager.process_is_managed(101, "api", "run-id", 18000)
+
+
 def test_existing_project_service_is_reused(tmp_path: Path) -> None:
     manager = make_manager(tmp_path)
 

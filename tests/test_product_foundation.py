@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from quant_lab.domain.errors import (
     InvalidJobError,
 )
 from quant_lab.domain.models import Constraint, ExperimentPlan, Objective, ParameterSpace
+from quant_lab.infrastructure.project_readers import DataSummaryReader
 from quant_lab.infrastructure.sqlite_product_repository import SQLiteProductRepository
 from quant_lab.interfaces.api.app import create_app
 
@@ -244,3 +246,39 @@ def test_openapi_has_no_live_trade_or_arbitrary_execution_endpoint(tmp_path: Pat
     assert all("/live" not in path for path in paths)
     assert all("/shell" not in path for path in paths)
     assert all("credential" not in path for path in paths)
+
+
+def test_data_summary_prefers_two_year_manifest(tmp_path: Path) -> None:
+    catalog = tmp_path / "data/catalog"
+    manifests = tmp_path / "data/manifests"
+    catalog.mkdir(parents=True)
+    manifests.mkdir(parents=True)
+    (catalog / "catalog_summary.json").write_text(
+        '{"binance_ethusdt_futures_1h":{"rows":17520}}'
+    )
+    manifest = {
+        "market_profile": "crypto_perpetual.binance.eth",
+        "source": {"effective_source": "binance_official_archive"},
+        "range": {"complete_utc_days": 730},
+        "symbol": {"native": "ETHUSDT"},
+        "data_version": "two-year-v1",
+        "cost_model": {"baseline_fee_per_side": 0.0005},
+        "processed_datasets": [
+            {
+                "dataset": "funding_rate",
+                "timeframe": "native",
+                "quality": {"missing_intervals": 57},
+            }
+        ],
+    }
+    (manifests / "binance_ethusdt_perpetual_20240720_20260720_v2.json").write_text(
+        json.dumps(manifest)
+    )
+
+    summary = DataSummaryReader(tmp_path).read()
+
+    assert summary["available"] is True
+    assert summary["data_version"] == "two-year-v1"
+    assert summary["range"]["complete_utc_days"] == 730
+    assert summary["quality_gaps"][0]["missing_intervals"] == 57
+    assert summary["research_limit"].startswith("730 complete UTC days")
