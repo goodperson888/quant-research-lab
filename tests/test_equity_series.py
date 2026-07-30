@@ -59,10 +59,33 @@ def test_run_bundle_equity_reader_uses_registered_bundle_not_caller_path(
             "timestamp": pd.date_range(
                 "2026-01-01", periods=120, freq="1h", tz="UTC"
             ),
+            "open": [1999 + index * 2 for index in range(120)],
+            "high": [2003 + index * 2 for index in range(120)],
+            "low": [1997 + index * 2 for index in range(120)],
             "close": [2000 + index * 2 for index in range(120)],
+            "volume": [100 + index for index in range(120)],
         }
     ).to_parquet(market_buffer, index=False)
     store.put(market_key, market_buffer.getvalue())
+    trade_key = "experiments/runs/run_equity/trades.parquet"
+    trade_buffer = io.BytesIO()
+    pd.DataFrame(
+        {
+            "trade_id": [1],
+            "side": ["long"],
+            "entry_time": [pd.Timestamp("2026-01-02T01:00:00Z")],
+            "exit_time": [pd.Timestamp("2026-01-02T04:00:00Z")],
+            "entry_execution_price": [2050.5],
+            "exit_execution_price": [2062.0],
+            "initial_stop_price": [2040.0],
+            "take_profit_price": [2070.0],
+            "net_return": [0.004],
+            "net_pnl": [4.0],
+            "exit_reason": ["take_profit"],
+            "split": ["validation"],
+        }
+    ).to_parquet(trade_buffer, index=False)
+    store.put(trade_key, trade_buffer.getvalue())
     data_manifest_key = "data/manifests/eth-fixture.json"
     store.put(
         data_manifest_key,
@@ -83,7 +106,10 @@ def test_run_bundle_equity_reader_uses_registered_bundle_not_caller_path(
         "experiments/runs/run_equity/manifest.json",
         json.dumps(
             {
-                "outputs": [{"artifact_key": equity_key}],
+                "outputs": [
+                    {"artifact_key": equity_key},
+                    {"artifact_key": trade_key},
+                ],
                 "data_manifest": {"artifact_key": data_manifest_key},
             }
         ).encode(),
@@ -99,8 +125,19 @@ def test_run_bundle_equity_reader_uses_registered_bundle_not_caller_path(
     assert result["series"][0]["points"][0]["normalized_equity"] == 1.0
     assert result["series"][0]["source_artifact_key"] == equity_key
     assert result["market_series"]["label"] == "ETH/USDT:USDT 行情"
+    assert result["market_series"]["source_timeframe"] == "1h"
+    assert result["market_series"]["aggregated"] is True
+    assert "由1小时K线聚合" in result["market_series"]["timeframe"]
     assert len(result["market_series"]["points"]) == 50
-    assert result["market_series"]["points"][0]["value"] == 2000.0
+    assert result["market_series"]["points"][0]["value"] == 2004.0
+    assert len(result["market_series"]["candles"]) == 50
+    assert result["market_series"]["candles"][0]["open"] == 1999.0
+    assert result["market_series"]["candles"][0]["volume"] > 0
+    assert result["trades"][0]["side"] == "long"
+    assert result["trades"][0]["entry_price"] == 2050.5
+    assert result["trades"][0]["stop_price"] == 2040.0
+    assert result["trades"][0]["take_profit_price"] == 2070.0
+    assert result["trade_source_artifact_keys"] == [trade_key]
 
 
 def test_run_bundle_equity_reader_reports_missing_curve_without_fabrication(
@@ -135,6 +172,7 @@ def test_run_bundle_equity_reader_reports_missing_curve_without_fabrication(
 
     assert result["available"] is False
     assert result["series"] == []
+    assert result["trades"] == []
     assert "不存在" in result["reason"]
 
 

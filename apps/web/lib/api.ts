@@ -575,12 +575,39 @@ export type MarketChartSeries = {
   label: string;
   kind: "market_price";
   unit: "quote_price";
+  timeframe: string;
+  source_timeframe: string;
+  aggregated: boolean;
   points: Array<{
     t: string;
     value: number;
   }>;
+  candles: Array<{
+    t: string;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume: number;
+  }>;
   source_artifact_keys: string[];
   evidence_mode: "market_context";
+};
+
+export type TradeChartRecord = {
+  trade_id: string;
+  split: string;
+  side: "long" | "short" | "unknown";
+  entry_time: string;
+  exit_time: string;
+  entry_price: number;
+  exit_price: number;
+  stop_price: number | null;
+  take_profit_price: number | null;
+  net_return: number | null;
+  net_pnl: number | null;
+  exit_reason: string;
+  source_artifact_key: string;
 };
 
 export type RunBundleChart = {
@@ -589,6 +616,8 @@ export type RunBundleChart = {
   series: EquityChartSeries[];
   market_series: MarketChartSeries | null;
   market_reason?: string | null;
+  trades: TradeChartRecord[];
+  trade_source_artifact_keys: string[];
   reason?: string;
   limitations: string[];
 };

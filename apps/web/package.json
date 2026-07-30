@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@tanstack/react-query": "5.101.3",
+    "lightweight-charts": "^5.0.9",
     "next": "16.2.10",
     "react": "19.2.7",
     "react-dom": "19.2.7",

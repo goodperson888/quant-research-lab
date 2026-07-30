@@ -47,6 +47,16 @@ class RunBundleEquityReader:
             and "equity" in str(item.get("artifact_key", "")).lower()
             and str(item.get("artifact_key", "")).endswith(".parquet")
         ]
+        trade_keys = [
+            str(item.get("artifact_key"))
+            for item in manifest.get("outputs", [])
+            if isinstance(item, dict)
+            and str(item.get("artifact_key", "")).startswith(
+                f"experiments/runs/{run_id}/"
+            )
+            and "trade" in str(item.get("artifact_key", "")).lower()
+            and str(item.get("artifact_key", "")).endswith(".parquet")
+        ]
         if not equity_keys:
             return self._unavailable(
                 bundle_id,
@@ -78,6 +88,10 @@ class RunBundleEquityReader:
             equity_series=series,
             max_points=max_points,
         )
+        trades, trade_source_keys = self._read_trades(
+            trade_keys=trade_keys,
+            max_trades=2_000,
+        )
         limitations = [
             "曲线来自已登记的项目相对 Parquet Artifact，并已确定性降采样。",
             "大多数参数 Trial 未单独保留资金曲线，因此不会伪造 Top Trial 曲线。",
@@ -85,7 +99,16 @@ class RunBundleEquityReader:
         ]
         if market_series is not None:
             limitations.append(
-                "行情对照使用本次运行登记数据版本中的 1 小时 ETHUSDT 永续收盘价。"
+                "行情对照使用本次运行登记数据版本中的 1 小时 ETHUSDT 永续 OHLCV。"
+            )
+            if market_series["aggregated"]:
+                limitations.append(
+                    "为了控制浏览器负载，展示K线由原始 1 小时K线确定性聚合；"
+                    "开高低收和成交量均按K线规则合并。"
+                )
+        if trades:
+            limitations.append(
+                "买卖标记来自本次运行登记的逐笔交易 Artifact；价格优先使用实际执行价格。"
             )
         return {
             "available": True,
@@ -93,6 +116,8 @@ class RunBundleEquityReader:
             "series": series,
             "market_series": market_series,
             "market_reason": market_reason,
+            "trades": trades,
+            "trade_source_artifact_keys": trade_source_keys,
             "limitations": limitations,
         }
 
@@ -151,14 +176,21 @@ class RunBundleEquityReader:
                 artifact_key
             ):
                 continue
-            frame = pd.read_parquet(
-                io.BytesIO(self.artifacts.get(artifact_key)),
-                columns=["timestamp", "close"],
-            )
+            frame = pd.read_parquet(io.BytesIO(self.artifacts.get(artifact_key)))
+            required_columns = {"timestamp", "open", "high", "low", "close"}
+            if not required_columns.issubset(frame.columns):
+                continue
             frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
             relevant = frame.loc[
                 (frame["timestamp"] >= start) & (frame["timestamp"] <= end),
-                ["timestamp", "close"],
+                [
+                    "timestamp",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    *(["volume"] if "volume" in frame else []),
+                ],
             ]
             if not relevant.empty:
                 frames.append(relevant)
@@ -171,13 +203,25 @@ class RunBundleEquityReader:
             .drop_duplicates("timestamp", keep="last")
             .sort_values("timestamp")
         )
-        combined["close"] = pd.to_numeric(combined["close"], errors="coerce")
-        combined = combined.dropna(subset=["timestamp", "close"])
+        numeric_columns = ["open", "high", "low", "close"]
+        if "volume" in combined:
+            numeric_columns.append("volume")
+        for column in numeric_columns:
+            combined[column] = pd.to_numeric(combined[column], errors="coerce")
+        combined = combined.dropna(
+            subset=["timestamp", "open", "high", "low", "close"]
+        )
         if combined.empty:
-            return None, "ETH 行情文件存在，但没有有效收盘价。"
-        if len(combined) > max_points:
-            indices = np.linspace(0, len(combined) - 1, max_points, dtype=int)
-            combined = combined.iloc[np.unique(indices)]
+            return None, "ETH 行情文件存在，但没有有效 OHLC。"
+        source_point_count = len(combined)
+        combined = _downsample_ohlcv(combined, max_points=max_points)
+        aggregated = len(combined) < source_point_count
+        display_hours = source_point_count / len(combined)
+        display_timeframe = (
+            f"约{display_hours:.1f}小时/根（由1小时K线聚合）"
+            if aggregated
+            else "1小时/根"
+        )
 
         symbol = market_manifest.get("symbol", {})
         unified_symbol = (
@@ -191,6 +235,9 @@ class RunBundleEquityReader:
                 "label": f"{unified_symbol} 行情",
                 "kind": "market_price",
                 "unit": "quote_price",
+                "timeframe": display_timeframe,
+                "source_timeframe": "1h",
+                "aggregated": aggregated,
                 "points": [
                     {
                         "t": timestamp.isoformat(),
@@ -200,11 +247,59 @@ class RunBundleEquityReader:
                         combined["timestamp"], combined["close"], strict=True
                     )
                 ],
+                "candles": [
+                    {
+                        "t": timestamp.isoformat(),
+                        "open": float(open_price),
+                        "high": float(high_price),
+                        "low": float(low_price),
+                        "close": float(close_price),
+                        "volume": (
+                            float(volume)
+                            if volume is not None and np.isfinite(volume)
+                            else 0.0
+                        ),
+                    }
+                    for timestamp, open_price, high_price, low_price, close_price, volume in zip(
+                        combined["timestamp"],
+                        combined["open"],
+                        combined["high"],
+                        combined["low"],
+                        combined["close"],
+                        (
+                            combined["volume"]
+                            if "volume" in combined
+                            else [0.0] * len(combined)
+                        ),
+                        strict=True,
+                    )
+                ],
                 "source_artifact_keys": source_keys,
                 "evidence_mode": "market_context",
             },
             None,
         )
+
+    def _read_trades(
+        self,
+        *,
+        trade_keys: list[str],
+        max_trades: int,
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        records: list[dict[str, Any]] = []
+        source_keys: list[str] = []
+        for artifact_key in trade_keys[:12]:
+            if not self.artifacts.exists(artifact_key):
+                continue
+            frame = pd.read_parquet(io.BytesIO(self.artifacts.get(artifact_key)))
+            normalized = _normalize_trade_frame(frame, artifact_key=artifact_key)
+            if normalized:
+                records.extend(normalized)
+                source_keys.append(artifact_key)
+        records.sort(key=lambda item: (item["entry_time"], item["trade_id"]))
+        if len(records) > max_trades:
+            records = records[-max_trades:]
+        return records, source_keys
 
     @staticmethod
     def _unavailable(bundle_id: str, reason: str) -> dict[str, Any]:
@@ -214,6 +309,8 @@ class RunBundleEquityReader:
             "series": [],
             "market_series": None,
             "market_reason": None,
+            "trades": [],
+            "trade_source_artifact_keys": [],
             "reason": reason,
             "limitations": [],
         }
@@ -287,3 +384,135 @@ def _series_label(report_type: str, split: str, index: int) -> str:
     }.get(split, split)
     suffix = f" {index + 1}" if index else ""
     return f"{report_label}{suffix} · {split_label}"
+
+
+def _downsample_ohlcv(frame: pd.DataFrame, *, max_points: int) -> pd.DataFrame:
+    if len(frame) <= max_points:
+        return frame
+    bucket_ids = np.floor(
+        np.arange(len(frame), dtype=float) * max_points / len(frame)
+    ).astype(int)
+    working = frame.copy()
+    working["_bucket"] = np.minimum(bucket_ids, max_points - 1)
+    aggregations: dict[str, str] = {
+        "timestamp": "first",
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+    }
+    if "volume" in working:
+        aggregations["volume"] = "sum"
+    return (
+        working.groupby("_bucket", sort=True, observed=True)
+        .agg(aggregations)
+        .reset_index(drop=True)
+    )
+
+
+def _normalize_trade_frame(
+    frame: pd.DataFrame,
+    *,
+    artifact_key: str,
+) -> list[dict[str, Any]]:
+    if frame.empty or "entry_time" not in frame or "exit_time" not in frame:
+        return []
+    entry_price_column = _first_column(
+        frame,
+        "entry_execution_price",
+        "entry_price",
+        "entry_raw_price",
+    )
+    exit_price_column = _first_column(
+        frame,
+        "exit_execution_price",
+        "exit_price",
+        "exit_raw_price",
+    )
+    if entry_price_column is None or exit_price_column is None:
+        return []
+    stop_column = _first_column(
+        frame,
+        "initial_stop_price",
+        "stop_price",
+        "stop_price_at_exit",
+    )
+    take_profit_column = _first_column(frame, "take_profit_price")
+    return_column = _first_column(
+        frame,
+        "net_return",
+        "net_return_on_entry_equity",
+        "return_on_initial_equity",
+    )
+    pnl_column = _first_column(frame, "net_pnl")
+    split_from_name = next(
+        (
+            value
+            for value in ("validation", "train", "smoke")
+            if value in artifact_key.lower()
+        ),
+        "full",
+    )
+    working = frame.copy()
+    working["entry_time"] = pd.to_datetime(working["entry_time"], utc=True)
+    working["exit_time"] = pd.to_datetime(working["exit_time"], utc=True)
+    records: list[dict[str, Any]] = []
+    for index, row in working.iterrows():
+        entry_price = _finite_float(row.get(entry_price_column))
+        exit_price = _finite_float(row.get(exit_price_column))
+        if (
+            pd.isna(row.get("entry_time"))
+            or pd.isna(row.get("exit_time"))
+            or entry_price is None
+            or exit_price is None
+        ):
+            continue
+        side = str(row.get("side", "")).lower()
+        if side not in {"long", "short"}:
+            side = "unknown"
+        raw_trade_id = row.get("trade_id", index + 1)
+        artifact_name = artifact_key.rsplit("/", maxsplit=1)[-1].removesuffix(
+            ".parquet"
+        )
+        records.append(
+            {
+                "trade_id": f"{artifact_name}:{raw_trade_id}",
+                "split": str(row.get("split", split_from_name)),
+                "side": side,
+                "entry_time": row["entry_time"].isoformat(),
+                "exit_time": row["exit_time"].isoformat(),
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "stop_price": (
+                    _finite_float(row.get(stop_column)) if stop_column else None
+                ),
+                "take_profit_price": (
+                    _finite_float(row.get(take_profit_column))
+                    if take_profit_column
+                    else None
+                ),
+                "net_return": (
+                    _finite_float(row.get(return_column))
+                    if return_column
+                    else None
+                ),
+                "net_pnl": (
+                    _finite_float(row.get(pnl_column)) if pnl_column else None
+                ),
+                "exit_reason": str(row.get("exit_reason", "unknown")),
+                "source_artifact_key": artifact_key,
+            }
+        )
+    return records
+
+
+def _first_column(frame: pd.DataFrame, *names: str) -> str | None:
+    return next((name for name in names if name in frame), None)
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if np.isfinite(normalized) else None
