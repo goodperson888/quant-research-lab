@@ -39,6 +39,17 @@ def test_process_exists_treats_permission_denied_as_existing() -> None:
         assert dev_manager.process_exists(99)
 
 
+def test_restore_file_snapshot_preserves_tracked_file(tmp_path: Path) -> None:
+    path = tmp_path / "next-env.d.ts"
+    path.write_bytes(b"production-types")
+    snapshot = dev_manager.file_snapshot(path)
+    path.write_bytes(b"development-types")
+
+    dev_manager.restore_file_snapshot(path, snapshot)
+
+    assert path.read_bytes() == b"production-types"
+
+
 def test_process_details_tolerate_sandbox_permission_errors() -> None:
     with patch.object(
         dev_manager.subprocess,

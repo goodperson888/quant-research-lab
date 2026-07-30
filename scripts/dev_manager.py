@@ -203,6 +203,28 @@ def report_unknown_port(role: str, port: int, pids: Iterable[int]) -> None:
     )
 
 
+def file_snapshot(path: Path) -> bytes | None:
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def restore_file_snapshot(path: Path, snapshot: bytes | None) -> None:
+    if snapshot is None:
+        with contextlib.suppress(FileNotFoundError):
+            path.unlink()
+        return
+    try:
+        if path.read_bytes() == snapshot:
+            return
+    except FileNotFoundError:
+        pass
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_bytes(snapshot)
+    os.replace(temporary, path)
+
+
 class StateLock:
     def __init__(self, state_dir: Path, timeout: float) -> None:
         self.state_dir = state_dir
@@ -450,6 +472,8 @@ class DevManager:
     def start(self) -> int:
         processes: list[subprocess.Popen[Any]] = []
         state: dict[str, Any] = {}
+        next_env_path = ROOT / "apps" / "web" / "next-env.d.ts"
+        next_env_snapshot = file_snapshot(next_env_path)
 
         with self.lock():
             existing = self.load_state()
@@ -504,9 +528,12 @@ class DevManager:
                 state["web_pid"] = web.pid
                 self.save_state(state)
                 self.wait_until_ready(web, "web", self.web_port, run_id)
+                time.sleep(0.5)
+                restore_file_snapshot(next_env_path, next_env_snapshot)
                 state["phase"] = "running"
                 self.save_state(state)
             except BaseException:
+                restore_file_snapshot(next_env_path, next_env_snapshot)
                 self.cleanup_started(state, processes)
                 raise
 
@@ -529,6 +556,7 @@ class DevManager:
         except (KeyboardInterrupt, Interrupted):
             return 130
         finally:
+            restore_file_snapshot(next_env_path, next_env_snapshot)
             self.cleanup_started(state, processes)
 
     def status(self) -> int:
