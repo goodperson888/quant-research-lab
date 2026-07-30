@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 
 import {
@@ -40,7 +40,17 @@ import { BatchProgressPanel } from "@/components/studio/batch-progress";
 import { ComponentLibrary } from "@/components/studio/component-library";
 import { IntakeComposer } from "@/components/studio/intake-composer";
 import { ImprovementDirections } from "@/components/studio/improvement-directions";
-import { ResearchAnalysis } from "@/components/studio/research-analysis";
+import {
+  ResearchAnalysis,
+  ResearchAnalysisView,
+} from "@/components/studio/research-analysis";
+import {
+  StageContainer,
+  StageTabs,
+  WorkflowNavigation,
+  WorkflowStage,
+  WorkflowStageItem,
+} from "@/components/studio/research-workflow";
 import {
   buildTopConclusion,
   StudioOverview,
@@ -74,6 +84,36 @@ type BaselineVersion = {
   immutable: boolean;
 };
 
+type DiagnosisView =
+  | ResearchAnalysisView
+  | "attribution"
+  | "improvements";
+
+type ValidationView = "robustness" | "reconciliation" | "tradingview";
+
+const WORKFLOW_STAGE_IDS: WorkflowStage[] = [
+  "overview",
+  "strategy",
+  "screening",
+  "diagnosis",
+  "validation",
+  "conclusion",
+];
+
+const DIAGNOSIS_VIEW_IDS: DiagnosisView[] = [
+  "performance",
+  "parameters",
+  "regimes",
+  "attribution",
+  "improvements",
+];
+
+const VALIDATION_VIEW_IDS: ValidationView[] = [
+  "robustness",
+  "reconciliation",
+  "tradingview",
+];
+
 export function StudioWorkspace() {
   const queryClient = useQueryClient();
   const [title, setTitle] = useState("ETH 永续策略研究");
@@ -85,6 +125,15 @@ export function StudioWorkspace() {
   const [draft, setDraft] = useState<StrategyDraft | null>(null);
   const [baseline, setBaseline] = useState<BaselineVersion | null>(null);
   const [pipelineProfileId, setPipelineProfileId] = useState("fast_screen");
+  const [activeStage, setActiveStage] =
+    useState<WorkflowStage>("overview");
+  const [diagnosisView, setDiagnosisView] =
+    useState<DiagnosisView>("performance");
+  const [validationView, setValidationView] =
+    useState<ValidationView>("robustness");
+  const [workflowLocationInitialized, setWorkflowLocationInitialized] =
+    useState(false);
+  const [controlPanelOpen, setControlPanelOpen] = useState(false);
   const [notice, setNotice] = useState(
     "可输入下一份策略或新研究假设。当前已保留一份未通过策略及诊断性组件证据；网页模型未配置。",
   );
@@ -367,6 +416,147 @@ export function StudioWorkspace() {
   const scopedEvents = (events.data ?? []).filter((event) =>
     scopedAggregateIds.has(event.aggregate_id),
   );
+  const inferredStage: WorkflowStage = !currentBaselineId
+    ? "strategy"
+    : !latestViability
+      ? "screening"
+      : latestViability.status === "failed"
+        ? "diagnosis"
+        : latestViability.status === "passed"
+          ? "validation"
+          : "screening";
+  const workflowStages: WorkflowStageItem[] = [
+    {
+      id: "strategy",
+      label: "策略与基准",
+      description: "输入、结构化、冻结",
+      status: currentBaselineId
+        ? "completed"
+        : activeDraft
+          ? "active"
+          : "pending",
+      statusLabel: currentBaselineId
+        ? "已冻结"
+        : activeDraft
+          ? "待确认"
+          : "未开始",
+    },
+    {
+      id: "screening",
+      label: "快速初筛",
+      description: "规则、试跑、可行性",
+      status: !currentBaselineId
+        ? "locked"
+        : latestViability?.status === "failed"
+          ? "stopped"
+          : latestViability?.status === "passed"
+            ? "completed"
+            : "active",
+      statusLabel: !currentBaselineId
+        ? "待基准"
+        : latestViability
+          ? cnStatus(latestViability.status)
+          : "待评估",
+    },
+    {
+      id: "diagnosis",
+      label: "诊断与优化",
+      description: "证据、归因、改进",
+      status: !latestViability
+        ? "locked"
+        : latestViability.status === "failed"
+          ? "active"
+          : "completed",
+      statusLabel: !latestViability
+        ? "待初筛"
+        : latestViability.status === "failed"
+          ? "当前阶段"
+          : "已完成",
+    },
+    {
+      id: "validation",
+      label: "深度验证",
+      description: "跨期、压力、对账",
+      status:
+        latestViability?.status === "passed" ? "active" : "locked",
+      statusLabel:
+        latestViability?.status === "passed" ? "可进入" : "门槛未通过",
+    },
+    {
+      id: "conclusion",
+      label: "结论与归档",
+      description: "总结、证据、成果",
+      status: latestOutcome ? "completed" : "pending",
+      statusLabel: latestOutcome ? "已有结论" : "待形成",
+    },
+  ];
+
+  useEffect(() => {
+    if (workflowLocationInitialized) return;
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const requestedStage = params.get("stage") as WorkflowStage | null;
+    const requestedView = params.get("view");
+    let nextStage: WorkflowStage;
+    if (
+      requestedStage &&
+      WORKFLOW_STAGE_IDS.includes(requestedStage)
+    ) {
+      nextStage = requestedStage;
+    } else if (!sessions.isPending) {
+      nextStage = inferredStage;
+    } else {
+      return;
+    }
+    const nextDiagnosisView =
+      requestedStage === "diagnosis" &&
+      requestedView &&
+      DIAGNOSIS_VIEW_IDS.includes(requestedView as DiagnosisView)
+        ? (requestedView as DiagnosisView)
+        : null;
+    const nextValidationView =
+      requestedStage === "validation" &&
+      requestedView &&
+      VALIDATION_VIEW_IDS.includes(requestedView as ValidationView)
+        ? (requestedView as ValidationView)
+        : null;
+    const frame = window.requestAnimationFrame(() => {
+      setActiveStage(nextStage);
+      if (nextDiagnosisView) setDiagnosisView(nextDiagnosisView);
+      if (nextValidationView) setValidationView(nextValidationView);
+      setWorkflowLocationInitialized(true);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    inferredStage,
+    sessions.isPending,
+    workflowLocationInitialized,
+  ]);
+
+  const updateWorkflowLocation = (
+    stage: WorkflowStage,
+    view?: DiagnosisView | ValidationView,
+  ) => {
+    setActiveStage(stage);
+    if (stage === "diagnosis" && view) {
+      setDiagnosisView(view as DiagnosisView);
+    }
+    if (stage === "validation" && view) {
+      setValidationView(view as ValidationView);
+    }
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("stage", stage);
+    if (
+      (stage === "diagnosis" || stage === "validation") &&
+      view
+    ) {
+      url.searchParams.set("view", view);
+    } else {
+      url.searchParams.delete("view");
+    }
+    window.history.replaceState(null, "", url);
+  };
 
   const updateResearchMode = useMutation({
     mutationFn: (mode: "quick" | "guided" | "expert") => {
@@ -636,8 +826,482 @@ export function StudioWorkspace() {
         versioningAvailable={Boolean(versioning.data?.available)}
       />
 
-      <div className="mt-5 grid min-w-0 grid-cols-[minmax(0,1fr)] gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <aside className="order-3 min-w-0 space-y-4 xl:order-2 xl:col-start-2 xl:row-span-2">
+      <WorkflowNavigation
+        activeStage={activeStage}
+        stages={workflowStages}
+        onChange={(stage) =>
+          updateWorkflowLocation(
+            stage,
+            stage === "diagnosis"
+              ? diagnosisView
+              : stage === "validation"
+                ? validationView
+                : undefined,
+          )
+        }
+      />
+
+      <div className="mt-4 flex justify-end xl:hidden">
+        <button
+          type="button"
+          aria-expanded={controlPanelOpen}
+          aria-controls="studio-research-console"
+          onClick={() => setControlPanelOpen((open) => !open)}
+          className="min-h-11 rounded-xl border border-white/10 bg-[#0a151e] px-4 text-sm text-slate-200 transition hover:border-white/20"
+        >
+          {controlPanelOpen ? "收起研究控制台" : "打开研究控制台"}
+        </button>
+      </div>
+
+      <div className="mt-4 grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <main className="min-w-0">
+          {activeStage === "overview" ? (
+            <StageContainer
+              eyebrow="研究总览"
+              title="从当前结论继续，不必翻找整页卡片"
+              description="这里汇总策略所处阶段和关键证据；进入任一阶段只切换视图，不会自动启动任务或越过门禁。"
+            >
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <OverviewMetric label="当前建议阶段" value={workflowStageLabel(inferredStage)} />
+                <OverviewMetric label="冻结基准" value={currentBaselineId ? "已确认" : "尚未确认"} />
+                <OverviewMetric label="可行性门槛" value={cnStatus(latestViability?.status ?? "not_evaluated")} />
+                <OverviewMetric label="研究结果包" value={String(runBundles.data?.length ?? 0) + " 份"} />
+              </div>
+              <div className="mt-5 rounded-2xl border border-white/[0.08] bg-black/10 p-4">
+                <div className="text-sm font-medium text-slate-200">{topConclusion.title}</div>
+                <p className="mt-2 text-sm leading-6 text-slate-400">{topConclusion.detail}</p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    updateWorkflowLocation(
+                      inferredStage,
+                      inferredStage === "diagnosis"
+                        ? diagnosisView
+                        : inferredStage === "validation"
+                          ? validationView
+                          : undefined,
+                    )
+                  }
+                  className="mt-4 min-h-11 rounded-xl bg-emerald-300 px-4 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-200"
+                >
+                  进入{workflowStageLabel(inferredStage)}
+                </button>
+              </div>
+            </StageContainer>
+          ) : null}
+
+          {activeStage === "strategy" ? (
+            <StageContainer
+              eyebrow="阶段 1"
+              title="策略与基准"
+              description="先保留原始策略，核对结构化状态，再人工确认不可覆盖的冻结基准。"
+            >
+              <div className="space-y-4">
+        <IntakeComposer
+          title={title}
+          sourceType={sourceType}
+          content={content}
+          activeDraft={activeDraft}
+          notice={notice}
+          pending={saveIntake.isPending}
+          error={formError}
+          onTitleChange={setTitle}
+          onSourceTypeChange={setSourceType}
+          onContentChange={setContent}
+          onSubmit={() => saveIntake.mutate()}
+        />
+                <div className="grid gap-4 lg:grid-cols-2">
+          <Panel title="结构化策略">
+            <div className="space-y-2 text-sm">
+              <Meta label="策略草稿" value={activeDraft ? "已创建" : "未创建"} />
+              <Meta label="来源" value={cnSource(activeDraft?.source_type ?? "—")} />
+              <Meta label="状态" value={cnStatus(activeDraft?.status ?? "—")} />
+              <Meta label="模型形式化" value="未运行" />
+              {activeDraft ? (
+                <TechnicalDetails>
+                  <TechnicalId label="策略草稿" value={activeDraft.id} />
+                </TechnicalDetails>
+              ) : null}
+            </div>
+          </Panel>
+          <Panel title="基准确认">
+            <div className="mb-3 text-xs leading-5 text-slate-400">
+              基准冻结后不可覆盖；策略差异、实验、参数方案与报告将作为独立研究证据展示。
+            </div>
+            <button
+              type="button"
+              disabled={!activeDraft || Boolean(activeDraft.baseline_version_id) || freeze.isPending}
+              onClick={() => freeze.mutate()}
+              className="w-full rounded-xl border border-emerald-300/30 bg-emerald-300/10 px-3 py-2.5 text-sm font-medium text-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {currentBaselineId
+                ? "基准版本 v0 已冻结"
+                : "确认当前策略并冻结基准版本 v0"}
+            </button>
+          </Panel>
+                </div>
+              </div>
+            </StageContainer>
+          ) : null}
+
+          {activeStage === "screening" ? (
+            <StageContainer
+              eyebrow="阶段 2"
+              title="快速初筛"
+              description="选择验证深度，按规则检查、小范围试跑、快速初筛和可行性门槛判断是否值得继续投入。"
+            >
+              <div className="grid gap-4 lg:grid-cols-2">
+          <Panel title="研究流程">
+            <label className="mb-2 block text-xs text-slate-500" htmlFor="pipeline-profile">
+              验证深度
+            </label>
+            <select
+              id="pipeline-profile"
+              value={pipelineProfileId}
+              onChange={(event) => setPipelineProfileId(event.target.value)}
+              className="mb-3 w-full rounded-lg border border-white/10 bg-[#071017] px-3 py-2 text-xs text-slate-200"
+            >
+              {(profiles.data ?? []).map((profile) => (
+                <option key={profile.id} value={profile.id}>{cnProfile(profile.id)}</option>
+              ))}
+            </select>
+            <div className="space-y-2">
+              {(selectedProfile?.stages ?? []).map((stage, index) => {
+                const result = gates.data?.find((gate) => gate.gate_name === stage.gate);
+                return (
+                  <div key={stage.id} className="flex gap-3 text-xs">
+                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-white/15 text-[10px] text-slate-400">
+                      {index + 1}
+                    </span>
+                    <div>
+                      <div className="text-slate-200">{cnStage(stage.id)}</div>
+                      <div className="text-slate-500">
+                        {cnStatus(result?.status ?? "not_evaluated")} · 失败即停 {stage.stop_on_fail ? "开启" : "关闭"}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              {!selectedProfile ? <Empty>研究流程配置读取中。</Empty> : null}
+            </div>
+          </Panel>
+          <Panel title="是否值得继续研究">
+            {latestViability ? (
+              <div className="space-y-2 text-xs">
+                <Meta label="可行性门槛" value={cnStatus(latestViability.status)} />
+                <div className="leading-5 text-slate-400">{latestViability.reasons.join("；")}</div>
+              </div>
+            ) : (
+              <Empty>尚无可行性结果；“只比基准少亏”不会成为可用策略候选。</Empty>
+            )}
+            <div className="mt-3 border-t border-white/[0.06] pt-3 text-xs text-slate-400">
+              策略结论：<span className="text-slate-200">{cnOutcome(latestOutcome?.outcome_type ?? "未记录")}</span>
+            </div>
+          </Panel>
+              </div>
+            </StageContainer>
+          ) : null}
+
+          {activeStage === "diagnosis" ? (
+            <StageContainer
+              eyebrow="阶段 3"
+              title="诊断与优化"
+              description="按问题切换视图：先读真实证据，再做亏损归因，最后形成有预算边界的改进方案。"
+            >
+              <StageTabs<DiagnosisView>
+                label="诊断与优化视图"
+                active={diagnosisView}
+                items={[
+                  { id: "performance", label: "走势与风险", description: "行情、资金、回撤" },
+                  { id: "parameters", label: "参数试验", description: "批量结果与敏感性" },
+                  { id: "regimes", label: "行情适配", description: "适合与不适合" },
+                  { id: "attribution", label: "问题诊断", description: "亏损与多周期漏斗" },
+                  { id: "improvements", label: "改进方案", description: "组件、方向、实验" },
+                ]}
+                onChange={(view) => updateWorkflowLocation("diagnosis", view)}
+              />
+
+              {diagnosisView === "performance" ||
+              diagnosisView === "parameters" ||
+              diagnosisView === "regimes" ? (
+                <Panel title="研究图表与指标">
+                  <ResearchAnalysis
+                    bundles={runBundles.data ?? []}
+                    trials={trials.data ?? []}
+                    batchSummary={batchSummary.data}
+                    regimeMetrics={regimeMetrics}
+                    regimeEvidenceStatus={
+                      diagnosticReport.data?.regime_diagnostic.evidence_status ??
+                      latestRegime?.evidence_status ??
+                      "screening"
+                    }
+                    formalRegimeValidation={latestRegime?.mode === "regime_validation"}
+                    activeView={diagnosisView}
+                    onViewChange={(view) => updateWorkflowLocation("diagnosis", view)}
+                    showNavigation={false}
+                  />
+                </Panel>
+              ) : null}
+
+              {diagnosisView === "attribution" ? (
+                <div className="space-y-4">
+          <Panel title="亏损归因与多周期漏斗">
+            {validationFunnel && validationAttribution ? (
+              <div className="space-y-2 text-xs">
+                <Meta
+                  label="1小时趋势标记K线"
+                  value={String(
+                    validationFunnel.trend_1h.trend_leg_count ??
+                      Object.values(
+                        validationFunnel.trend_1h.bar_counts_by_direction ?? {},
+                      ).reduce((total, item) => total + item, 0),
+                  )}
+                />
+                <Meta
+                  label="15分钟回调候选"
+                  value={
+                    validationFunnel.pullback_candidates_15m.count === null
+                      ? "旧结果未记录"
+                      : String(validationFunnel.pullback_candidates_15m.count)
+                  }
+                />
+                <Meta
+                  label="15分钟确认"
+                  value={
+                    validationFunnel.confirmations_15m === null
+                      ? "旧结果未单独记录"
+                      : String(validationFunnel.confirmations_15m)
+                  }
+                />
+                <Meta
+                  label="5分钟触发"
+                  value={String(validationFunnel.trigger_records_5m)}
+                />
+                <Meta
+                  label="实际成交"
+                  value={String(validationFunnel.filled_entries)}
+                />
+                <Meta
+                  label="费用 / 毛正收益"
+                  value={String(
+                    validationAttribution.costs
+                      .fees_as_fraction_of_gross_positive_price_pnl ?? "—",
+                  )}
+                />
+                <div className="rounded-lg bg-white/[0.03] p-2 leading-5 text-slate-400">
+                  Long/Short、退出原因、持仓时间、UTC 时段/星期、止损距离、首次入场/再入和
+                  连续胜负均已按 train/validation 分开。此报告复用现有 trades/signals，
+                  未重新回测，不能证明因果。
+                </div>
+                <div className="text-amber-200">
+                  多周期信号已执行（5m/15m/1h）；滚动样本外与多时间段验证尚未执行。
+                </div>
+              </div>
+            ) : (
+              <Empty>
+                viability 失败后可在授权范围内复用现有 trades/signals 做廉价归因；
+                不重新加载行情，不重新回测。
+              </Empty>
+            )}
+          </Panel>
+                </div>
+              ) : null}
+
+              {diagnosisView === "improvements" ? (
+                <div className="space-y-4">
+          <Panel title="失败策略中的局部改进">
+            <ComponentLibrary
+              hypotheses={componentHypotheses.data ?? []}
+              candidates={components.data ?? []}
+              archivedCandidates={(allComponents.data ?? []).filter(
+                (item) => item.archived_at !== null,
+              )}
+              evidence={componentEvidence.data ?? []}
+              onArchive={(candidateId) => archiveComponent.mutate(candidateId)}
+              onRestore={(candidateId) => restoreComponent.mutate(candidateId)}
+            />
+          </Panel>
+          <Panel title="改进方向（最多 3 个）">
+            <ImprovementDirections
+              directions={directions.data ?? []}
+              providerConfigured={Boolean(project.data?.ai_provider.configured)}
+              pending={
+                submitDirection.isPending ||
+                approveDirection.isPending ||
+                reviseDirectionBudget.isPending
+              }
+              onSubmit={(proposalId) => submitDirection.mutate(proposalId)}
+              onApprove={(proposalId) => approveDirection.mutate(proposalId)}
+              onBudgetChange={(proposalId, trials, minutes) =>
+                reviseDirectionBudget.mutate({
+                  proposalId,
+                  trials,
+                  minutes,
+                })
+              }
+            />
+          </Panel>
+          <Panel title="实验计划">
+            {activePlan ? (
+              <div className="space-y-2 text-xs">
+                <Meta label="状态" value={cnStatus(activePlan.status)} />
+                <Meta label="搜索方式" value={`${activePlan.search_strategy === "grid" ? "确定性网格" : "固定种子随机"} / seed ${activePlan.random_seed}`} />
+                <Meta label="预算" value={`${activePlan.max_trials ?? "—"} 个方案 / ${Math.ceil((activePlan.time_budget_seconds ?? 0) / 60)} 分钟`} />
+                <Meta label="数据切分" value="训练集 + 验证集" />
+                <div className="leading-5 text-slate-500">最终保留测试只给少量冻结候选使用，禁止参与参数搜索。</div>
+              </div>
+            ) : (
+              <Empty>方向批准后创建计划；预算、切分、成本、目标和停止条件缺一不可。</Empty>
+            )}
+          </Panel>
+                </div>
+              ) : null}
+            </StageContainer>
+          ) : null}
+
+          {activeStage === "validation" ? (
+            <StageContainer
+              eyebrow="阶段 4"
+              title="深度验证"
+              description="只有同一策略版本通过可行性门槛后，才进入跨期稳健性、第二引擎对账和 TradingView 语义核对。"
+            >
+              <StageTabs<ValidationView>
+                label="深度验证视图"
+                active={validationView}
+                items={[
+                  { id: "robustness", label: "稳健性验证", description: "跨期、压力、锁定测试" },
+                  { id: "reconciliation", label: "第二引擎对账", description: "逐笔一致性" },
+                  { id: "tradingview", label: "TradingView", description: "Pine 语义与对账" },
+                ]}
+                onChange={(view) => updateWorkflowLocation("validation", view)}
+              />
+
+              {validationView === "robustness" ? (
+                <Panel title="稳健性验证状态">
+                  <div className="space-y-3 text-xs">
+                    <Meta
+                      label="进入条件"
+                      value={latestViability?.status === "passed" ? "可行性门槛已通过" : "可行性门槛尚未通过"}
+                    />
+                    <Meta
+                      label="多周期信号"
+                      value={validationFunnel ? "已有 5m / 15m / 1h 诊断证据" : "尚无独立证据"}
+                    />
+                    <Meta label="滚动样本外" value="尚未执行" />
+                    <Meta label="完整压力测试" value="尚未执行" />
+                    <Meta label="最终保留测试" value="尚未执行，禁止用于调参" />
+                    <div className="rounded-lg border border-dashed border-white/15 p-3 leading-5 text-slate-500">
+                      本页只报告真实状态。初筛失败时不会为了补齐界面而伪造深度验证结果。
+                    </div>
+                  </div>
+                </Panel>
+              ) : null}
+
+              {validationView === "reconciliation" ? (
+          <Panel title="第二引擎逐笔对账">
+            <div className="space-y-2 text-xs">
+              <Meta
+                label="当前状态"
+                value={
+                  engineReconciliation.data?.eligible
+                    ? "门槛通过，等待外部引擎接入"
+                    : "尚未满足进入条件"
+                }
+              />
+              <div className="leading-5 text-slate-400">
+                {engineReconciliation.data?.reason ??
+                  "只有同一策略、同一市场通过可行性门槛后，才能准备 Freqtrade 第二引擎逐笔对账。"}
+              </div>
+              <div className="rounded-lg border border-dashed border-white/15 p-2 leading-5 text-slate-500">
+                Freqtrade 始终是客户自行安装的外部进程。当前没有真实 IStrategy 转换器，因此不会创建虚假的对账任务，也不会启用 Hyperopt、FreqAI 或实盘。
+              </div>
+            </div>
+          </Panel>
+              ) : null}
+
+              {validationView === "tradingview" ? (
+                <Panel title="TradingView / Pine 验证">
+                  <div className="space-y-3 text-xs">
+                    <Meta label="策略来源" value={cnSource(activeDraft?.source_type ?? "—")} />
+                    <Meta label="早期检查" value="Pine 语义、重绘、多周期与代表交易" />
+                    <Meta
+                      label="完整对账"
+                      value={latestViability?.status === "passed" ? "门槛通过后可安排" : "等待可行性门槛"}
+                    />
+                    <div className="rounded-lg border border-dashed border-white/15 p-3 leading-5 text-slate-500">
+                      Pine 来源策略应先完成语义与重绘风险检查；完整 TradingView 逐笔对账不在失败策略上重复消耗时间。
+                    </div>
+                  </div>
+                </Panel>
+              ) : null}
+            </StageContainer>
+          ) : null}
+
+          {activeStage === "conclusion" ? (
+            <StageContainer
+              eyebrow="阶段 5"
+              title="结论与归档"
+              description="统一查看当前策略结论、研究结果包和追加式时间线；生产晋升仍需人工批准。"
+            >
+          <Panel title="研究助手总结与技术记录">
+            <div className="text-sm leading-6 text-slate-300">
+              {latestViability?.status === "failed"
+                ? "规则分析器结论：完整策略未通过可行性门槛。系统已停止昂贵阶段，只保留最多三个不同类别的局部诊断方向。"
+                : latestViability?.status === "passed"
+                  ? "确定性结论：策略已通过初步门槛，但第二引擎、完整压力测试和最终保留测试尚未完成。"
+                  : "当前尚无可行性结论。网页模型未配置时，这里只总结真实状态，不生成虚构建议。"}
+            </div>
+            <details className="mt-4 rounded-lg border border-white/[0.08] p-3 text-xs text-slate-500">
+              <summary className="cursor-pointer text-slate-400">
+                展开研究结果包与追加式时间线
+              </summary>
+              <div className="mt-3 space-y-4">
+                <div>
+                  <div className="mb-2 text-slate-300">研究结果包</div>
+                  {(runBundles.data ?? []).slice(0, 4).map((bundle) => (
+                    <div key={bundle.bundle_id} className="mb-2 border-l border-sky-300/20 pl-3">
+                      {cnStatus(bundle.status)} · {bundle.report_type}
+                      <div className="break-all text-slate-600">
+                        {bundle.report_artifact_key}
+                      </div>
+                    </div>
+                  ))}
+                  {!runBundles.data?.length ? <div>尚无研究结果包。</div> : null}
+                </div>
+                <div>
+                  <div className="mb-2 text-slate-300">追加式时间线</div>
+                  {scopedEvents.map((event) => (
+                    <div key={event.id} className="mb-2 border-l border-emerald-300/20 pl-3">
+                      {cnEvent(event.event_type)} · {cnActor(event.actor_type)}
+                    </div>
+                  ))}
+                  {!scopedEvents.length ? <div>尚无当前会话事件。</div> : null}
+                </div>
+              </div>
+            </details>
+          </Panel>
+              <div className="mt-4 rounded-xl border border-amber-300/15 bg-amber-300/[0.06] p-4 text-xs leading-5 text-amber-100">
+                归档保留失败实验与技术证据；任何策略进入生产或实盘仍需要单独、明确的人工批准。
+              </div>
+            </StageContainer>
+          ) : null}
+        </main>
+
+        <aside
+          id="studio-research-console"
+          aria-label="研究控制台"
+          className={
+            controlPanelOpen
+              ? "min-w-0 space-y-4 xl:block"
+              : "hidden min-w-0 space-y-4 xl:block"
+          }
+        >
+          <div className="rounded-2xl border border-white/10 bg-[#0a151e]/70 p-4">
+            <div className="text-sm font-semibold text-slate-200">研究控制台</div>
+            <div className="mt-1 text-xs leading-5 text-slate-500">
+              会话、运行模式、授权、预算和后台任务统一放在这里。
+            </div>
+          </div>
           <Panel title="研究会话">
             <div className="space-y-2 text-sm">
               <label className="block text-xs text-slate-500" htmlFor="session-select">
@@ -815,274 +1479,6 @@ export function StudioWorkspace() {
             />
           </Panel>
         </aside>
-
-        <IntakeComposer
-          title={title}
-          sourceType={sourceType}
-          content={content}
-          activeDraft={activeDraft}
-          notice={notice}
-          pending={saveIntake.isPending}
-          error={formError}
-          onTitleChange={setTitle}
-          onSourceTypeChange={setSourceType}
-          onContentChange={setContent}
-          onSubmit={() => saveIntake.mutate()}
-        />
-
-        <aside className="order-1 flex min-w-0 flex-col gap-4 rounded-2xl border border-white/10 bg-[#0a151e]/70 p-4 md:p-6 xl:col-start-1 xl:order-1">
-          <Panel title="结构化策略">
-            <div className="space-y-2 text-sm">
-              <Meta label="策略草稿" value={activeDraft ? "已创建" : "未创建"} />
-              <Meta label="来源" value={cnSource(activeDraft?.source_type ?? "—")} />
-              <Meta label="状态" value={cnStatus(activeDraft?.status ?? "—")} />
-              <Meta label="模型形式化" value="未运行" />
-              {activeDraft ? (
-                <TechnicalDetails>
-                  <TechnicalId label="策略草稿" value={activeDraft.id} />
-                </TechnicalDetails>
-              ) : null}
-            </div>
-          </Panel>
-          <Panel title="改进方向（最多 3 个）">
-            <ImprovementDirections
-              directions={directions.data ?? []}
-              providerConfigured={Boolean(project.data?.ai_provider.configured)}
-              pending={
-                submitDirection.isPending ||
-                approveDirection.isPending ||
-                reviseDirectionBudget.isPending
-              }
-              onSubmit={(proposalId) => submitDirection.mutate(proposalId)}
-              onApprove={(proposalId) => approveDirection.mutate(proposalId)}
-              onBudgetChange={(proposalId, trials, minutes) =>
-                reviseDirectionBudget.mutate({
-                  proposalId,
-                  trials,
-                  minutes,
-                })
-              }
-            />
-          </Panel>
-          <Panel title="实验计划">
-            {activePlan ? (
-              <div className="space-y-2 text-xs">
-                <Meta label="状态" value={cnStatus(activePlan.status)} />
-                <Meta label="搜索方式" value={`${activePlan.search_strategy === "grid" ? "确定性网格" : "固定种子随机"} / seed ${activePlan.random_seed}`} />
-                <Meta label="预算" value={`${activePlan.max_trials ?? "—"} 个方案 / ${Math.ceil((activePlan.time_budget_seconds ?? 0) / 60)} 分钟`} />
-                <Meta label="数据切分" value="训练集 + 验证集" />
-                <div className="leading-5 text-slate-500">最终保留测试只给少量冻结候选使用，禁止参与参数搜索。</div>
-              </div>
-            ) : (
-              <Empty>方向批准后创建计划；预算、切分、成本、目标和停止条件缺一不可。</Empty>
-            )}
-          </Panel>
-          <Panel title="研究流程">
-            <label className="mb-2 block text-xs text-slate-500" htmlFor="pipeline-profile">
-              验证深度
-            </label>
-            <select
-              id="pipeline-profile"
-              value={pipelineProfileId}
-              onChange={(event) => setPipelineProfileId(event.target.value)}
-              className="mb-3 w-full rounded-lg border border-white/10 bg-[#071017] px-3 py-2 text-xs text-slate-200"
-            >
-              {(profiles.data ?? []).map((profile) => (
-                <option key={profile.id} value={profile.id}>{cnProfile(profile.id)}</option>
-              ))}
-            </select>
-            <div className="space-y-2">
-              {(selectedProfile?.stages ?? []).map((stage, index) => {
-                const result = gates.data?.find((gate) => gate.gate_name === stage.gate);
-                return (
-                  <div key={stage.id} className="flex gap-3 text-xs">
-                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-white/15 text-[10px] text-slate-400">
-                      {index + 1}
-                    </span>
-                    <div>
-                      <div className="text-slate-200">{cnStage(stage.id)}</div>
-                      <div className="text-slate-500">
-                        {cnStatus(result?.status ?? "not_evaluated")} · 失败即停 {stage.stop_on_fail ? "开启" : "关闭"}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-              {!selectedProfile ? <Empty>研究流程配置读取中。</Empty> : null}
-            </div>
-          </Panel>
-          <Panel title="是否值得继续研究">
-            {latestViability ? (
-              <div className="space-y-2 text-xs">
-                <Meta label="可行性门槛" value={cnStatus(latestViability.status)} />
-                <div className="leading-5 text-slate-400">{latestViability.reasons.join("；")}</div>
-              </div>
-            ) : (
-              <Empty>尚无可行性结果；“只比基准少亏”不会成为可用策略候选。</Empty>
-            )}
-            <div className="mt-3 border-t border-white/[0.06] pt-3 text-xs text-slate-400">
-              策略结论：<span className="text-slate-200">{cnOutcome(latestOutcome?.outcome_type ?? "未记录")}</span>
-            </div>
-          </Panel>
-          <Panel title="第二引擎逐笔对账">
-            <div className="space-y-2 text-xs">
-              <Meta
-                label="当前状态"
-                value={
-                  engineReconciliation.data?.eligible
-                    ? "门槛通过，等待外部引擎接入"
-                    : "尚未满足进入条件"
-                }
-              />
-              <div className="leading-5 text-slate-400">
-                {engineReconciliation.data?.reason ??
-                  "只有同一策略、同一市场通过可行性门槛后，才能准备 Freqtrade 第二引擎逐笔对账。"}
-              </div>
-              <div className="rounded-lg border border-dashed border-white/15 p-2 leading-5 text-slate-500">
-                Freqtrade 始终是客户自行安装的外部进程。当前没有真实 IStrategy 转换器，因此不会创建虚假的对账任务，也不会启用 Hyperopt、FreqAI 或实盘。
-              </div>
-            </div>
-          </Panel>
-          <Panel title="结果分析">
-            <ResearchAnalysis
-              bundles={runBundles.data ?? []}
-              trials={trials.data ?? []}
-              batchSummary={batchSummary.data}
-              regimeMetrics={regimeMetrics}
-              regimeEvidenceStatus={
-                diagnosticReport.data?.regime_diagnostic.evidence_status ??
-                latestRegime?.evidence_status ??
-                "screening"
-              }
-              formalRegimeValidation={
-                latestRegime?.mode === "regime_validation"
-              }
-            />
-          </Panel>
-          <Panel title="亏损归因与多周期漏斗">
-            {validationFunnel && validationAttribution ? (
-              <div className="space-y-2 text-xs">
-                <Meta
-                  label="1小时趋势标记K线"
-                  value={String(
-                    validationFunnel.trend_1h.trend_leg_count ??
-                      Object.values(
-                        validationFunnel.trend_1h.bar_counts_by_direction ?? {},
-                      ).reduce((total, item) => total + item, 0),
-                  )}
-                />
-                <Meta
-                  label="15分钟回调候选"
-                  value={
-                    validationFunnel.pullback_candidates_15m.count === null
-                      ? "旧结果未记录"
-                      : String(validationFunnel.pullback_candidates_15m.count)
-                  }
-                />
-                <Meta
-                  label="15分钟确认"
-                  value={
-                    validationFunnel.confirmations_15m === null
-                      ? "旧结果未单独记录"
-                      : String(validationFunnel.confirmations_15m)
-                  }
-                />
-                <Meta
-                  label="5分钟触发"
-                  value={String(validationFunnel.trigger_records_5m)}
-                />
-                <Meta
-                  label="实际成交"
-                  value={String(validationFunnel.filled_entries)}
-                />
-                <Meta
-                  label="费用 / 毛正收益"
-                  value={String(
-                    validationAttribution.costs
-                      .fees_as_fraction_of_gross_positive_price_pnl ?? "—",
-                  )}
-                />
-                <div className="rounded-lg bg-white/[0.03] p-2 leading-5 text-slate-400">
-                  Long/Short、退出原因、持仓时间、UTC 时段/星期、止损距离、首次入场/再入和
-                  连续胜负均已按 train/validation 分开。此报告复用现有 trades/signals，
-                  未重新回测，不能证明因果。
-                </div>
-                <div className="text-amber-200">
-                  多周期信号已执行（5m/15m/1h）；滚动样本外与多时间段验证尚未执行。
-                </div>
-              </div>
-            ) : (
-              <Empty>
-                viability 失败后可在授权范围内复用现有 trades/signals 做廉价归因；
-                不重新加载行情，不重新回测。
-              </Empty>
-            )}
-          </Panel>
-          <Panel title="失败策略中的局部改进">
-            <ComponentLibrary
-              hypotheses={componentHypotheses.data ?? []}
-              candidates={components.data ?? []}
-              archivedCandidates={(allComponents.data ?? []).filter(
-                (item) => item.archived_at !== null,
-              )}
-              evidence={componentEvidence.data ?? []}
-              onArchive={(candidateId) => archiveComponent.mutate(candidateId)}
-              onRestore={(candidateId) => restoreComponent.mutate(candidateId)}
-            />
-          </Panel>
-          <Panel title="研究助手总结与技术记录">
-            <div className="text-sm leading-6 text-slate-300">
-              {latestViability?.status === "failed"
-                ? "规则分析器结论：完整策略未通过可行性门槛。系统已停止昂贵阶段，只保留最多三个不同类别的局部诊断方向。"
-                : latestViability?.status === "passed"
-                  ? "确定性结论：策略已通过初步门槛，但第二引擎、完整压力测试和最终保留测试尚未完成。"
-                  : "当前尚无可行性结论。网页模型未配置时，这里只总结真实状态，不生成虚构建议。"}
-            </div>
-            <details className="mt-4 rounded-lg border border-white/[0.08] p-3 text-xs text-slate-500">
-              <summary className="cursor-pointer text-slate-400">
-                展开研究结果包与追加式时间线
-              </summary>
-              <div className="mt-3 space-y-4">
-                <div>
-                  <div className="mb-2 text-slate-300">研究结果包</div>
-                  {(runBundles.data ?? []).slice(0, 4).map((bundle) => (
-                    <div key={bundle.bundle_id} className="mb-2 border-l border-sky-300/20 pl-3">
-                      {cnStatus(bundle.status)} · {bundle.report_type}
-                      <div className="break-all text-slate-600">
-                        {bundle.report_artifact_key}
-                      </div>
-                    </div>
-                  ))}
-                  {!runBundles.data?.length ? <div>尚无研究结果包。</div> : null}
-                </div>
-                <div>
-                  <div className="mb-2 text-slate-300">追加式时间线</div>
-                  {scopedEvents.map((event) => (
-                    <div key={event.id} className="mb-2 border-l border-emerald-300/20 pl-3">
-                      {cnEvent(event.event_type)} · {cnActor(event.actor_type)}
-                    </div>
-                  ))}
-                  {!scopedEvents.length ? <div>尚无当前会话事件。</div> : null}
-                </div>
-              </div>
-            </details>
-          </Panel>
-          <Panel title="审批与成果">
-            <div className="mb-3 text-xs leading-5 text-slate-400">
-              基准冻结后不可覆盖；策略差异、实验、参数方案与报告将作为独立研究证据展示。
-            </div>
-            <button
-              type="button"
-              disabled={!activeDraft || Boolean(activeDraft.baseline_version_id) || freeze.isPending}
-              onClick={() => freeze.mutate()}
-              className="w-full rounded-xl border border-emerald-300/30 bg-emerald-300/10 px-3 py-2.5 text-sm font-medium text-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {currentBaselineId
-                ? "基准版本 v0 已冻结"
-                : "确认当前策略并冻结基准版本 v0"}
-            </button>
-          </Panel>
-        </aside>
       </div>
     </div>
   );
@@ -1095,6 +1491,32 @@ function friendlyAgentName(name: string | null) {
   return name;
 }
 
+function workflowStageLabel(stage: WorkflowStage) {
+  return {
+    overview: "总览",
+    strategy: "策略与基准",
+    screening: "快速初筛",
+    diagnosis: "诊断与优化",
+    validation: "深度验证",
+    conclusion: "结论与归档",
+  }[stage];
+}
+
+function OverviewMetric({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-xl border border-white/[0.08] bg-white/[0.025] p-4">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="mt-2 text-sm font-medium text-slate-100">{value}</div>
+    </div>
+  );
+}
+
 function Empty({ children }: { children: React.ReactNode }) {
   return (
     <div className="rounded-lg border border-dashed border-white/15 p-3 text-xs leading-5 text-slate-500">
@@ -1104,22 +1526,8 @@ function Empty({ children }: { children: React.ReactNode }) {
 }
 
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
-  const order =
-    {
-      "结构化策略": "order-[0]",
-      "是否值得继续研究": "order-[1]",
-      "亏损归因与多周期漏斗": "order-[2]",
-      "改进方向（最多 3 个）": "order-[3]",
-      "实验计划": "order-[4]",
-      "结果分析": "order-[5]",
-      "失败策略中的局部改进": "order-[6]",
-      "第二引擎逐笔对账": "order-[7]",
-      "研究流程": "order-[8]",
-      "研究助手总结与技术记录": "order-[9]",
-      "审批与成果": "order-[10]",
-    }[title] ?? "";
   return (
-    <section className={`min-w-0 rounded-2xl border border-white/10 bg-[#0a151e]/90 p-4 ${order}`}>
+    <section className="min-w-0 rounded-2xl border border-white/10 bg-[#0a151e]/90 p-4">
       <h2 className="mb-3 text-sm font-semibold tracking-tight text-slate-300">{title}</h2>
       {children}
     </section>

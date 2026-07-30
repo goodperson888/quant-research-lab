@@ -26,7 +26,10 @@ import {
   StatusBadge,
 } from "@/components/studio/studio-primitives";
 
-type AnalysisTab = "performance" | "parameters" | "regimes";
+export type ResearchAnalysisView =
+  | "performance"
+  | "parameters"
+  | "regimes";
 
 export function ResearchAnalysis({
   bundles,
@@ -35,6 +38,9 @@ export function ResearchAnalysis({
   regimeMetrics,
   regimeEvidenceStatus,
   formalRegimeValidation,
+  activeView,
+  onViewChange,
+  showNavigation = true,
 }: {
   bundles: RunBundle[];
   trials: Trial[];
@@ -42,10 +48,22 @@ export function ResearchAnalysis({
   regimeMetrics: Record<string, Record<string, number>>;
   regimeEvidenceStatus: string;
   formalRegimeValidation: boolean;
+  activeView?: ResearchAnalysisView;
+  onViewChange?: (view: ResearchAnalysisView) => void;
+  showNavigation?: boolean;
 }) {
-  const [activeTab, setActiveTab] = useState<AnalysisTab>("performance");
+  const [internalView, setInternalView] =
+    useState<ResearchAnalysisView>("performance");
+  const currentView = activeView ?? internalView;
+  const changeView = (view: ResearchAnalysisView) => {
+    if (onViewChange) {
+      onViewChange(view);
+      return;
+    }
+    setInternalView(view);
+  };
   const tabs: Array<{
-    id: AnalysisTab;
+    id: ResearchAnalysisView;
     label: string;
     description: string;
     count: string;
@@ -74,64 +92,74 @@ export function ResearchAnalysis({
 
   return (
     <div className="space-y-5">
-      <div className="text-xs leading-5 text-slate-500">
-        先选择要回答的问题，再按“指标表格 → 图形证据”阅读。所有内容只取当前研究会话和当前策略版本，不会与其他 AI 会话自动混合。
-      </div>
-      <div
-        className="grid gap-2 sm:grid-cols-3"
-        role="tablist"
-        aria-label="研究结果分析"
-      >
-        {tabs.map((tab) => {
-          const active = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              id={`analysis-tab-${tab.id}`}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              aria-controls={`analysis-panel-${tab.id}`}
-              onClick={() => setActiveTab(tab.id)}
-              className={
-                active
-                  ? "min-h-20 cursor-pointer rounded-xl border border-sky-300/30 bg-sky-300/10 px-3 py-3 text-left shadow-[inset_0_0_0_1px_rgba(125,211,252,0.04)] transition"
-                  : "min-h-20 cursor-pointer rounded-xl border border-white/10 bg-black/10 px-3 py-3 text-left transition hover:border-white/20 hover:bg-white/[0.03]"
-              }
-            >
-              <span
-                className={
-                  active
-                    ? "block text-sm font-medium text-sky-100"
-                    : "block text-sm font-medium text-slate-300"
-                }
-              >
-                {tab.label}
-              </span>
-              <span className="mt-1 block text-[11px] leading-4 text-slate-500">
-                {tab.description}
-              </span>
-              <span
-                className={
-                  active
-                    ? "mt-2 inline-flex rounded-full bg-sky-300/10 px-2 py-0.5 text-[10px] text-sky-200"
-                    : "mt-2 inline-flex rounded-full bg-white/[0.04] px-2 py-0.5 text-[10px] text-slate-500"
-                }
-              >
-                {tab.count}
-              </span>
-            </button>
-          );
-        })}
-      </div>
+      {showNavigation ? (
+        <>
+          <div className="text-xs leading-5 text-slate-500">
+            先选择要回答的问题，再按“指标表格 → 图形证据”阅读。所有内容只取当前研究会话和当前策略版本，不会与其他 AI 会话自动混合。
+          </div>
+          <div
+            className="grid gap-2 sm:grid-cols-3"
+            role="tablist"
+            aria-label="研究结果分析"
+          >
+            {tabs.map((tab) => {
+              const active = currentView === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  id={`analysis-tab-${tab.id}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  aria-controls={`analysis-panel-${tab.id}`}
+                  onClick={() => changeView(tab.id)}
+                  className={
+                    active
+                      ? "min-h-20 cursor-pointer rounded-xl border border-sky-300/30 bg-sky-300/10 px-3 py-3 text-left shadow-[inset_0_0_0_1px_rgba(125,211,252,0.04)] transition"
+                      : "min-h-20 cursor-pointer rounded-xl border border-white/10 bg-black/10 px-3 py-3 text-left transition hover:border-white/20 hover:bg-white/[0.03]"
+                  }
+                >
+                  <span
+                    className={
+                      active
+                        ? "block text-sm font-medium text-sky-100"
+                        : "block text-sm font-medium text-slate-300"
+                    }
+                  >
+                    {tab.label}
+                  </span>
+                  <span className="mt-1 block text-[11px] leading-4 text-slate-500">
+                    {tab.description}
+                  </span>
+                  <span
+                    className={
+                      active
+                        ? "mt-2 inline-flex rounded-full bg-sky-300/10 px-2 py-0.5 text-[10px] text-sky-200"
+                        : "mt-2 inline-flex rounded-full bg-white/[0.04] px-2 py-0.5 text-[10px] text-slate-500"
+                    }
+                  >
+                    {tab.count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </>
+      ) : null}
 
       <div
-        id={`analysis-panel-${activeTab}`}
+        id={`analysis-panel-${currentView}`}
         role="tabpanel"
-        aria-labelledby={`analysis-tab-${activeTab}`}
-        className="rounded-xl border border-white/[0.08] bg-black/[0.08] p-3 md:p-4"
+        aria-labelledby={
+          showNavigation ? `analysis-tab-${currentView}` : undefined
+        }
+        className={
+          showNavigation
+            ? "rounded-xl border border-white/[0.08] bg-black/[0.08] p-3 md:p-4"
+            : ""
+        }
       >
-        {activeTab === "performance" ? (
+        {currentView === "performance" ? (
           <AnalysisSection
             title="走势与风险"
             description="表格给出每条真实曲线的收益、最大回撤和覆盖区间；图形把行情与资金曲线放在同一日期轴上。最大回撤已在表格中保留，不再重复设置独立回撤页。"
@@ -140,14 +168,14 @@ export function ResearchAnalysis({
           </AnalysisSection>
         ) : null}
 
-        {activeTab === "parameters" ? (
+        {currentView === "parameters" ? (
           <ParameterAnalysis
             summary={batchSummary}
             trials={trials}
           />
         ) : null}
 
-        {activeTab === "regimes" ? (
+        {currentView === "regimes" ? (
           <AnalysisSection
             title="行情适配"
             description="先看各行情状态的精确样本与指标，再用下方条形图比较净收益方向。样本不足仍明确标记为证据不足。"
