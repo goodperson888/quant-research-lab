@@ -1,16 +1,14 @@
-import { EmptyState, PageFrame } from "@/components/page-frame";
+import { PageFrame } from "@/components/page-frame";
+import { ReportList } from "@/components/report-list";
 
 export default function ReportsPage() {
   return (
     <PageFrame
-      eyebrow="Research Evidence"
-      title="基准与实验报告"
-      description="未来展示基准、消融、样本外、压力测试、Trial对比和稳定平台；报告必须链接不可变Run与数据版本。"
+      eyebrow="研究证据"
+      title="研究报告"
+      description="按时间查看真实回测、参数试验、诊断和验证证据。报告保留运行、数据版本与研究对象链接，但不会自动等同于有效策略。"
     >
-      <EmptyState
-        title="尚无产品化报告"
-        body="第一份真实策略尚未提供。阶段0不把已有工程烟雾验证包装成策略收益。"
-      />
+      <ReportList />
     </PageFrame>
   );
 }

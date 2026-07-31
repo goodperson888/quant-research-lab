@@ -615,6 +615,7 @@ export type MarketChartSeries = {
   timeframe: string;
   source_timeframe: string;
   aggregated: boolean;
+  windowed?: boolean;
   points: Array<{
     t: string;
     value: number;
@@ -629,6 +630,13 @@ export type MarketChartSeries = {
   }>;
   source_artifact_keys: string[];
   evidence_mode: "market_context";
+};
+
+export type MarketWindowResponse = {
+  available: boolean;
+  bundle_id: string;
+  market_series: MarketChartSeries | null;
+  reason?: string | null;
 };
 
 export type TradeChartRecord = {

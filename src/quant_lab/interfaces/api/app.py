@@ -1082,6 +1082,26 @@ def create_app(
             market_timeframe=market_timeframe,
         )
 
+    @application.get(
+        "/api/run-bundles/{bundle_id}/market-window",
+        tags=["reports"],
+    )
+    def run_bundle_market_window(
+        bundle_id: str,
+        center_time: str = Query(min_length=10),
+        market_timeframe: str = Query(
+            default="1h",
+            pattern="^(5m|15m|1h|4h)$",
+        ),
+        bars: int = Query(default=360, ge=120, le=800),
+    ) -> dict[str, Any]:
+        return equity_reader.read_market_window(
+            bundle_id=bundle_id,
+            market_timeframe=market_timeframe,
+            center_time=center_time,
+            bars=bars,
+        )
+
     @application.get("/api/research-diagnostics/latest", tags=["reports"])
     def latest_research_diagnostic(subject_id: str = Query(min_length=1)) -> dict[str, Any]:
         jobs = {item.id: item for item in repository.list_jobs()}

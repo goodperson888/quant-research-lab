@@ -4,9 +4,9 @@ import { SettingsStatus } from "@/components/settings-status";
 export default function SettingsPage() {
   return (
     <PageFrame
-      eyebrow="Local Configuration"
-      title="Provider、模型能力与安全状态"
-      description="阶段0固定为 external_local_agent + local_runtime，并执行现代模型能力门禁。其余 Provider 和 Hosted Sandbox 只冻结协议，不伪装可用。"
+      eyebrow="本地设置"
+      title="运行方式、资源与安全状态"
+      description="先查看日常使用最相关的运行方式和安全边界；模型能力、版本策略等技术配置收在高级信息中。"
     >
       <SettingsStatus />
     </PageFrame>

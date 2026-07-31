@@ -4,9 +4,9 @@ import { PageFrame } from "@/components/page-frame";
 export default function JobsPage() {
   return (
     <PageFrame
-      eyebrow="Local Worker"
-      title="Jobs 与执行日志"
-      description="API只创建白名单Job；长回测由独立本地Worker处理。阶段0没有默认处理器，不会在HTTP请求内运行回测。"
+      eyebrow="运行中心"
+      title="后台任务"
+      description="查看回测、参数试验和诊断任务的排队、运行、完成与停止原因。技术 ID 默认收起，需要排错时再展开。"
     >
       <JobList />
     </PageFrame>

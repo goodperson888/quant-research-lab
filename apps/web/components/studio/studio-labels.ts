@@ -12,6 +12,9 @@ const labels: Record<string, string> = {
   regime_diagnostic: "行情适配初查",
   component_hypothesis_generation: "局部改进方向",
   cheap_cost_sensitivity: "成本敏感性初查",
+  regime_and_pine: "行情适配与 TradingView 语义核对",
+  full_validation_and_locked_test: "完整验证与最终保留测试",
+  full_stress: "完整压力测试",
   full_validation: "完整验证",
   locked_test: "最终保留测试",
   dry_run: "模拟运行",
@@ -92,6 +95,44 @@ export const cnSource = cnLabel;
 export const cnComponentType = cnLabel;
 export const cnEvidence = cnLabel;
 export const cnResearchMode = cnLabel;
+
+export function cnGateReason(value: string) {
+  if (value === "all viability thresholds passed") {
+    return "全部可行性标准均已通过。";
+  }
+  if (value.startsWith("missing viability metrics:")) {
+    const metrics = value
+      .replace("missing viability metrics:", "")
+      .split(",")
+      .map((item) => cnMetric(item.trim()))
+      .join("、");
+    return `缺少可行性指标：${metrics}。`;
+  }
+  const comparison = value.match(
+    /^([a-z_]+)=(-?\d+(?:\.\d+)?) required (>=|<=) (-?\d+(?:\.\d+)?)$/,
+  );
+  if (!comparison) return value;
+  const [, metric, actualText, operator, thresholdText] = comparison;
+  const actual = Number(actualText);
+  const threshold = Number(thresholdText);
+  return `${cnMetric(metric)}为 ${formatGateMetric(metric, actual)}，要求${
+    operator === ">=" ? "不低于" : "不高于"
+  } ${formatGateMetric(metric, threshold)}。`;
+}
+
+function formatGateMetric(metric: string, value: number) {
+  if (
+    metric === "validation_net_return" ||
+    metric === "validation_expectancy" ||
+    metric === "validation_max_drawdown_abs"
+  ) {
+    return formatPercent(value);
+  }
+  if (metric === "validation_trade_count") {
+    return `${Math.round(value).toLocaleString("zh-CN")} 笔`;
+  }
+  return value.toFixed(2);
+}
 
 export function cnParameter(value: string) {
   return (

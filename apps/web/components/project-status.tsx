@@ -26,25 +26,36 @@ export function ProjectStatusStrip() {
     <div className="flex flex-wrap gap-2 text-xs">
       <StatusPill
         label="API"
-        value={project.isPending ? "连接中" : "local / healthy"}
+        value={project.isPending ? "连接中" : "本机运行正常"}
         active={!project.isPending}
       />
       <StatusPill
-        label="Agent Provider"
-        value={agent.data?.active_configuration.agent_provider ?? "读取中"}
+        label="研究助手"
+        value={cnRuntimeValue(agent.data?.active_configuration.agent_provider)}
         active={Boolean(agent.data)}
       />
       <StatusPill
-        label="Execution"
-        value={agent.data?.active_configuration.execution_target ?? "读取中"}
+        label="执行位置"
+        value={cnRuntimeValue(agent.data?.active_configuration.execution_target)}
         active={Boolean(agent.data)}
       />
       <StatusPill
-        label="Embedded AI"
-        value={project.data?.ai_provider.configured ? "configured" : "未配置"}
+        label="网页内 AI"
+        value={project.data?.ai_provider.configured ? "已配置" : "未配置"}
         active={false}
       />
     </div>
+  );
+}
+
+function cnRuntimeValue(value: string | undefined) {
+  if (!value) return "读取中";
+  return (
+    {
+      external_local_agent: "本地研究助手",
+      local_runtime: "本机执行",
+      embedded_cloud_provider: "网页内云端模型",
+    }[value] ?? value
   );
 }
 

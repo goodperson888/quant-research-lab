@@ -164,7 +164,10 @@ export function ResearchAnalysis({
             title="走势与风险"
             description="表格给出每条真实曲线的收益、最大回撤和覆盖区间；图形把行情与资金曲线放在同一日期轴上。最大回撤已在表格中保留，不再重复设置独立回撤页。"
           >
-            <PerformanceCharts bundles={bundles} />
+            <PerformanceCharts
+              bundles={bundles}
+              trialCount={trials.length}
+            />
           </AnalysisSection>
         ) : null}
 
@@ -218,7 +221,7 @@ function ParameterAnalysis({
   return (
     <AnalysisSection
       title="参数试验"
-      description="先在表格中确认每个 Trial 的参数、收益和风险，再用图形观察参数敏感性与稳定区间。"
+      description="先在表格中确认每个参数方案的设置、收益和风险，再用图形观察参数敏感性与稳定区间。"
     >
       <div className="mb-4 grid gap-2 sm:grid-cols-3">
         <SummaryCard

@@ -58,6 +58,7 @@ import {
 import {
   cnActor,
   cnEvent,
+  cnGateReason,
   cnOutcome,
   cnProfile,
   cnResearchMode,
@@ -976,7 +977,8 @@ export function StudioWorkspace() {
                     <div>
                       <div className="text-slate-200">{cnStage(stage.id)}</div>
                       <div className="text-slate-500">
-                        {cnStatus(result?.status ?? "not_evaluated")} · 失败即停 {stage.stop_on_fail ? "开启" : "关闭"}
+                        {cnStatus(result?.status ?? "not_evaluated")} ·{" "}
+                        {stage.stop_on_fail ? "未通过则停止" : "未通过仍可继续"}
                       </div>
                     </div>
                   </div>
@@ -989,7 +991,16 @@ export function StudioWorkspace() {
             {latestViability ? (
               <div className="space-y-2 text-xs">
                 <Meta label="可行性门槛" value={cnStatus(latestViability.status)} />
-                <div className="leading-5 text-slate-400">{latestViability.reasons.join("；")}</div>
+                <div className="space-y-1.5 leading-5 text-slate-400">
+                  {latestViability.reasons.map((reason) => (
+                    <div key={reason}>{cnGateReason(reason)}</div>
+                  ))}
+                </div>
+                <TechnicalDetails label="原始判定字段">
+                  {latestViability.reasons.map((reason) => (
+                    <p key={reason}>{reason}</p>
+                  ))}
+                </TechnicalDetails>
               </div>
             ) : (
               <Empty>尚无可行性结果；“只比基准少亏”不会成为可用策略候选。</Empty>

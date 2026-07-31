@@ -60,7 +60,7 @@ export function ComponentLibrary({
         </div>
       ) : (
         <EmptyState>
-          当前没有规则分析器诊断方向。Provider 未配置时不会伪造 AI 建议。
+          当前没有规则分析器诊断方向。网页模型未配置时不会伪造 AI 建议。
         </EmptyState>
       )}
 

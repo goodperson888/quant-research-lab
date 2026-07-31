@@ -158,13 +158,13 @@ function presentHandoff(handoff: ResearchHandoff | undefined) {
   > = {
     minimum_reward_hypothesis_rejected: {
       reason:
-        "用户已明确拒绝 minimum_reward_r 改进方案。三档诊断对比已完成；冻结基准未改变，组件证据仅保留为诊断性记录。",
+        "用户已明确拒绝“最低目标空间（R）”改进方案。三档诊断对比已完成；冻结基准未改变，组件证据仅保留为诊断性记录。",
       nextAction:
-        "关闭本假设，不再继续微调 minimum_reward_r。只有选定新的、彼此独立的单组件假设后，才创建新方案。",
+        "关闭本假设，不再继续微调最低目标空间。只有选定新的、彼此独立的单组件假设后，才创建新方案。",
     },
     diagnostic_batch_hypothesis_failed: {
       reason:
-        "追加式修正已完成此前受阻的两个参数方案。降低 minimum_reward_r 后，交易数增加，但验证净收益、盈亏效率、单笔期望与回撤均变差，未形成通过约束或稳定区间。",
+        "追加式修正已完成此前受阻的两个参数方案。降低最低目标空间后，交易数增加，但验证净收益、盈亏效率、单笔期望与回撤均变差，未形成通过约束或稳定区间。",
       nextAction:
         "建议拒绝当前精确方案，保留诊断证据，不改变冻结基准，并停止这一假设。",
       userAction: "请对当前精确方案执行批准或拒绝；建议拒绝。",

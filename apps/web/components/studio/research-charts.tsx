@@ -18,9 +18,17 @@ import {
   InteractiveTradingChart,
 } from "@/components/studio/interactive-research-charts";
 
-export function PerformanceCharts({ bundles }: { bundles: RunBundle[] }) {
+export function PerformanceCharts({
+  bundles,
+  trialCount,
+}: {
+  bundles: RunBundle[];
+  trialCount: number;
+}) {
   const [selectedBundleId, setSelectedBundleId] = useState<string | null>(null);
   const [marketTimeframe, setMarketTimeframe] = useState("1h");
+  const [selectedEquitySeriesId, setSelectedEquitySeriesId] =
+    useState<string | null>(null);
   const chartQueries = useQueries({
     queries: bundles.slice(0, 8).map((bundle) => ({
       queryKey: [
@@ -70,9 +78,18 @@ export function PerformanceCharts({ bundles }: { bundles: RunBundle[] }) {
     ...item,
     color: CHART_COLORS[index % CHART_COLORS.length],
   }));
-  const series = coloredSeries.filter(
-    (item) => visible[item.series_id] !== false,
-  );
+  const comparableEquitySeries = haveComparableCoverage(coloredSeries);
+  const selectedEquitySeries =
+    coloredSeries.find(
+      (item) => item.series_id === selectedEquitySeriesId,
+    ) ??
+    coloredSeries.find((item) => item.label.includes("验证")) ??
+    coloredSeries[0];
+  const series = comparableEquitySeries
+    ? coloredSeries.filter((item) => visible[item.series_id] !== false)
+    : selectedEquitySeries
+      ? [selectedEquitySeries]
+      : [];
 
   return (
     <div className="space-y-5">
@@ -84,30 +101,30 @@ export function PerformanceCharts({ bundles }: { bundles: RunBundle[] }) {
             </div>
           ) : null}
           <PerformanceSummaryTable series={coloredSeries} />
-          <div className="flex flex-wrap gap-2">
-            {coloredSeries.map((item) => (
-              <label
-                key={item.series_id}
-                className="flex min-h-11 cursor-pointer items-center gap-2 rounded-full border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:border-white/20 hover:bg-white/[0.03]"
-              >
-                <input
-                  type="checkbox"
-                  checked={visible[item.series_id] !== false}
-                  onChange={(event) =>
-                    setVisible((current) => ({
-                      ...current,
-                      [item.series_id]: event.target.checked,
-                    }))
-                  }
-                />
-                <span
-                  className="h-2 w-2 rounded-full"
-                  style={{ backgroundColor: item.color }}
-                />
-                {item.label}
-              </label>
-            ))}
-          </div>
+          {comparableEquitySeries ? (
+            <ComparableCurveControls
+              series={coloredSeries}
+              visible={visible}
+              onChange={(seriesId, checked) =>
+                setVisible((current) => ({
+                  ...current,
+                  [seriesId]: checked,
+                }))
+              }
+            />
+          ) : (
+            <SeparateCurveControls
+              series={coloredSeries}
+              selectedId={selectedEquitySeries?.series_id ?? null}
+              onChange={setSelectedEquitySeriesId}
+            />
+          )}
+          {trialCount ? (
+            <div className="rounded-lg border border-amber-300/15 bg-amber-300/[0.05] px-3 py-2 text-xs leading-5 text-amber-100/80">
+              当前 {trialCount} 个参数方案只保留了指标，没有保留逐时点资金曲线；
+              因此这里不会伪造“多参数资金线”。当前图只展示实际保存的运行结果。
+            </div>
+          ) : null}
           {availableCharts.length > 1 ? (
             <label className="block max-w-xl">
               <span className="mb-1 block text-xs text-slate-500">
@@ -128,7 +145,7 @@ export function PerformanceCharts({ bundles }: { bundles: RunBundle[] }) {
                 ))}
               </select>
               <span className="mt-1 block text-[11px] leading-5 text-slate-500">
-                多策略资金曲线可以同时比较；买卖点只显示当前选中策略，避免互相覆盖。
+                资金曲线按可比区间展示；买卖点只显示当前选中的运行结果，避免互相覆盖。
               </span>
             </label>
           ) : null}
@@ -144,6 +161,8 @@ export function PerformanceCharts({ bundles }: { bundles: RunBundle[] }) {
               market={chart.market_series}
               trades={chart.trades}
               strategyLabel={chart.series.map((item) => item.label).join(" / ")}
+              bundleId={chart.bundle_id}
+              marketTimeframe={marketTimeframe}
             />
           ) : null}
           {!chart?.market_series && chart?.market_reason ? (
@@ -153,6 +172,16 @@ export function PerformanceCharts({ bundles }: { bundles: RunBundle[] }) {
           ) : null}
           {series.length ? (
             <InteractiveEquityChart
+              title={
+                comparableEquitySeries && series.length > 1
+                  ? "同区间策略资金曲线对比"
+                  : "单条资金曲线"
+              }
+              description={
+                comparableEquitySeries
+                  ? "这些曲线覆盖同一时间区间，可以在同一坐标轴上直接比较。"
+                  : "训练、验证和试跑覆盖不同日期，不能叠加冒充策略对比；请在上方逐条切换查看。"
+              }
               series={series.map((item) => ({
                 id: item.series_id,
                 label: item.label,
@@ -196,6 +225,100 @@ export function PerformanceCharts({ bundles }: { bundles: RunBundle[] }) {
               "当前策略还没有保存可读取的逐时点资金曲线。下次运行快速初筛或完整回测后，这里会自动显示折线图。"}
         </EmptyState>
       )}
+    </div>
+  );
+}
+
+function ComparableCurveControls({
+  series,
+  visible,
+  onChange,
+}: {
+  series: Array<RunBundleChart["series"][number] & { color: string }>;
+  visible: Record<string, boolean>;
+  onChange: (seriesId: string, checked: boolean) => void;
+}) {
+  return (
+    <div>
+      <div className="mb-2 text-xs text-slate-500">
+        同区间曲线，可多选叠加比较
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {series.map((item) => (
+          <label
+            key={item.series_id}
+            className="flex min-h-11 cursor-pointer items-center gap-2 rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:border-white/20 hover:bg-white/[0.03]"
+          >
+            <input
+              type="checkbox"
+              checked={visible[item.series_id] !== false}
+              onChange={(event) =>
+                onChange(item.series_id, event.target.checked)
+              }
+            />
+            <span
+              className="h-2 w-2 rounded-full"
+              style={{ backgroundColor: item.color }}
+            />
+            <span>{item.label}</span>
+            <span className="tabular-nums text-slate-500">
+              {formatCurveReturn(item)}
+            </span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SeparateCurveControls({
+  series,
+  selectedId,
+  onChange,
+}: {
+  series: Array<RunBundleChart["series"][number] & { color: string }>;
+  selectedId: string | null;
+  onChange: (seriesId: string) => void;
+}) {
+  return (
+    <div>
+      <div className="mb-2 text-xs leading-5 text-slate-500">
+        这些结果覆盖不同日期，逐条查看更准确
+      </div>
+      <div
+        className="flex max-w-full gap-2 overflow-x-auto pb-1"
+        role="radiogroup"
+        aria-label="选择资金曲线"
+      >
+        {series.map((item) => {
+          const active = item.series_id === selectedId;
+          return (
+            <button
+              key={item.series_id}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              onClick={() => onChange(item.series_id)}
+              className={
+                active
+                  ? "min-h-11 shrink-0 rounded-xl border border-sky-300/30 bg-sky-300/10 px-3 py-2 text-left text-xs text-sky-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+                  : "min-h-11 shrink-0 rounded-xl border border-white/10 px-3 py-2 text-left text-xs text-slate-400 transition hover:border-white/20 hover:bg-white/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+              }
+            >
+              <span className="flex items-center gap-2">
+                <span
+                  className="h-2 w-2 rounded-full"
+                  style={{ backgroundColor: item.color }}
+                />
+                {item.label}
+              </span>
+              <span className="mt-1 block tabular-nums text-[11px] opacity-75">
+                {formatCurveReturn(item)}
+              </span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -507,6 +630,36 @@ function finiteOrZero(value: number | undefined) {
 }
 
 const CHART_COLORS = ["#3dd6b0", "#7dd3fc", "#fbbf24", "#fda4af", "#c4b5fd", "#fb923c"];
+
+function haveComparableCoverage(
+  series: Array<RunBundleChart["series"][number]>,
+) {
+  if (series.length < 2) return false;
+  const ranges = series.flatMap((item) => {
+    const start = Date.parse(item.points[0]?.t ?? "");
+    const end = Date.parse(item.points[item.points.length - 1]?.t ?? "");
+    return Number.isFinite(start) && Number.isFinite(end) && end > start
+      ? [{ start, end }]
+      : [];
+  });
+  if (ranges.length !== series.length) return false;
+  const sharedStart = Math.max(...ranges.map((item) => item.start));
+  const sharedEnd = Math.min(...ranges.map((item) => item.end));
+  const shortestDuration = Math.min(
+    ...ranges.map((item) => item.end - item.start),
+  );
+  return (
+    sharedEnd > sharedStart &&
+    (sharedEnd - sharedStart) / shortestDuration >= 0.95
+  );
+}
+
+function formatCurveReturn(
+  item: RunBundleChart["series"][number],
+) {
+  const last = item.points[item.points.length - 1];
+  return formatSignedPercentValue((last?.normalized_equity ?? 1) - 1);
+}
 
 function SvgParameterLineChart({
   parameterName,

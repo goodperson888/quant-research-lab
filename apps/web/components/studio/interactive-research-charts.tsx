@@ -1,5 +1,6 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
@@ -13,7 +14,9 @@ import type {
 } from "lightweight-charts";
 
 import {
+  apiFetch,
   MarketChartSeries,
+  MarketWindowResponse,
   TradeChartRecord,
 } from "@/lib/api";
 
@@ -31,10 +34,14 @@ export function InteractiveTradingChart({
   market,
   trades,
   strategyLabel,
+  bundleId,
+  marketTimeframe,
 }: {
   market: MarketChartSeries;
   trades: TradeChartRecord[];
   strategyLabel: string;
+  bundleId: string;
+  marketTimeframe: string;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -51,33 +58,6 @@ export function InteractiveTradingChart({
     close: number;
   } | null>(null);
 
-  const candles = useMemo(
-    () =>
-      dedupeByTime(
-        market.candles.map((item) => ({
-          time: toTimestamp(item.t),
-          open: item.open,
-          high: item.high,
-          low: item.low,
-          close: item.close,
-        })),
-      ),
-    [market.candles],
-  );
-  const volumes = useMemo(
-    () =>
-      dedupeByTime(
-        market.candles.map((item) => ({
-          time: toTimestamp(item.t),
-          value: item.volume,
-          color:
-            item.close >= item.open
-              ? "rgba(61,214,176,.35)"
-              : "rgba(251,113,133,.35)",
-        })),
-      ),
-    [market.candles],
-  );
   const sortedTrades = useMemo(
     () =>
       [...trades].sort(
@@ -88,6 +68,62 @@ export function InteractiveTradingChart({
   );
   const selectedTrade =
     sortedTrades.find((item) => item.trade_id === selectedTradeId) ?? null;
+  const selectedTradeCenter = selectedTrade
+    ? new Date(
+        (Date.parse(selectedTrade.entry_time) +
+          Date.parse(selectedTrade.exit_time)) /
+          2,
+      ).toISOString()
+    : null;
+  const marketWindow = useQuery({
+    queryKey: [
+      "run-bundle-market-window",
+      bundleId,
+      marketTimeframe,
+      selectedTradeCenter,
+    ],
+    queryFn: () =>
+      apiFetch<MarketWindowResponse>(
+        `/api/run-bundles/${encodeURIComponent(bundleId)}/market-window?market_timeframe=${encodeURIComponent(marketTimeframe)}&center_time=${encodeURIComponent(selectedTradeCenter ?? "")}&bars=360`,
+      ),
+    enabled: Boolean(selectedTradeCenter),
+    retry: false,
+  });
+  const displayMarket =
+    marketWindow.data?.available && marketWindow.data.market_series
+      ? marketWindow.data.market_series
+      : market;
+  const candles = useMemo(
+    () =>
+      dedupeByTime(
+        displayMarket.candles.map((item) => ({
+          time: toTimestamp(item.t),
+          open: item.open,
+          high: item.high,
+          low: item.low,
+          close: item.close,
+        })),
+      ),
+    [displayMarket.candles],
+  );
+  const volumes = useMemo(
+    () =>
+      dedupeByTime(
+        displayMarket.candles.map((item) => ({
+          time: toTimestamp(item.t),
+          value: item.volume,
+          color:
+            item.close >= item.open
+              ? "rgba(61,214,176,.35)"
+              : "rgba(251,113,133,.35)",
+        })),
+      ),
+    [displayMarket.candles],
+  );
+  const chartTrades = useMemo(
+    () => tradesWithinCandles(sortedTrades, candles),
+    [candles, sortedTrades],
+  );
 
   useEffect(() => {
     const container = containerRef.current;
@@ -152,6 +188,7 @@ export function InteractiveTradingChart({
           wickUpColor: "#5eead4",
           wickDownColor: "#fda4af",
           priceLineVisible: false,
+          lastValueVisible: false,
         });
         candleSeries.setData(candles);
         const volumeSeries = chart.addSeries(HistogramSeries, {
@@ -164,10 +201,10 @@ export function InteractiveTradingChart({
           scaleMargins: { top: 0.82, bottom: 0 },
         });
         volumeSeries.setData(volumes);
-        const showMarkerText = sortedTrades.length <= 120;
+        const showMarkerText = chartTrades.length <= 40;
         createSeriesMarkers(
           candleSeries,
-          buildTradeMarkers(sortedTrades, showMarkerText),
+          buildTradeMarkers(chartTrades, showMarkerText),
         );
         chart.timeScale().fitContent();
         chart.subscribeCrosshairMove((event) => {
@@ -186,10 +223,10 @@ export function InteractiveTradingChart({
           });
         });
         chart.subscribeClick((event) => {
-          if (!event.time || !sortedTrades.length) return;
+          if (!event.time || !chartTrades.length) return;
           const clickedAt = timeToUnix(event.time);
           const interval = estimateCandleInterval(candles);
-          const closest = nearestTrade(sortedTrades, clickedAt);
+          const closest = nearestTrade(chartTrades, clickedAt);
           if (closest && closest.distance <= Math.max(interval * 1.5, 3_600)) {
             setSelectedTradeId(closest.trade.trade_id);
           }
@@ -215,7 +252,7 @@ export function InteractiveTradingChart({
       chartRef.current = null;
       candleSeriesRef.current = null;
     };
-  }, [candles, sortedTrades, volumes]);
+  }, [candles, chartTrades, sortedTrades, volumes]);
 
   useEffect(() => {
     const candleSeries = candleSeriesRef.current;
@@ -230,12 +267,6 @@ export function InteractiveTradingChart({
         price: selectedTrade.entry_price,
         color: "#7dd3fc",
         title: "入场",
-        lineStyle: 0,
-      },
-      {
-        price: selectedTrade.exit_price,
-        color: "#fbbf24",
-        title: "离场",
         lineStyle: 0,
       },
       {
@@ -286,9 +317,12 @@ export function InteractiveTradingChart({
             行情K线、成交量与交易点
           </div>
           <div className="mt-1 text-xs leading-5 text-slate-500">
-            {strategyLabel} · {market.timeframe}。滚轮或双指缩放，按住拖动平移；
+            {strategyLabel} · {displayMarket.timeframe}。滚轮或双指缩放，按住拖动平移；
             点击交易点附近可查看对应交易。
-            {market.aggregated
+            {displayMarket.windowed
+              ? " 当前显示选中交易附近的原周期K线。"
+              : ""}
+            {displayMarket.aggregated
               ? " 交易时间保留原始成交时间，标记对齐到最近一根展示K线。"
               : ""}
           </div>
@@ -304,15 +338,15 @@ export function InteractiveTradingChart({
       </div>
       {selectedTrade ? (
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2 text-[11px] text-slate-400">
-          <span className="text-slate-500">当前交易四条价格线：</span>
+          <span className="text-slate-500">当前交易计划线与成交点：</span>
           <PriceLineLegend color="#7dd3fc" label="入场" />
-          <PriceLineLegend color="#fbbf24" label="离场" />
           {selectedTrade.stop_price !== null ? (
             <PriceLineLegend color="#fb7185" label="止损" dashed />
           ) : null}
           {selectedTrade.take_profit_price !== null ? (
             <PriceLineLegend color="#3dd6b0" label="止盈" dashed />
           ) : null}
+          <LegendMarker color="#fbbf24" shape="square" label="离场点" />
         </div>
       ) : null}
 
@@ -399,8 +433,12 @@ export function InteractiveTradingChart({
 
 export function InteractiveEquityChart({
   series,
+  title,
+  description,
 }: {
   series: EquityLine[];
+  title: string;
+  description: string;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -409,6 +447,20 @@ export function InteractiveEquityChart({
     time: string;
     values: Array<{ label: string; value: number; color: string }>;
   } | null>(null);
+  const curveStats = useMemo(
+    () =>
+      series.map((item) => ({
+        id: item.id,
+        label: item.label,
+        color: item.color,
+        changes: countEquityChanges(item.points),
+        finalReturn:
+          (item.points[item.points.length - 1]?.value ?? 1) - 1,
+      })),
+    [series],
+  );
+  const sparse = curveStats.every((item) => item.changes <= 2);
+  const chartHeight = sparse ? 240 : 340;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -418,11 +470,18 @@ export function InteractiveEquityChart({
     let chart: IChartApi | null = null;
     let resizeObserver: ResizeObserver | null = null;
     void import("lightweight-charts").then(
-      ({ ColorType, CrosshairMode, LineSeries, LineStyle, createChart }) => {
+      ({
+        ColorType,
+        CrosshairMode,
+        LineSeries,
+        LineStyle,
+        LineType,
+        createChart,
+      }) => {
         if (disposed) return;
         chart = createChart(container, {
           width: container.clientWidth,
-          height: 340,
+          height: chartHeight,
           layout: {
             background: { type: ColorType.Solid, color: "transparent" },
             textColor: "rgba(203,213,225,.82)",
@@ -470,6 +529,7 @@ export function InteractiveEquityChart({
                 : index % 3 === 1
                   ? LineStyle.Dashed
                   : LineStyle.Dotted,
+            lineType: LineType.WithSteps,
             priceLineVisible: false,
             lastValueVisible: true,
             title: item.label,
@@ -522,21 +582,44 @@ export function InteractiveEquityChart({
       chart?.remove();
       chartRef.current = null;
     };
-  }, [series]);
+  }, [chartHeight, series]);
 
   return (
     <section className="rounded-xl border border-white/10 bg-black/10 p-3">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="text-sm font-medium text-slate-200">
-            多策略资金曲线
+            {title}
           </div>
           <div className="mt-1 text-xs leading-5 text-slate-500">
-            不同线型与颜色共同区分策略；支持滚轮、双指缩放和拖动平移。“全周期”可随时恢复完整覆盖范围。
+            {description} 支持滚轮、双指缩放和拖动平移。“全周期”可随时恢复完整覆盖范围。
           </div>
         </div>
         <ChartToolbar chartRef={chartRef} disabled={!chartReady} />
       </div>
+      {sparse ? (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {curveStats.map((item) => (
+            <div
+              key={item.id}
+              className="rounded-lg border border-white/[0.07] bg-white/[0.025] px-3 py-2 text-xs"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="truncate text-slate-300">{item.label}</span>
+                <span
+                  className="tabular-nums"
+                  style={{ color: item.color }}
+                >
+                  {formatSignedPercent(item.finalReturn)}
+                </span>
+              </div>
+              <div className="mt-1 text-[11px] text-slate-500">
+                资金仅变化 {item.changes} 次，折线信息有限
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-400">
         {series.map((item, index) => (
           <span key={item.id} className="flex items-center gap-1.5">
@@ -559,7 +642,8 @@ export function InteractiveEquityChart({
       </div>
       <div
         ref={containerRef}
-        className="mt-2 min-h-[340px] w-full touch-pan-y"
+        className="mt-2 w-full touch-pan-y"
+        style={{ minHeight: chartHeight }}
         aria-label="多策略可缩放资金曲线"
       />
       {hoverValues?.values.length ? (
@@ -779,6 +863,20 @@ function buildTradeMarkers(
     .sort((left, right) => timeToUnix(left.time) - timeToUnix(right.time));
 }
 
+function tradesWithinCandles(
+  trades: TradeChartRecord[],
+  candles: CandlestickData<Time>[],
+) {
+  if (!candles.length) return [];
+  const start = timeToUnix(candles[0].time);
+  const end = timeToUnix(candles[candles.length - 1].time);
+  return trades.filter((trade) => {
+    const entry = Date.parse(trade.entry_time) / 1_000;
+    const exit = Date.parse(trade.exit_time) / 1_000;
+    return entry <= end && exit >= start;
+  });
+}
+
 function nearestTrade(trades: TradeChartRecord[], time: number) {
   let best: { trade: TradeChartRecord; distance: number } | null = null;
   for (const trade of trades) {
@@ -826,6 +924,16 @@ function panChart(chart: IChartApi | null, fraction: number) {
     from: range.from + movement,
     to: range.to + movement,
   });
+}
+
+function countEquityChanges(points: Array<{ t: string; value: number }>) {
+  let changes = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    if (Math.abs(points[index].value - points[index - 1].value) > 1e-8) {
+      changes += 1;
+    }
+  }
+  return changes;
 }
 
 function dedupeByTime<T extends { time: Time }>(items: T[]): T[] {

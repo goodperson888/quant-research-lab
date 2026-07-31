@@ -72,13 +72,13 @@ def test_run_bundle_equity_reader_uses_registered_bundle_not_caller_path(
     pd.DataFrame(
         {
             "timestamp": pd.date_range(
-                "2026-01-01", periods=120, freq="5min", tz="UTC"
+                "2026-01-01", periods=1200, freq="5min", tz="UTC"
             ),
-            "open": [1999 + index * 0.2 for index in range(120)],
-            "high": [2001 + index * 0.2 for index in range(120)],
-            "low": [1998 + index * 0.2 for index in range(120)],
-            "close": [2000 + index * 0.2 for index in range(120)],
-            "volume": [10 + index for index in range(120)],
+            "open": [1999 + index * 0.2 for index in range(1200)],
+            "high": [2001 + index * 0.2 for index in range(1200)],
+            "low": [1998 + index * 0.2 for index in range(1200)],
+            "close": [2000 + index * 0.2 for index in range(1200)],
+            "volume": [10 + index for index in range(1200)],
         }
     ).to_parquet(market_5m_buffer, index=False)
     store.put(market_5m_key, market_5m_buffer.getvalue())
@@ -168,6 +168,21 @@ def test_run_bundle_equity_reader_uses_registered_bundle_not_caller_path(
     assert five_minute_result["market_series"]["source_timeframe"] == "5m"
     assert "由5分钟K线聚合" in five_minute_result["market_series"]["timeframe"]
     assert five_minute_result["available_market_timeframes"] == ["5m", "1h"]
+
+    market_window = RunBundleEquityReader(
+        repository,
+        store,
+    ).read_market_window(
+        bundle_id="report_equity",
+        market_timeframe="5m",
+        center_time="2026-01-02T02:30:00Z",
+        bars=360,
+    )
+    assert market_window["available"] is True
+    assert market_window["market_series"]["timeframe"] == "5分钟/根"
+    assert market_window["market_series"]["aggregated"] is False
+    assert market_window["market_series"]["windowed"] is True
+    assert len(market_window["market_series"]["candles"]) == 360
 
 
 def test_run_bundle_equity_reader_reports_missing_curve_without_fabrication(

@@ -138,6 +138,156 @@ class RunBundleEquityReader:
             "limitations": limitations,
         }
 
+    def read_market_window(
+        self,
+        *,
+        bundle_id: str,
+        market_timeframe: str,
+        center_time: str,
+        bars: int = 360,
+    ) -> dict[str, Any]:
+        if market_timeframe not in {"5m", "15m", "1h", "4h"}:
+            raise ValueError("market_timeframe must be one of 5m, 15m, 1h, 4h")
+        if not 120 <= bars <= 800:
+            raise ValueError("bars must be between 120 and 800")
+        report = next(
+            (item for item in self.repository.list_reports() if item.id == bundle_id),
+            None,
+        )
+        if report is None:
+            raise NotFoundError(f"run bundle not found: {bundle_id}")
+        run_id = str(report.summary.get("run_id", "")).strip()
+        if not run_id:
+            return self._unavailable_market_window(
+                bundle_id,
+                "该研究结果没有登记运行标识，无法定位局部行情。",
+            )
+        manifest_key = f"experiments/runs/{run_id}/manifest.json"
+        if not self.artifacts.exists(manifest_key):
+            return self._unavailable_market_window(
+                bundle_id,
+                "运行清单不存在，无法定位局部行情。",
+            )
+        manifest = json.loads(self.artifacts.get(manifest_key))
+        data_manifest = manifest.get("data_manifest")
+        data_manifest_key = (
+            str(data_manifest.get("artifact_key", "")).strip()
+            if isinstance(data_manifest, dict)
+            else ""
+        )
+        if not data_manifest_key or not self.artifacts.exists(data_manifest_key):
+            return self._unavailable_market_window(
+                bundle_id,
+                "本次运行没有可读取的数据清单。",
+            )
+        market_manifest = json.loads(self.artifacts.get(data_manifest_key))
+        dataset = next(
+            (
+                item
+                for item in market_manifest.get("processed_datasets", [])
+                if isinstance(item, dict)
+                and item.get("dataset") == "futures_ohlcv"
+                and item.get("timeframe") == market_timeframe
+            ),
+            None,
+        )
+        if dataset is None:
+            return self._unavailable_market_window(
+                bundle_id,
+                f"数据清单未登记 {_timeframe_name(market_timeframe)} 永续行情。",
+            )
+        center = pd.Timestamp(center_time)
+        center = (
+            center.tz_localize("UTC")
+            if center.tzinfo is None
+            else center.tz_convert("UTC")
+        )
+        interval = pd.Timedelta(_timeframe_delta(market_timeframe))
+        coarse_start = center - interval * bars
+        coarse_end = center + interval * bars
+        frames: list[pd.DataFrame] = []
+        source_keys: list[str] = []
+        for output in dataset.get("outputs", [])[:48]:
+            if not isinstance(output, dict):
+                continue
+            artifact_key = str(output.get("path", "")).strip()
+            if not artifact_key.endswith(".parquet") or not self.artifacts.exists(
+                artifact_key
+            ):
+                continue
+            frame = pd.read_parquet(io.BytesIO(self.artifacts.get(artifact_key)))
+            required_columns = {"timestamp", "open", "high", "low", "close"}
+            if not required_columns.issubset(frame.columns):
+                continue
+            frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+            relevant = frame.loc[
+                (frame["timestamp"] >= coarse_start)
+                & (frame["timestamp"] <= coarse_end),
+                [
+                    "timestamp",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    *(["volume"] if "volume" in frame else []),
+                ],
+            ]
+            if not relevant.empty:
+                frames.append(relevant)
+                source_keys.append(artifact_key)
+        if not frames:
+            return self._unavailable_market_window(
+                bundle_id,
+                "选中交易附近没有匹配的行情K线。",
+            )
+        combined = (
+            pd.concat(frames, ignore_index=True)
+            .drop_duplicates("timestamp", keep="last")
+            .sort_values("timestamp")
+        )
+        numeric_columns = ["open", "high", "low", "close"]
+        if "volume" in combined:
+            numeric_columns.append("volume")
+        for column in numeric_columns:
+            combined[column] = pd.to_numeric(combined[column], errors="coerce")
+        combined = combined.dropna(
+            subset=["timestamp", "open", "high", "low", "close"]
+        )
+        if combined.empty:
+            return self._unavailable_market_window(
+                bundle_id,
+                "局部行情文件存在，但没有有效 OHLC。",
+            )
+        timestamps = combined["timestamp"].astype("int64").to_numpy()
+        center_ns = center.value
+        center_index = int(np.searchsorted(timestamps, center_ns, side="left"))
+        half = bars // 2
+        start_index = max(0, center_index - half)
+        end_index = min(len(combined), start_index + bars)
+        start_index = max(0, end_index - bars)
+        combined = combined.iloc[start_index:end_index]
+        symbol = market_manifest.get("symbol", {})
+        unified_symbol = (
+            str(symbol.get("unified", "ETH/USDT:USDT"))
+            if isinstance(symbol, dict)
+            else "ETH/USDT:USDT"
+        )
+        return {
+            "available": True,
+            "bundle_id": bundle_id,
+            "market_series": self._serialize_market_series(
+                bundle_id=bundle_id,
+                unified_symbol=unified_symbol,
+                combined=combined,
+                source_keys=source_keys,
+                source_timeframe=market_timeframe,
+                display_timeframe=f"{_timeframe_name(market_timeframe)}/根",
+                aggregated=False,
+                windowed=True,
+            ),
+            "reason": None,
+        }
+
     def _read_market_series(
         self,
         *,
@@ -250,57 +400,79 @@ class RunBundleEquityReader:
             if isinstance(symbol, dict)
             else "ETH/USDT:USDT"
         )
-        return (
-            {
-                "series_id": f"{bundle_id}:market",
-                "label": f"{unified_symbol} 行情",
-                "kind": "market_price",
-                "unit": "quote_price",
-                "timeframe": display_timeframe,
-                "source_timeframe": market_timeframe,
-                "aggregated": aggregated,
-                "available_timeframes": available_timeframes,
-                "points": [
-                    {
-                        "t": timestamp.isoformat(),
-                        "value": float(close),
-                    }
-                    for timestamp, close in zip(
-                        combined["timestamp"], combined["close"], strict=True
-                    )
-                ],
-                "candles": [
-                    {
-                        "t": timestamp.isoformat(),
-                        "open": float(open_price),
-                        "high": float(high_price),
-                        "low": float(low_price),
-                        "close": float(close_price),
-                        "volume": (
-                            float(volume)
-                            if volume is not None and np.isfinite(volume)
-                            else 0.0
-                        ),
-                    }
-                    for timestamp, open_price, high_price, low_price, close_price, volume in zip(
-                        combined["timestamp"],
-                        combined["open"],
-                        combined["high"],
-                        combined["low"],
-                        combined["close"],
-                        (
-                            combined["volume"]
-                            if "volume" in combined
-                            else [0.0] * len(combined)
-                        ),
-                        strict=True,
-                    )
-                ],
-                "source_artifact_keys": source_keys,
-                "evidence_mode": "market_context",
-            },
-            None,
+        serialized = self._serialize_market_series(
+            bundle_id=bundle_id,
+            unified_symbol=unified_symbol,
+            combined=combined,
+            source_keys=source_keys,
+            source_timeframe=market_timeframe,
+            display_timeframe=display_timeframe,
+            aggregated=aggregated,
+            windowed=False,
         )
+        serialized["available_timeframes"] = available_timeframes
+        return serialized, None
+
+    @staticmethod
+    def _serialize_market_series(
+        *,
+        bundle_id: str,
+        unified_symbol: str,
+        combined: pd.DataFrame,
+        source_keys: list[str],
+        source_timeframe: str,
+        display_timeframe: str,
+        aggregated: bool,
+        windowed: bool,
+    ) -> dict[str, Any]:
+        return {
+            "series_id": f"{bundle_id}:market",
+            "label": f"{unified_symbol} 行情",
+            "kind": "market_price",
+            "unit": "quote_price",
+            "timeframe": display_timeframe,
+            "source_timeframe": source_timeframe,
+            "aggregated": aggregated,
+            "windowed": windowed,
+            "points": [
+                {
+                    "t": timestamp.isoformat(),
+                    "value": float(close),
+                }
+                for timestamp, close in zip(
+                    combined["timestamp"], combined["close"], strict=True
+                )
+            ],
+            "candles": [
+                {
+                    "t": timestamp.isoformat(),
+                    "open": float(open_price),
+                    "high": float(high_price),
+                    "low": float(low_price),
+                    "close": float(close_price),
+                    "volume": (
+                        float(volume)
+                        if volume is not None and np.isfinite(volume)
+                        else 0.0
+                    ),
+                }
+                for timestamp, open_price, high_price, low_price, close_price, volume in zip(
+                    combined["timestamp"],
+                    combined["open"],
+                    combined["high"],
+                    combined["low"],
+                    combined["close"],
+                    (
+                        combined["volume"]
+                        if "volume" in combined
+                        else [0.0] * len(combined)
+                    ),
+                    strict=True,
+                )
+            ],
+            "source_artifact_keys": source_keys,
+            "evidence_mode": "market_context",
+        }
 
     def _available_market_timeframes(self, manifest: dict[str, Any]) -> list[str]:
         data_manifest = manifest.get("data_manifest")
@@ -361,6 +533,18 @@ class RunBundleEquityReader:
             "limitations": [],
         }
 
+    @staticmethod
+    def _unavailable_market_window(
+        bundle_id: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        return {
+            "available": False,
+            "bundle_id": bundle_id,
+            "market_series": None,
+            "reason": reason,
+        }
+
 
 def _display_timeframe(
     *,
@@ -390,6 +574,15 @@ def _timeframe_name(timeframe: str) -> str:
         "15m": "15分钟",
         "1h": "1小时",
         "4h": "4小时",
+    }[timeframe]
+
+
+def _timeframe_delta(timeframe: str) -> str:
+    return {
+        "5m": "5min",
+        "15m": "15min",
+        "1h": "1h",
+        "4h": "4h",
     }[timeframe]
 
 
