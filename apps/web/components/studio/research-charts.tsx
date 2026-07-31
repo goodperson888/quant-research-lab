@@ -83,8 +83,13 @@ export function PerformanceCharts({
     coloredSeries.find(
       (item) => item.series_id === selectedEquitySeriesId,
     ) ??
+    coloredSeries.find(
+      (item) => item.kind === "derived_full_period_overview",
+    ) ??
     coloredSeries.find((item) => item.label.includes("验证")) ??
     coloredSeries[0];
+  const selectedIsFullPeriodOverview =
+    selectedEquitySeries?.kind === "derived_full_period_overview";
   const series = comparableEquitySeries
     ? coloredSeries.filter((item) => visible[item.series_id] !== false)
     : selectedEquitySeries
@@ -175,11 +180,15 @@ export function PerformanceCharts({
               title={
                 comparableEquitySeries && series.length > 1
                   ? "同区间策略资金曲线对比"
+                  : selectedIsFullPeriodOverview
+                    ? "全周期资金曲线概览"
                   : "单条资金曲线"
               }
               description={
                 comparableEquitySeries
                   ? "这些曲线覆盖同一时间区间，可以在同一坐标轴上直接比较。"
+                  : selectedIsFullPeriodOverview
+                    ? "按时间顺序衔接训练与验证资金曲线，用于观察完整研究周期；训练和验证结论仍然分开统计。"
                   : "训练、验证和试跑覆盖不同日期，不能叠加冒充策略对比；请在上方逐条切换查看。"
               }
               series={series.map((item) => ({

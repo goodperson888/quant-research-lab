@@ -72,11 +72,32 @@ class RunBundleEquityReader:
             )
 
         series: list[dict[str, Any]] = []
+        has_full_period_overview = False
         for index, artifact_key in enumerate(equity_keys[:4]):
             if not self.artifacts.exists(artifact_key):
                 continue
             frame = pd.read_parquet(io.BytesIO(self.artifacts.get(artifact_key)))
             normalized = _normalize_equity_frame(frame, max_points=max_points)
+            overview_points = _combine_equity_splits(
+                normalized,
+                max_points=max_points,
+            )
+            if overview_points:
+                has_full_period_overview = True
+                series.append(
+                    {
+                        "series_id": f"{bundle_id}:{index}:full_overview",
+                        "label": _series_label(
+                            report.report_type,
+                            "full_overview",
+                            index,
+                        ),
+                        "kind": "derived_full_period_overview",
+                        "points": overview_points,
+                        "source_artifact_key": artifact_key,
+                        "evidence_mode": "derived_from_recorded_equity",
+                    }
+                )
             for split, points in normalized.items():
                 series.append(
                     {
@@ -111,6 +132,11 @@ class RunBundleEquityReader:
             "大多数参数 Trial 未单独保留资金曲线，因此不会伪造 Top Trial 曲线。",
             "图表序列不写入 SQLite 或审计事件。",
         ]
+        if has_full_period_overview:
+            limitations.append(
+                "全周期概览按时间顺序衔接训练与验证资金曲线；"
+                "验证段仍独立归一化评估，概览只用于观察完整研究周期。"
+            )
         if market_series is not None:
             limitations.append(
                 "行情对照使用本次运行登记数据版本中的 "
@@ -651,9 +677,46 @@ def _series_label(report_type: str, split: str, index: int) -> str:
         "validation": "验证",
         "smoke": "试跑区间",
         "full": "全区间",
+        "full_overview": "全周期概览",
     }.get(split, split)
     suffix = f" {index + 1}" if index else ""
     return f"{report_label}{suffix} · {split_label}"
+
+
+def _combine_equity_splits(
+    normalized: dict[str, list[dict[str, Any]]],
+    *,
+    max_points: int,
+) -> list[dict[str, Any]]:
+    ordered_splits = [
+        normalized[split]
+        for split in ("train", "validation")
+        if normalized.get(split)
+    ]
+    if len(ordered_splits) < 2:
+        return []
+    combined: list[dict[str, Any]] = []
+    current_equity = 1.0
+    running_peak = 1.0
+    for points in ordered_splits:
+        initial = float(points[0]["normalized_equity"])
+        if initial <= 0:
+            return []
+        for point in points:
+            equity = current_equity * float(point["normalized_equity"]) / initial
+            running_peak = max(running_peak, equity)
+            combined.append(
+                {
+                    "t": str(point["t"]),
+                    "normalized_equity": equity,
+                    "drawdown": equity / running_peak - 1.0,
+                }
+            )
+        current_equity = float(combined[-1]["normalized_equity"])
+    if len(combined) <= max_points:
+        return combined
+    indices = np.linspace(0, len(combined) - 1, max_points, dtype=int)
+    return [combined[index] for index in np.unique(indices)]
 
 
 def _downsample_ohlcv(frame: pd.DataFrame, *, max_points: int) -> pd.DataFrame:

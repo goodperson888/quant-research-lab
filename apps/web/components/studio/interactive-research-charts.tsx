@@ -30,6 +30,8 @@ type EquityLine = {
   }>;
 };
 
+type TradingChartView = "overview" | "trade";
+
 export function InteractiveTradingChart({
   market,
   trades,
@@ -49,6 +51,7 @@ export function InteractiveTradingChart({
     useRef<ISeriesApi<"Candlestick"> | null>(null);
   const selectedPriceLinesRef = useRef<IPriceLine[]>([]);
   const [selectedTradeId, setSelectedTradeId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<TradingChartView>("overview");
   const [chartReady, setChartReady] = useState(false);
   const [hoverSummary, setHoverSummary] = useState<{
     time: string;
@@ -86,11 +89,13 @@ export function InteractiveTradingChart({
       apiFetch<MarketWindowResponse>(
         `/api/run-bundles/${encodeURIComponent(bundleId)}/market-window?market_timeframe=${encodeURIComponent(marketTimeframe)}&center_time=${encodeURIComponent(selectedTradeCenter ?? "")}&bars=360`,
       ),
-    enabled: Boolean(selectedTradeCenter),
+    enabled: viewMode === "trade" && Boolean(selectedTradeCenter),
     retry: false,
   });
   const displayMarket =
-    marketWindow.data?.available && marketWindow.data.market_series
+    viewMode === "trade" &&
+    marketWindow.data?.available &&
+    marketWindow.data.market_series
       ? marketWindow.data.market_series
       : market;
   const candles = useMemo(
@@ -229,6 +234,7 @@ export function InteractiveTradingChart({
           const closest = nearestTrade(chartTrades, clickedAt);
           if (closest && closest.distance <= Math.max(interval * 1.5, 3_600)) {
             setSelectedTradeId(closest.trade.trade_id);
+            setViewMode("trade");
           }
         });
         chartRef.current = chart;
@@ -261,7 +267,7 @@ export function InteractiveTradingChart({
       candleSeries.removePriceLine(line);
     }
     selectedPriceLinesRef.current = [];
-    if (!selectedTrade) return;
+    if (!selectedTrade || viewMode !== "trade") return;
     const candidates = [
       {
         price: selectedTrade.entry_price,
@@ -303,7 +309,7 @@ export function InteractiveTradingChart({
       from: (Math.min(entryTime, exitTime) - interval * 12) as UTCTimestamp,
       to: (Math.max(entryTime, exitTime) + interval * 12) as UTCTimestamp,
     });
-  }, [candles, chartReady, selectedTrade]);
+  }, [candles, chartReady, selectedTrade, viewMode]);
 
   const selectedTradeIndex = selectedTrade
     ? sortedTrades.findIndex((item) => item.trade_id === selectedTrade.trade_id)
@@ -317,11 +323,11 @@ export function InteractiveTradingChart({
             行情K线、成交量与交易点
           </div>
           <div className="mt-1 text-xs leading-5 text-slate-500">
-            {strategyLabel} · {displayMarket.timeframe}。滚轮或双指缩放，按住拖动平移；
-            点击交易点附近可查看对应交易。
-            {displayMarket.windowed
-              ? " 当前显示选中交易附近的原周期K线。"
-              : ""}
+            {strategyLabel} · {displayMarket.timeframe}。
+            {viewMode === "overview"
+              ? " 当前显示完整回测区间；点击交易点可进入单笔交易细看。"
+              : " 当前显示选中交易附近的原周期K线。"}
+            滚轮或双指缩放，按住拖动平移。
             {displayMarket.aggregated
               ? " 交易时间保留原始成交时间，标记对齐到最近一根展示K线。"
               : ""}
@@ -330,13 +336,53 @@ export function InteractiveTradingChart({
         <ChartToolbar chartRef={chartRef} disabled={!chartReady} />
       </div>
 
+      <div
+        className="mt-3 inline-flex rounded-xl border border-white/10 bg-black/10 p-1"
+        role="tablist"
+        aria-label="行情图查看范围"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={viewMode === "overview"}
+          onClick={() => setViewMode("overview")}
+          className={
+            viewMode === "overview"
+              ? "min-h-11 rounded-lg bg-sky-300/10 px-4 text-xs text-sky-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+              : "min-h-11 rounded-lg px-4 text-xs text-slate-400 transition hover:bg-white/[0.04] hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+          }
+        >
+          全周期概览
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={viewMode === "trade"}
+          disabled={!selectedTrade}
+          onClick={() => setViewMode("trade")}
+          className={
+            viewMode === "trade"
+              ? "min-h-11 rounded-lg bg-sky-300/10 px-4 text-xs text-sky-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+              : "min-h-11 rounded-lg px-4 text-xs text-slate-400 transition hover:bg-white/[0.04] hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 disabled:cursor-not-allowed disabled:opacity-40"
+          }
+        >
+          单笔交易细看
+        </button>
+      </div>
+
+      {viewMode === "trade" && marketWindow.isPending ? (
+        <div className="mt-2 text-xs text-sky-100/80">
+          正在读取选中交易附近的原周期 K 线……
+        </div>
+      ) : null}
+
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-[11px] text-slate-400">
         <LegendMarker color="#3dd6b0" shape="triangle-up" label="多头入场" />
         <LegendMarker color="#fb7185" shape="triangle-down" label="空头入场" />
         <LegendMarker color="#fbbf24" shape="square" label="离场" />
         <span>{sortedTrades.length.toLocaleString("zh-CN")} 笔真实交易</span>
       </div>
-      {selectedTrade ? (
+      {selectedTrade && viewMode === "trade" ? (
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2 text-[11px] text-slate-400">
           <span className="text-slate-500">当前交易计划线与成交点：</span>
           <PriceLineLegend color="#7dd3fc" label="入场" />
@@ -374,9 +420,11 @@ export function InteractiveTradingChart({
             </span>
             <select
               value={selectedTrade?.trade_id ?? ""}
-              onChange={(event) =>
-                setSelectedTradeId(event.target.value || null)
-              }
+              onChange={(event) => {
+                const tradeId = event.target.value || null;
+                setSelectedTradeId(tradeId);
+                setViewMode(tradeId ? "trade" : "overview");
+              }}
               className="min-h-11 w-full rounded-xl border border-white/10 bg-[#071017] px-3 text-sm text-slate-200"
             >
               <option value="">选择一笔交易</option>
@@ -399,9 +447,12 @@ export function InteractiveTradingChart({
               type="button"
               disabled={selectedTradeIndex <= 0}
               onClick={() =>
-                setSelectedTradeId(
-                  sortedTrades[selectedTradeIndex - 1]?.trade_id ?? null,
-                )
+                {
+                  setSelectedTradeId(
+                    sortedTrades[selectedTradeIndex - 1]?.trade_id ?? null,
+                  );
+                  setViewMode("trade");
+                }
               }
               className="min-h-11 rounded-xl border border-white/10 px-3 text-xs text-slate-300 disabled:opacity-40"
             >
@@ -414,9 +465,12 @@ export function InteractiveTradingChart({
                 selectedTradeIndex >= sortedTrades.length - 1
               }
               onClick={() =>
-                setSelectedTradeId(
-                  sortedTrades[selectedTradeIndex + 1]?.trade_id ?? null,
-                )
+                {
+                  setSelectedTradeId(
+                    sortedTrades[selectedTradeIndex + 1]?.trade_id ?? null,
+                  );
+                  setViewMode("trade");
+                }
               }
               className="min-h-11 rounded-xl border border-white/10 px-3 text-xs text-slate-300 disabled:opacity-40"
             >
@@ -426,7 +480,9 @@ export function InteractiveTradingChart({
         </div>
       ) : null}
 
-      {selectedTrade ? <TradeDetail trade={selectedTrade} /> : null}
+      {selectedTrade && viewMode === "trade" ? (
+        <TradeDetail trade={selectedTrade} />
+      ) : null}
     </section>
   );
 }

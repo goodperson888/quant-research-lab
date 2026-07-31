@@ -5,9 +5,13 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 from fastapi.testclient import TestClient
 
-from quant_lab.application.equity_series import RunBundleEquityReader
+from quant_lab.application.equity_series import (
+    RunBundleEquityReader,
+    _combine_equity_splits,
+)
 from quant_lab.domain.models import Job, Report
 from quant_lab.infrastructure.artifact_store import LocalArtifactStore
 from quant_lab.infrastructure.sqlite_product_repository import SQLiteProductRepository
@@ -219,6 +223,33 @@ def test_run_bundle_equity_reader_reports_missing_curve_without_fabrication(
     assert result["series"] == []
     assert result["trades"] == []
     assert "不存在" in result["reason"]
+
+
+def test_combine_equity_splits_creates_full_period_overview() -> None:
+    combined = _combine_equity_splits(
+        {
+            "train": [
+                {"t": "2026-01-01T00:00:00+00:00", "normalized_equity": 1.0},
+                {"t": "2026-01-02T00:00:00+00:00", "normalized_equity": 1.1},
+            ],
+            "validation": [
+                {"t": "2026-01-03T00:00:00+00:00", "normalized_equity": 1.0},
+                {"t": "2026-01-04T00:00:00+00:00", "normalized_equity": 0.9},
+            ],
+        },
+        max_points=20,
+    )
+
+    assert [point["t"] for point in combined] == [
+        "2026-01-01T00:00:00+00:00",
+        "2026-01-02T00:00:00+00:00",
+        "2026-01-03T00:00:00+00:00",
+        "2026-01-04T00:00:00+00:00",
+    ]
+    assert combined[1]["normalized_equity"] == 1.1
+    assert combined[2]["normalized_equity"] == 1.1
+    assert combined[3]["normalized_equity"] == pytest.approx(0.99)
+    assert combined[3]["drawdown"] == pytest.approx(-0.1)
 
 
 def test_run_bundle_chart_api_returns_explicit_unavailable(tmp_path: Path) -> None:
