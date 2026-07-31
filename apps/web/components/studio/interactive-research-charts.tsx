@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import type { EChartsOption, EChartsType } from "echarts";
 import type {
   CandlestickData,
   IChartApi,
@@ -243,7 +244,7 @@ export function InteractiveTradingChart({
         setSelectedTradeId((current) =>
           sortedTrades.some((trade) => trade.trade_id === current)
             ? current
-            : (sortedTrades.at(-1)?.trade_id ?? null),
+            : null,
         );
         resizeObserver = new ResizeObserver(([entry]) => {
           chart?.applyOptions({ width: Math.floor(entry.contentRect.width) });
@@ -325,8 +326,8 @@ export function InteractiveTradingChart({
           <div className="mt-1 text-xs leading-5 text-slate-500">
             {strategyLabel} · {displayMarket.timeframe}。
             {viewMode === "overview"
-              ? " 当前显示完整回测区间；点击交易点可进入单笔交易细看。"
-              : " 当前显示选中交易附近的原周期K线。"}
+              ? " 当前把整个回测期间压缩到一张图，展示全部买卖点。"
+              : " 当前只看一笔交易前后的原周期K线和交易计划。"}
             滚轮或双指缩放，按住拖动平移。
             {displayMarket.aggregated
               ? " 交易时间保留原始成交时间，标记对齐到最近一根展示K线。"
@@ -352,22 +353,33 @@ export function InteractiveTradingChart({
               : "min-h-11 rounded-lg px-4 text-xs text-slate-400 transition hover:bg-white/[0.04] hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
           }
         >
-          全周期概览
+          完整回测走势
         </button>
         <button
           type="button"
           role="tab"
           aria-selected={viewMode === "trade"}
-          disabled={!selectedTrade}
-          onClick={() => setViewMode("trade")}
+          disabled={!sortedTrades.length}
+          onClick={() => {
+            setSelectedTradeId(
+              (current) => current ?? sortedTrades[0]?.trade_id ?? null,
+            );
+            setViewMode("trade");
+          }}
           className={
             viewMode === "trade"
               ? "min-h-11 rounded-lg bg-sky-300/10 px-4 text-xs text-sky-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
               : "min-h-11 rounded-lg px-4 text-xs text-slate-400 transition hover:bg-white/[0.04] hover:text-slate-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 disabled:cursor-not-allowed disabled:opacity-40"
           }
         >
-          单笔交易细看
+          逐笔交易复盘
         </button>
+      </div>
+
+      <div className="mt-2 text-[11px] leading-5 text-slate-500">
+        {viewMode === "overview"
+          ? "适合先看策略在整个回测期内何时交易、是否集中在某段行情。点击图上的买卖点可直接进入该笔交易复盘。"
+          : "适合检查一笔交易的入场、止损、止盈和离场是否合理；可用下方选择器切换交易。"}
       </div>
 
       {viewMode === "trade" && marketWindow.isPending ? (
@@ -412,7 +424,7 @@ export function InteractiveTradingChart({
         </div>
       ) : null}
 
-      {sortedTrades.length ? (
+      {sortedTrades.length && viewMode === "trade" ? (
         <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
           <label className="block">
             <span className="mb-1 block text-xs text-slate-500">
@@ -497,12 +509,8 @@ export function InteractiveEquityChart({
   description: string;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const chartRef = useRef<IChartApi | null>(null);
+  const chartRef = useRef<EChartsType | null>(null);
   const [chartReady, setChartReady] = useState(false);
-  const [hoverValues, setHoverValues] = useState<{
-    time: string;
-    values: Array<{ label: string; value: number; color: string }>;
-  } | null>(null);
   const curveStats = useMemo(
     () =>
       series.map((item) => ({
@@ -515,130 +523,180 @@ export function InteractiveEquityChart({
       })),
     [series],
   );
+  const coverage = useMemo(() => {
+    const timestamps = series.flatMap((item) =>
+      item.points
+        .map((point) => Date.parse(point.t))
+        .filter(Number.isFinite),
+    );
+    if (!timestamps.length) return null;
+    return {
+      start: Math.min(...timestamps),
+      end: Math.max(...timestamps),
+    };
+  }, [series]);
   const sparse = curveStats.every((item) => item.changes <= 2);
-  const chartHeight = sparse ? 240 : 340;
+  const chartHeight = sparse ? 300 : 380;
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !series.length) return;
     setChartReady(false);
     let disposed = false;
-    let chart: IChartApi | null = null;
+    let chart: EChartsType | null = null;
     let resizeObserver: ResizeObserver | null = null;
-    void import("lightweight-charts").then(
-      ({
-        ColorType,
-        CrosshairMode,
-        LineSeries,
-        LineStyle,
-        LineType,
-        createChart,
-      }) => {
+    void import("echarts").then((echarts) => {
         if (disposed) return;
-        chart = createChart(container, {
+        const prefersReducedMotion = window.matchMedia(
+          "(prefers-reduced-motion: reduce)",
+        ).matches;
+        chart = echarts.init(container, null, {
+          renderer: "canvas",
           width: container.clientWidth,
           height: chartHeight,
-          layout: {
-            background: { type: ColorType.Solid, color: "transparent" },
-            textColor: "rgba(203,213,225,.82)",
-            attributionLogo: true,
+        });
+        const option: EChartsOption = {
+          animation: !prefersReducedMotion,
+          animationDuration: 220,
+          backgroundColor: "transparent",
+          aria: {
+            enabled: true,
+            description: `${title}，包含 ${series.length} 条资金曲线。`,
           },
           grid: {
-            vertLines: { color: "rgba(148,163,184,.08)" },
-            horzLines: { color: "rgba(148,163,184,.08)" },
+            left: 12,
+            right: 18,
+            top: 18,
+            bottom: 74,
+            containLabel: true,
           },
-          crosshair: { mode: CrosshairMode.Normal },
-          rightPriceScale: {
-            borderColor: "rgba(148,163,184,.18)",
+          tooltip: {
+            trigger: "axis",
+            confine: true,
+            backgroundColor: "rgba(5,15,22,.96)",
+            borderColor: "rgba(125,211,252,.25)",
+            textStyle: { color: "#cbd5e1", fontSize: 12 },
+            axisPointer: {
+              type: "line",
+              lineStyle: { color: "rgba(125,211,252,.45)" },
+            },
+            valueFormatter: (value) => {
+              const numeric = Array.isArray(value)
+                ? Number(value.at(-1))
+                : Number(value);
+              return Number.isFinite(numeric)
+                ? `${numeric >= 0 ? "+" : ""}${numeric.toFixed(2)}%`
+                : "—";
+            },
           },
-          timeScale: {
-            borderColor: "rgba(148,163,184,.18)",
-            timeVisible: true,
-            secondsVisible: false,
-            rightOffset: 3,
-            minBarSpacing: 1,
+          xAxis: {
+            type: "time",
+            boundaryGap: [0, 0],
+            axisLine: { lineStyle: { color: "rgba(148,163,184,.18)" } },
+            axisLabel: {
+              color: "rgba(148,163,184,.82)",
+              hideOverlap: true,
+              formatter: {
+                year: "{yyyy}年",
+                month: "{yyyy}-{MM}",
+                day: "{MM}-{dd}",
+                hour: "{MM}-{dd}\n{HH}:{mm}",
+              },
+            },
+            splitLine: {
+              show: true,
+              lineStyle: { color: "rgba(148,163,184,.07)" },
+            },
           },
-          handleScroll: {
-            mouseWheel: true,
-            pressedMouseMove: true,
-            horzTouchDrag: true,
-            vertTouchDrag: false,
+          yAxis: {
+            type: "value",
+            scale: true,
+            axisLabel: {
+              color: "rgba(148,163,184,.82)",
+              formatter: (value: number) => `${value.toFixed(2)}%`,
+            },
+            axisLine: { show: false },
+            axisTick: { show: false },
+            splitLine: {
+              lineStyle: { color: "rgba(148,163,184,.08)" },
+            },
           },
-          handleScale: {
-            axisPressedMouseMove: true,
-            mouseWheel: true,
-            pinch: true,
-          },
-          localization: {
-            locale: "zh-CN",
-            priceFormatter: (value: number) =>
-              `${((value - 1) * 100).toFixed(2)}%`,
-          },
-        });
-        const chartSeries = series.map((item, index) => {
-          const line = chart?.addSeries(LineSeries, {
-            color: item.color,
-            lineWidth: 2,
-            lineStyle:
-              index % 3 === 0
-                ? LineStyle.Solid
-                : index % 3 === 1
-                  ? LineStyle.Dashed
-                  : LineStyle.Dotted,
-            lineType: LineType.WithSteps,
-            priceLineVisible: false,
-            lastValueVisible: true,
-            title: item.label,
-          });
-          line?.setData(
-            dedupeByTime(
-              item.points.map((point) => ({
-                time: toTimestamp(point.t),
-                value: point.value,
-              })),
-            ),
-          );
-          return { definition: item, line };
-        });
-        chart.timeScale().fitContent();
-        chart.subscribeCrosshairMove((event) => {
-          if (!event.time) {
-            setHoverValues(null);
-            return;
-          }
-          const values = chartSeries.flatMap(({ definition, line }) => {
-            if (!line) return [];
-            const data = event.seriesData.get(line);
-            return data && "value" in data
-              ? [
-                  {
-                    label: definition.label,
-                    value: data.value,
-                    color: definition.color,
-                  },
-                ]
-              : [];
-          });
-          setHoverValues({
-            time: formatChartTime(event.time),
-            values,
-          });
-        });
+          dataZoom: [
+            {
+              type: "inside",
+              xAxisIndex: 0,
+              filterMode: "none",
+              zoomOnMouseWheel: true,
+              moveOnMouseMove: true,
+              moveOnMouseWheel: false,
+            },
+            {
+              type: "slider",
+              xAxisIndex: 0,
+              filterMode: "none",
+              height: 24,
+              bottom: 12,
+              borderColor: "rgba(148,163,184,.16)",
+              backgroundColor: "rgba(255,255,255,.02)",
+              fillerColor: "rgba(56,189,248,.12)",
+              dataBackground: {
+                lineStyle: { color: "rgba(125,211,252,.35)" },
+                areaStyle: { color: "rgba(56,189,248,.06)" },
+              },
+              selectedDataBackground: {
+                lineStyle: { color: "rgba(125,211,252,.7)" },
+                areaStyle: { color: "rgba(56,189,248,.12)" },
+              },
+              handleStyle: {
+                color: "#0f2532",
+                borderColor: "rgba(125,211,252,.65)",
+              },
+              textStyle: { color: "rgba(148,163,184,.8)" },
+            },
+          ],
+          series: series.map((item, index) => ({
+            id: item.id,
+            name: item.label,
+            type: "line",
+            showSymbol: false,
+            symbol: "none",
+            step: "end",
+            lineStyle: {
+              color: item.color,
+              width: 2,
+              type:
+                index % 3 === 0
+                  ? "solid"
+                  : index % 3 === 1
+                    ? "dashed"
+                    : "dotted",
+            },
+            itemStyle: { color: item.color },
+            emphasis: { focus: "series" },
+            data: item.points.map((point) => [
+              Date.parse(point.t),
+              (point.value - 1) * 100,
+            ]),
+          })),
+        };
+        chart.setOption(option);
         chartRef.current = chart;
         setChartReady(true);
         resizeObserver = new ResizeObserver(([entry]) => {
-          chart?.applyOptions({ width: Math.floor(entry.contentRect.width) });
+          chart?.resize({
+            width: Math.floor(entry.contentRect.width),
+            height: chartHeight,
+          });
         });
         resizeObserver.observe(container);
-      },
-    );
+      });
     return () => {
       disposed = true;
       resizeObserver?.disconnect();
-      chart?.remove();
+      chart?.dispose();
       chartRef.current = null;
     };
-  }, [chartHeight, series]);
+  }, [chartHeight, series, title]);
 
   return (
     <section className="rounded-xl border border-white/10 bg-black/10 p-3">
@@ -648,10 +706,20 @@ export function InteractiveEquityChart({
             {title}
           </div>
           <div className="mt-1 text-xs leading-5 text-slate-500">
-            {description} 支持滚轮、双指缩放和拖动平移。“全周期”可随时恢复完整覆盖范围。
+            {description} 底部时间滑块始终保留完整覆盖范围，可拖动两端查看任意区间。
           </div>
         </div>
-        <ChartToolbar chartRef={chartRef} disabled={!chartReady} />
+        <ChartButton
+          label="恢复完整区间"
+          disabled={!chartReady}
+          onClick={() =>
+            chartRef.current?.dispatchAction({
+              type: "dataZoom",
+              start: 0,
+              end: 100,
+            })
+          }
+        />
       </div>
       {sparse ? (
         <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
@@ -695,23 +763,19 @@ export function InteractiveEquityChart({
             {item.label}
           </span>
         ))}
+        {coverage ? (
+          <span className="text-slate-500">
+            完整数据：{formatEquityDate(coverage.start)} —{" "}
+            {formatEquityDate(coverage.end)}
+          </span>
+        ) : null}
       </div>
       <div
         ref={containerRef}
-        className="mt-2 w-full touch-pan-y"
-        style={{ minHeight: chartHeight }}
-        aria-label="多策略可缩放资金曲线"
+        className="mt-2 w-full"
+        style={{ height: chartHeight }}
+        aria-label={`${title}，可通过底部时间滑块缩放`}
       />
-      {hoverValues?.values.length ? (
-        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 rounded-lg bg-white/[0.03] px-3 py-2 text-[11px] tabular-nums text-slate-400">
-          <span>{hoverValues.time}</span>
-          {hoverValues.values.map((item) => (
-            <span key={item.label} style={{ color: item.color }}>
-              {item.label} {formatSignedPercent(item.value - 1)}
-            </span>
-          ))}
-        </div>
-      ) : null}
     </section>
   );
 }
@@ -1017,6 +1081,15 @@ function formatChartTime(time: Time) {
   return new Date(timeToUnix(time) * 1_000).toLocaleString("zh-CN", {
     timeZone: "Asia/Shanghai",
     hour12: false,
+  });
+}
+
+function formatEquityDate(timestamp: number) {
+  return new Date(timestamp).toLocaleDateString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
   });
 }
 

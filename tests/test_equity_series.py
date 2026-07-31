@@ -150,7 +150,7 @@ def test_run_bundle_equity_reader_uses_registered_bundle_not_caller_path(
     assert result["series"][0]["source_artifact_key"] == equity_key
     assert result["market_series"]["label"] == "ETH/USDT:USDT 行情"
     assert result["market_series"]["source_timeframe"] == "1h"
-    assert result["available_market_timeframes"] == ["5m", "1h"]
+    assert result["available_market_timeframes"] == ["5m", "1h", "1d"]
     assert result["market_series"]["aggregated"] is True
     assert "由1小时K线聚合" in result["market_series"]["timeframe"]
     assert len(result["market_series"]["points"]) == 50
@@ -171,7 +171,26 @@ def test_run_bundle_equity_reader_uses_registered_bundle_not_caller_path(
     )
     assert five_minute_result["market_series"]["source_timeframe"] == "5m"
     assert "由5分钟K线聚合" in five_minute_result["market_series"]["timeframe"]
-    assert five_minute_result["available_market_timeframes"] == ["5m", "1h"]
+    assert five_minute_result["available_market_timeframes"] == [
+        "5m",
+        "1h",
+        "1d",
+    ]
+
+    daily_result = RunBundleEquityReader(repository, store).read(
+        bundle_id="report_equity",
+        max_points=50,
+        market_timeframe="1d",
+    )
+    assert daily_result["market_series"]["source_timeframe"] == "1d"
+    assert daily_result["market_series"]["derived_from_timeframe"] == "1h"
+    assert daily_result["market_series"]["timeframe"] == (
+        "日线/根（由1小时K线聚合）"
+    )
+    assert daily_result["market_series"]["aggregated"] is True
+    assert len(daily_result["market_series"]["candles"]) == 5
+    assert daily_result["market_series"]["candles"][0]["open"] == 1999.0
+    assert daily_result["market_series"]["candles"][0]["high"] == 2049.0
 
     market_window = RunBundleEquityReader(
         repository,
@@ -187,6 +206,23 @@ def test_run_bundle_equity_reader_uses_registered_bundle_not_caller_path(
     assert market_window["market_series"]["aggregated"] is False
     assert market_window["market_series"]["windowed"] is True
     assert len(market_window["market_series"]["candles"]) == 360
+
+    daily_window = RunBundleEquityReader(
+        repository,
+        store,
+    ).read_market_window(
+        bundle_id="report_equity",
+        market_timeframe="1d",
+        center_time="2026-01-03T02:30:00Z",
+        bars=120,
+    )
+    assert daily_window["available"] is True
+    assert daily_window["market_series"]["timeframe"] == (
+        "日线/根（由1小时K线聚合）"
+    )
+    assert daily_window["market_series"]["derived_from_timeframe"] == "1h"
+    assert daily_window["market_series"]["windowed"] is True
+    assert len(daily_window["market_series"]["candles"]) == 5
 
 
 def test_run_bundle_equity_reader_reports_missing_curve_without_fabrication(
@@ -285,3 +321,9 @@ def test_run_bundle_chart_api_returns_explicit_unavailable(tmp_path: Path) -> No
     assert response.status_code == 200
     assert response.json()["available"] is False
     assert response.json()["series"] == []
+
+    daily_response = TestClient(app).get(
+        "/api/run-bundles/report_api_chart/chart-series",
+        params={"market_timeframe": "1d"},
+    )
+    assert daily_response.status_code == 200

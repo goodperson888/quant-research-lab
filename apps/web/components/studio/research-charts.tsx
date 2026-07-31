@@ -40,6 +40,8 @@ export function PerformanceCharts({
         apiFetch<RunBundleChart>(
           `/api/run-bundles/${encodeURIComponent(bundle.bundle_id)}/chart-series?max_points=2000&market_timeframe=${encodeURIComponent(marketTimeframe)}`,
         ),
+      placeholderData: (previousData: RunBundleChart | undefined) =>
+        previousData,
       retry: false,
     })),
   });
@@ -54,24 +56,17 @@ export function PerformanceCharts({
         ]
       : [],
   );
-  const selectedChartEntry =
-    availableCharts.find(
-      (item) => item.bundle?.bundle_id === selectedBundleId,
-    ) ??
-    availableCharts.find(
-      (item) => item.chart.market_series && item.chart.trades.length,
-    ) ??
-    availableCharts[0];
-  const chart = selectedChartEntry?.chart;
-  const selectedBundle = selectedChartEntry?.bundle;
-  const availableMarketTimeframes =
-    chart?.available_market_timeframes ?? [];
   const isLoading = chartQueries.some((query) => query.isPending);
   const unavailableReason = chartQueries
     .map((query) => query.data?.reason)
     .find(Boolean);
-  const allSeries = chartQueries
-    .flatMap((query) => (query.data?.available ? query.data.series : []))
+  const allSeries = availableCharts
+    .flatMap((item) =>
+      item.chart.series.map((seriesItem) => ({
+        ...seriesItem,
+        bundleId: item.bundle?.bundle_id ?? item.chart.bundle_id,
+      })),
+    )
     .slice(0, 6);
   const [visible, setVisible] = useState<Record<string, boolean>>({});
   const coloredSeries = allSeries.map((item, index) => ({
@@ -90,6 +85,21 @@ export function PerformanceCharts({
     coloredSeries[0];
   const selectedIsFullPeriodOverview =
     selectedEquitySeries?.kind === "derived_full_period_overview";
+  const activeBundleId =
+    selectedBundleId ?? selectedEquitySeries?.bundleId ?? null;
+  const selectedChartEntry =
+    availableCharts.find(
+      (item) =>
+        (item.bundle?.bundle_id ?? item.chart.bundle_id) === activeBundleId,
+    ) ??
+    availableCharts.find(
+      (item) => item.chart.market_series && item.chart.trades.length,
+    ) ??
+    availableCharts[0];
+  const chart = selectedChartEntry?.chart;
+  const selectedBundle = selectedChartEntry?.bundle;
+  const availableMarketTimeframes =
+    chart?.available_market_timeframes ?? [];
   const series = comparableEquitySeries
     ? coloredSeries.filter((item) => visible[item.series_id] !== false)
     : selectedEquitySeries
@@ -110,49 +120,42 @@ export function PerformanceCharts({
             <ComparableCurveControls
               series={coloredSeries}
               visible={visible}
-              onChange={(seriesId, checked) =>
+              onChange={(seriesId, checked) => {
                 setVisible((current) => ({
                   ...current,
                   [seriesId]: checked,
-                }))
-              }
+                }));
+                if (checked) {
+                  setSelectedBundleId(
+                    coloredSeries.find(
+                      (item) => item.series_id === seriesId,
+                    )?.bundleId ?? null,
+                  );
+                }
+              }}
             />
           ) : (
             <SeparateCurveControls
               series={coloredSeries}
               selectedId={selectedEquitySeries?.series_id ?? null}
-              onChange={setSelectedEquitySeriesId}
+              onChange={(seriesId) => {
+                setSelectedEquitySeriesId(seriesId);
+                setSelectedBundleId(
+                  coloredSeries.find(
+                    (item) => item.series_id === seriesId,
+                  )?.bundleId ?? null,
+                );
+              }}
             />
           )}
+          <div className="text-[11px] leading-5 text-slate-500">
+            下方行情、成交量和交易点会自动跟随当前选中的资金曲线，不需要再次选择同一份回测结果。
+          </div>
           {trialCount ? (
             <div className="rounded-lg border border-amber-300/15 bg-amber-300/[0.05] px-3 py-2 text-xs leading-5 text-amber-100/80">
               当前 {trialCount} 个参数方案只保留了指标，没有保留逐时点资金曲线；
               因此这里不会伪造“多参数资金线”。当前图只展示实际保存的运行结果。
             </div>
-          ) : null}
-          {availableCharts.length > 1 ? (
-            <label className="block max-w-xl">
-              <span className="mb-1 block text-xs text-slate-500">
-                行情交易图当前策略
-              </span>
-              <select
-                value={selectedBundle?.bundle_id ?? ""}
-                onChange={(event) => setSelectedBundleId(event.target.value)}
-                className="min-h-11 w-full rounded-xl border border-white/10 bg-[#071017] px-3 text-sm text-slate-200"
-              >
-                {availableCharts.map((item) => (
-                  <option
-                    key={item.bundle?.bundle_id ?? item.chart.bundle_id}
-                    value={item.bundle?.bundle_id ?? item.chart.bundle_id}
-                  >
-                    {item.chart.series.map((entry) => entry.label).join(" / ")}
-                  </option>
-                ))}
-              </select>
-              <span className="mt-1 block text-[11px] leading-5 text-slate-500">
-                资金曲线按可比区间展示；买卖点只显示当前选中的运行结果，避免互相覆盖。
-              </span>
-            </label>
           ) : null}
           {availableMarketTimeframes.length ? (
             <MarketTimeframeSelector
@@ -165,7 +168,11 @@ export function PerformanceCharts({
             <InteractiveTradingChart
               market={chart.market_series}
               trades={chart.trades}
-              strategyLabel={chart.series.map((item) => item.label).join(" / ")}
+              strategyLabel={
+                selectedEquitySeries?.label ??
+                chart.series[0]?.label ??
+                "当前回测"
+              }
               bundleId={chart.bundle_id}
               marketTimeframe={marketTimeframe}
             />
@@ -181,7 +188,7 @@ export function PerformanceCharts({
                 comparableEquitySeries && series.length > 1
                   ? "同区间策略资金曲线对比"
                   : selectedIsFullPeriodOverview
-                    ? "全周期资金曲线概览"
+                    ? "完整研究周期资金曲线"
                   : "单条资金曲线"
               }
               description={
@@ -292,7 +299,7 @@ function SeparateCurveControls({
   return (
     <div>
       <div className="mb-2 text-xs leading-5 text-slate-500">
-        这些结果覆盖不同日期，逐条查看更准确
+        选择一个真实运行结果；不同日期的曲线不叠加，避免误读
       </div>
       <div
         className="flex max-w-full gap-2 overflow-x-auto pb-1"
@@ -347,7 +354,7 @@ function MarketTimeframeSelector({
         <div>
           <div className="text-sm font-medium text-slate-200">行情K线周期</div>
           <div className="mt-1 text-xs leading-5 text-slate-500">
-            切换本次回测已登记的行情数据；交易时间与价格不会改变。
+            日线由本次回测登记的小时线按 UTC 自然日确定性聚合；切换周期不会改变交易时间与成交价格。
           </div>
         </div>
         <div
@@ -840,6 +847,7 @@ function timeframeLabel(value: string) {
     "15m": "15分钟",
     "1h": "1小时",
     "4h": "4小时",
+    "1d": "日线",
   }[value] ?? value;
 }
 

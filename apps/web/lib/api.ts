@@ -614,6 +614,7 @@ export type MarketChartSeries = {
   unit: "quote_price";
   timeframe: string;
   source_timeframe: string;
+  derived_from_timeframe?: string | null;
   aggregated: boolean;
   windowed?: boolean;
   points: Array<{

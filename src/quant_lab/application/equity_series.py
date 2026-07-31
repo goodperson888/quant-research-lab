@@ -12,6 +12,10 @@ from quant_lab.domain.errors import NotFoundError
 from quant_lab.domain.repositories import ProductRepository
 
 
+SUPPORTED_MARKET_TIMEFRAMES = {"5m", "15m", "1h", "4h", "1d"}
+STORED_MARKET_TIMEFRAMES = {"5m", "15m", "1h", "4h", "1d"}
+
+
 class RunBundleEquityReader:
     """Read registered equity artifacts without accepting caller-supplied paths."""
 
@@ -30,8 +34,10 @@ class RunBundleEquityReader:
     ) -> dict[str, Any]:
         if not 50 <= max_points <= 2_000:
             raise ValueError("max_points must be between 50 and 2000")
-        if market_timeframe not in {"5m", "15m", "1h", "4h"}:
-            raise ValueError("market_timeframe must be one of 5m, 15m, 1h, 4h")
+        if market_timeframe not in SUPPORTED_MARKET_TIMEFRAMES:
+            raise ValueError(
+                "market_timeframe must be one of 5m, 15m, 1h, 4h, 1d"
+            )
         report = next(
             (item for item in self.repository.list_reports() if item.id == bundle_id),
             None,
@@ -143,7 +149,13 @@ class RunBundleEquityReader:
                 f"{_timeframe_name(market_series['source_timeframe'])} "
                 "ETHUSDT 永续 OHLCV。"
             )
-            if market_series["aggregated"]:
+            if market_series.get("derived_from_timeframe"):
+                limitations.append(
+                    "日线由本次运行登记的 "
+                    f"{_timeframe_name(market_series['derived_from_timeframe'])} "
+                    "OHLCV 按 UTC 自然日确定性聚合。"
+                )
+            elif market_series["aggregated"]:
                 limitations.append(
                     "为了控制浏览器负载，展示K线由所选原始周期确定性聚合；"
                     "开高低收和成交量均按K线规则合并。"
@@ -172,8 +184,10 @@ class RunBundleEquityReader:
         center_time: str,
         bars: int = 360,
     ) -> dict[str, Any]:
-        if market_timeframe not in {"5m", "15m", "1h", "4h"}:
-            raise ValueError("market_timeframe must be one of 5m, 15m, 1h, 4h")
+        if market_timeframe not in SUPPORTED_MARKET_TIMEFRAMES:
+            raise ValueError(
+                "market_timeframe must be one of 5m, 15m, 1h, 4h, 1d"
+            )
         if not 120 <= bars <= 800:
             raise ValueError("bars must be between 120 and 800")
         report = next(
@@ -207,15 +221,9 @@ class RunBundleEquityReader:
                 "本次运行没有可读取的数据清单。",
             )
         market_manifest = json.loads(self.artifacts.get(data_manifest_key))
-        dataset = next(
-            (
-                item
-                for item in market_manifest.get("processed_datasets", [])
-                if isinstance(item, dict)
-                and item.get("dataset") == "futures_ohlcv"
-                and item.get("timeframe") == market_timeframe
-            ),
-            None,
+        dataset, dataset_timeframe = _select_market_dataset(
+            market_manifest,
+            requested_timeframe=market_timeframe,
         )
         if dataset is None:
             return self._unavailable_market_window(
@@ -284,6 +292,13 @@ class RunBundleEquityReader:
                 bundle_id,
                 "局部行情文件存在，但没有有效 OHLC。",
             )
+        if market_timeframe == "1d" and dataset_timeframe != "1d":
+            combined = _resample_ohlcv_daily(combined)
+            if combined.empty:
+                return self._unavailable_market_window(
+                    bundle_id,
+                    "小时行情存在，但无法聚合出有效日线。",
+                )
         timestamps = combined["timestamp"].astype("int64").to_numpy()
         center_ns = center.value
         center_index = int(np.searchsorted(timestamps, center_ns, side="left"))
@@ -307,9 +322,18 @@ class RunBundleEquityReader:
                 combined=combined,
                 source_keys=source_keys,
                 source_timeframe=market_timeframe,
-                display_timeframe=f"{_timeframe_name(market_timeframe)}/根",
-                aggregated=False,
+                display_timeframe=(
+                    f"日线/根（由{_timeframe_name(dataset_timeframe)}K线聚合）"
+                    if market_timeframe == "1d" and dataset_timeframe != "1d"
+                    else f"{_timeframe_name(market_timeframe)}/根"
+                ),
+                aggregated=dataset_timeframe != market_timeframe,
                 windowed=True,
+                derived_from_timeframe=(
+                    dataset_timeframe
+                    if dataset_timeframe != market_timeframe
+                    else None
+                ),
             ),
             "reason": None,
         }
@@ -337,15 +361,9 @@ class RunBundleEquityReader:
             return None, "行情数据清单无法读取。"
 
         available_timeframes = self._available_market_timeframes(manifest)
-        dataset = next(
-            (
-                item
-                for item in market_manifest.get("processed_datasets", [])
-                if isinstance(item, dict)
-                and item.get("dataset") == "futures_ohlcv"
-                and item.get("timeframe") == market_timeframe
-            ),
-            None,
+        dataset, dataset_timeframe = _select_market_dataset(
+            market_manifest,
+            requested_timeframe=market_timeframe,
         )
         if dataset is None:
             return (
@@ -411,13 +429,25 @@ class RunBundleEquityReader:
         )
         if combined.empty:
             return None, "ETH 行情文件存在，但没有有效 OHLC。"
+        if market_timeframe == "1d" and dataset_timeframe != "1d":
+            combined = _resample_ohlcv_daily(combined)
+            if combined.empty:
+                return None, "小时行情存在，但无法聚合出有效日线。"
         source_point_count = len(combined)
         combined = _downsample_ohlcv(combined, max_points=max_points)
-        aggregated = len(combined) < source_point_count
-        display_timeframe = _display_timeframe(
-            source_timeframe=market_timeframe,
-            source_point_count=source_point_count,
-            display_point_count=len(combined),
+        browser_aggregated = len(combined) < source_point_count
+        derived_daily = (
+            market_timeframe == "1d" and dataset_timeframe != market_timeframe
+        )
+        aggregated = browser_aggregated or derived_daily
+        display_timeframe = (
+            f"日线/根（由{_timeframe_name(dataset_timeframe)}K线聚合）"
+            if derived_daily
+            else _display_timeframe(
+                source_timeframe=market_timeframe,
+                source_point_count=source_point_count,
+                display_point_count=len(combined),
+            )
         )
 
         symbol = market_manifest.get("symbol", {})
@@ -435,6 +465,9 @@ class RunBundleEquityReader:
             display_timeframe=display_timeframe,
             aggregated=aggregated,
             windowed=False,
+            derived_from_timeframe=(
+                dataset_timeframe if derived_daily else None
+            ),
         )
         serialized["available_timeframes"] = available_timeframes
         return serialized, None
@@ -450,6 +483,7 @@ class RunBundleEquityReader:
         display_timeframe: str,
         aggregated: bool,
         windowed: bool,
+        derived_from_timeframe: str | None = None,
     ) -> dict[str, Any]:
         return {
             "series_id": f"{bundle_id}:market",
@@ -458,6 +492,7 @@ class RunBundleEquityReader:
             "unit": "quote_price",
             "timeframe": display_timeframe,
             "source_timeframe": source_timeframe,
+            "derived_from_timeframe": derived_from_timeframe,
             "aggregated": aggregated,
             "windowed": windowed,
             "points": [
@@ -518,9 +553,11 @@ class RunBundleEquityReader:
             for item in market_manifest.get("processed_datasets", [])
             if isinstance(item, dict)
             and item.get("dataset") == "futures_ohlcv"
-            and item.get("timeframe") in {"5m", "15m", "1h", "4h"}
+            and item.get("timeframe") in STORED_MARKET_TIMEFRAMES
         }
-        order = {"5m": 0, "15m": 1, "1h": 2, "4h": 3}
+        if available & {"5m", "15m", "1h", "4h"}:
+            available.add("1d")
+        order = {"5m": 0, "15m": 1, "1h": 2, "4h": 3, "1d": 4}
         return sorted(available, key=order.__getitem__)
 
     def _read_trades(
@@ -572,13 +609,68 @@ class RunBundleEquityReader:
         }
 
 
+def _select_market_dataset(
+    market_manifest: dict[str, Any],
+    *,
+    requested_timeframe: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    datasets = [
+        item
+        for item in market_manifest.get("processed_datasets", [])
+        if isinstance(item, dict)
+        and item.get("dataset") == "futures_ohlcv"
+        and item.get("timeframe") in STORED_MARKET_TIMEFRAMES
+    ]
+    preferred_timeframes = (
+        ("1d", "1h", "4h", "15m", "5m")
+        if requested_timeframe == "1d"
+        else (requested_timeframe,)
+    )
+    for timeframe in preferred_timeframes:
+        dataset = next(
+            (item for item in datasets if item.get("timeframe") == timeframe),
+            None,
+        )
+        if dataset is not None:
+            return dataset, timeframe
+    return None, None
+
+
+def _resample_ohlcv_daily(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    working = frame.copy().sort_values("timestamp")
+    aggregations: dict[str, str] = {
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+    }
+    if "volume" in working:
+        aggregations["volume"] = "sum"
+    daily = (
+        working.set_index("timestamp")
+        .resample("1D", label="left", closed="left")
+        .agg(aggregations)
+        .dropna(subset=["open", "high", "low", "close"])
+        .reset_index()
+    )
+    return daily
+
+
 def _display_timeframe(
     *,
     source_timeframe: str,
     source_point_count: int,
     display_point_count: int,
 ) -> str:
-    source_minutes = {"5m": 5, "15m": 15, "1h": 60, "4h": 240}[source_timeframe]
+    source_minutes = {
+        "5m": 5,
+        "15m": 15,
+        "1h": 60,
+        "4h": 240,
+        "1d": 1_440,
+    }[source_timeframe]
     if display_point_count >= source_point_count:
         return f"{_timeframe_name(source_timeframe)}/根"
     display_minutes = (
@@ -600,6 +692,7 @@ def _timeframe_name(timeframe: str) -> str:
         "15m": "15分钟",
         "1h": "1小时",
         "4h": "4小时",
+        "1d": "日线",
     }[timeframe]
 
 
@@ -609,6 +702,7 @@ def _timeframe_delta(timeframe: str) -> str:
         "15m": "15min",
         "1h": "1h",
         "4h": "4h",
+        "1d": "1D",
     }[timeframe]
 
 
@@ -677,7 +771,7 @@ def _series_label(report_type: str, split: str, index: int) -> str:
         "validation": "验证",
         "smoke": "试跑区间",
         "full": "全区间",
-        "full_overview": "全周期概览",
+        "full_overview": "完整区间",
     }.get(split, split)
     suffix = f" {index + 1}" if index else ""
     return f"{report_label}{suffix} · {split_label}"

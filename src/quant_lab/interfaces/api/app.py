@@ -1073,7 +1073,7 @@ def create_app(
         max_points: int = Query(default=800, ge=50, le=2_000),
         market_timeframe: str = Query(
             default="1h",
-            pattern="^(5m|15m|1h|4h)$",
+            pattern="^(5m|15m|1h|4h|1d)$",
         ),
     ) -> dict[str, Any]:
         return equity_reader.read(
@@ -1091,7 +1091,7 @@ def create_app(
         center_time: str = Query(min_length=10),
         market_timeframe: str = Query(
             default="1h",
-            pattern="^(5m|15m|1h|4h)$",
+            pattern="^(5m|15m|1h|4h|1d)$",
         ),
         bars: int = Query(default=360, ge=120, le=800),
     ) -> dict[str, Any]:
