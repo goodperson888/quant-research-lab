@@ -43,6 +43,7 @@ from quant_lab.domain.errors import (
     NotFoundError,
     ProviderNotConfiguredError,
 )
+from quant_lab.domain.licensing import LicenseValidationError
 from quant_lab.domain.models import (
     AgentProviderKind,
     AssistantEntryMode,
@@ -51,6 +52,7 @@ from quant_lab.domain.models import (
 )
 from quant_lab.domain.models import Constraint, Objective, ParameterSpace
 from quant_lab.infrastructure.llm import InMemoryOpenAICompatibleProvider
+from quant_lab.infrastructure.offline_licensing import OfflineLicenseService
 from quant_lab.infrastructure.execution_models import ExecutionModelCatalog
 from quant_lab.infrastructure.backtest_engines import (
     FreqtradeBacktestEngineAdapter,
@@ -127,7 +129,9 @@ from .schemas import (
     StartResearchAuthorizationRequest,
     ResearchModeDefinitionResponse,
     ImprovementDirectionResponse,
+    ImportLicenseRequest,
     LaunchImprovementBatchRequest,
+    LicenseStatusResponse,
     ProposalTransitionRequest,
     ProposalBudgetRequest,
     SessionAgentOccupancyResponse,
@@ -413,7 +417,10 @@ def connector_status(root: Path) -> dict[str, Any]:
 
 
 def create_app(
-    *, root: Path | None = None, database_path: Path | None = None
+    *,
+    root: Path | None = None,
+    database_path: Path | None = None,
+    license_service: OfflineLicenseService | None = None,
 ) -> FastAPI:
     resolved_root = (root or project_root()).resolve()
     resolved_database = (database_path or app_database_path()).resolve()
@@ -463,6 +470,9 @@ def create_app(
             FreqtradeBacktestEngineAdapter(),
         )
     )
+    commercial_license = license_service or OfflineLicenseService.from_environment(
+        resolved_root
+    )
 
     application = FastAPI(
         title="Quant Research Lab API",
@@ -472,6 +482,36 @@ def create_app(
             "credential, or automatic production-promotion endpoint."
         ),
     )
+    application.state.repository = repository
+    application.state.research_service = service
+    application.state.pipeline_service = pipeline_service
+    application.state.research_authorization_service = authorization_service
+    application.state.guided_research_service = guided_service
+    application.state.llm_provider = provider
+    application.state.commercial_license = commercial_license
+    provider_dispatcher = WebProviderDispatcher(service, provider)
+    application.state.provider_dispatcher = provider_dispatcher
+
+    @application.middleware("http")
+    async def commercial_license_gate(
+        request: Request, call_next: Any
+    ) -> Any:
+        if request.method in {"GET", "HEAD", "OPTIONS"}:
+            return await call_next(request)
+        if request.url.path == "/api/license/import":
+            return await call_next(request)
+        current = commercial_license.status()
+        if current.write_allowed:
+            return await call_next(request)
+        return JSONResponse(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            content={
+                "detail": current.message,
+                "code": current.state,
+                "license_status": current.as_dict(),
+            },
+        )
+
     application.add_middleware(
         CORSMiddleware,
         allow_origins=LOCAL_ORIGINS,
@@ -479,14 +519,6 @@ def create_app(
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Content-Type"],
     )
-    application.state.repository = repository
-    application.state.research_service = service
-    application.state.pipeline_service = pipeline_service
-    application.state.research_authorization_service = authorization_service
-    application.state.guided_research_service = guided_service
-    application.state.llm_provider = provider
-    provider_dispatcher = WebProviderDispatcher(service, provider)
-    application.state.provider_dispatcher = provider_dispatcher
 
     @application.exception_handler(NotFoundError)
     async def handle_not_found(_request: Request, exc: NotFoundError) -> JSONResponse:
@@ -511,6 +543,15 @@ def create_app(
         _request: Request, exc: ProviderNotConfiguredError
     ) -> JSONResponse:
         return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+    @application.exception_handler(LicenseValidationError)
+    async def handle_license_validation(
+        _request: Request, exc: LicenseValidationError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": str(exc), "code": exc.code},
+        )
 
     @application.exception_handler(ExperimentPlanValidationError)
     async def handle_invalid_plan(
@@ -551,6 +592,22 @@ def create_app(
     def project_status() -> dict[str, Any]:
         provider_status = asdict(provider.status())
         return project_reader.read(provider_status=provider_status)
+
+    @application.get(
+        "/api/license/status",
+        response_model=LicenseStatusResponse,
+        tags=["commercial-license"],
+    )
+    def commercial_license_status() -> Any:
+        return commercial_license.status()
+
+    @application.post(
+        "/api/license/import",
+        response_model=LicenseStatusResponse,
+        tags=["commercial-license"],
+    )
+    def import_commercial_license(body: ImportLicenseRequest) -> Any:
+        return commercial_license.import_license(body.license_document)
 
     @application.get(
         "/api/research-modes",
@@ -1149,6 +1206,7 @@ def create_app(
             versioning = {"available": False, "reason": str(exc)}
         return {
             "ai_provider": asdict(provider.status()),
+            "commercial_license": commercial_license.status().as_dict(),
             "api_bind_default": "127.0.0.1",
             "live_trading_enabled": False,
             "credentials_api_available": False,

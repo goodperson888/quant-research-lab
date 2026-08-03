@@ -1,0 +1,78 @@
+name: Build commercial macOS package
+
+# Commercial packages are intentionally manual-only. Pushes, pull requests and
+# version tags never start this expensive native build.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version, for example 0.1.0-beta.1
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: commercial-macos-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-macos:
+    runs-on: macos-14
+    timeout-minutes: 90
+    env:
+      PUBLIC_KEY_B64: ${{ secrets.QUANT_LAB_LICENSE_PUBLIC_KEY_B64 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.10.0"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install locked build dependencies
+        run: uv sync --extra research --extra packaging
+
+      - name: Materialize public verification key
+        run: |
+          if [[ -z "$PUBLIC_KEY_B64" ]]; then
+            echo "Missing repository secret QUANT_LAB_LICENSE_PUBLIC_KEY_B64" >&2
+            exit 1
+          fi
+          python - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          Path("/tmp/quant-lab-public-key.pem").write_bytes(
+              base64.b64decode(os.environ["PUBLIC_KEY_B64"], validate=True)
+          )
+          PY
+
+      - name: Build signed-local commercial package
+        run: |
+          uv run --extra research --extra packaging \
+            python scripts/build_commercial_macos.py \
+            --public-key /tmp/quant-lab-public-key.pem \
+            --version "${{ inputs.version }}"
+
+      - name: Upload customer package
+        uses: actions/upload-artifact@v4
+        with:
+          name: quant-research-lab-macos-${{ inputs.version }}
+          path: |
+            dist/commercial/*.dmg
+            dist/commercial/*.zip
+            dist/commercial/*.sha256
+          if-no-files-found: error
+          retention-days: 7

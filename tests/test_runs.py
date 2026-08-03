@@ -24,3 +24,28 @@ def test_run_manifest_contains_reproducibility_fields(tmp_path: Path) -> None:
     assert "cost_model" in manifest
     assert "time_splits" in manifest
     assert "outputs" in manifest
+
+
+def test_run_manifest_uses_commercial_build_identity(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "product-build.json").write_text(
+        json.dumps(
+            {
+                "version": "0.1.0",
+                "git_revision": "abc123",
+                "architecture": "arm64",
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = create_run(
+        tmp_path,
+        tmp_path / "factor_library" / "registry.sqlite3",
+        "commercial-smoke",
+    )
+
+    manifest = json.loads(
+        (Path(result["run_dir"]) / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["code_version"] == "commercial:0.1.0:abc123:arm64"

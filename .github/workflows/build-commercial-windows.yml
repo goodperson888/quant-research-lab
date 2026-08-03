@@ -1,0 +1,84 @@
+name: Build commercial Windows package
+
+# Commercial packages are intentionally manual-only. Pushes, pull requests and
+# version tags never start this expensive native build.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version, for example 0.1.0-beta.1
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: commercial-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    env:
+      PUBLIC_KEY_B64: ${{ secrets.QUANT_LAB_LICENSE_PUBLIC_KEY_B64 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.10.0"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install locked build dependencies
+        run: uv sync --extra research --extra packaging --extra test
+
+      - name: Materialize public verification key
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PUBLIC_KEY_B64)) {
+            throw "Missing repository secret QUANT_LAB_LICENSE_PUBLIC_KEY_B64"
+          }
+          $keyPath = Join-Path $env:RUNNER_TEMP "quant-lab-public-key.pem"
+          [IO.File]::WriteAllBytes(
+            $keyPath,
+            [Convert]::FromBase64String($env:PUBLIC_KEY_B64)
+          )
+          "QUANT_LAB_PUBLIC_KEY_PATH=$keyPath" >> $env:GITHUB_ENV
+
+      - name: Verify commercial licensing and runtime
+        run: >
+          uv run --extra research --extra packaging --extra test
+          pytest -q
+          tests/test_commercial_licensing.py
+          tests/test_commercial_runtime.py
+          tests/test_runs.py
+
+      - name: Build unsigned commercial package
+        shell: pwsh
+        run: |
+          uv run --extra research --extra packaging `
+            python scripts/build_commercial_windows.py `
+            --public-key "$env:QUANT_LAB_PUBLIC_KEY_PATH" `
+            --version "${{ inputs.version }}"
+
+      - name: Upload customer package
+        uses: actions/upload-artifact@v4
+        with:
+          name: quant-research-lab-windows-${{ inputs.version }}
+          path: |
+            dist/commercial/*-setup.exe
+            dist/commercial/*.zip
+            dist/commercial/*.sha256
+          if-no-files-found: error
+          retention-days: 7

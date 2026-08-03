@@ -137,6 +137,30 @@ class ProviderStatusResponse(StrictModel):
     model: str | None
 
 
+class ImportLicenseRequest(StrictModel):
+    license_document: str = Field(min_length=2, max_length=100_000)
+
+
+class LicenseStatusResponse(StrictModel):
+    enforcement_mode: Literal["development_disabled", "commercial_required"]
+    state: str
+    message: str
+    read_allowed: bool
+    export_allowed: bool
+    write_allowed: bool
+    device_code: str
+    public_key_configured: bool
+    license_present: bool
+    license_id: str | None
+    customer_id: str | None
+    plan: str | None
+    features: list[str]
+    issued_at: str | None
+    not_before: str | None
+    expires_at: str | None
+    days_remaining: int | None
+
+
 class FormalizeStrategyRequest(StrictModel):
     subject_id: str = Field(min_length=1)
     confirmed_by_user: bool

@@ -837,6 +837,12 @@ wheels = [
 ]
 
 [[package]]
+name = "nuitka"
+version = "4.1.3"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/3f/d8/bdb7febea4b4fe5d3d6fe2610f946771f03e792e05a5e8ec00b62c00b265/nuitka-4.1.3.tar.gz", hash = "sha256:838ff8899dc2f0b652d4fcf6c5d7466cb7ad5abcb005668ac622d1e40f4d8a8d", size = 4565475, upload-time = "2026-06-21T10:48:04.369Z" }
+
+[[package]]
 name = "numpy"
 version = "2.5.1"
 source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
@@ -1242,6 +1248,7 @@ name = "quant-research-lab"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "pydantic" },
     { name = "uvicorn" },
@@ -1250,6 +1257,9 @@ dependencies = [
 [package.optional-dependencies]
 freqtrade = [
     { name = "freqtrade" },
+]
+packaging = [
+    { name = "nuitka" },
 ]
 research = [
     { name = "ccxt" },
@@ -1269,10 +1279,12 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "ccxt", marker = "extra == 'research'", specifier = "==4.5.67" },
+    { name = "cryptography", specifier = "==49.0.0" },
     { name = "duckdb", marker = "extra == 'research'", specifier = "==1.5.4" },
     { name = "fastapi", specifier = "==0.139.2" },
     { name = "freqtrade", marker = "extra == 'freqtrade'", specifier = "==2026.6" },
     { name = "httpx", marker = "extra == 'test'", specifier = "==0.28.1" },
+    { name = "nuitka", marker = "extra == 'packaging'", specifier = "==4.1.3" },
     { name = "numpy", marker = "extra == 'research'", specifier = ">=2.0,<3.0" },
     { name = "pandas", marker = "extra == 'research'", specifier = ">=2.2,<4.0" },
     { name = "pyarrow", marker = "extra == 'research'", specifier = "==25.0.0" },
@@ -1283,7 +1295,7 @@ requires-dist = [
     { name = "quantstats", marker = "extra == 'research'", specifier = "==0.0.81" },
     { name = "uvicorn", specifier = "==0.51.0" },
 ]
-provides-extras = ["research", "test", "freqtrade"]
+provides-extras = ["research", "test", "packaging", "freqtrade"]
 
 [[package]]
 name = "quantstats"

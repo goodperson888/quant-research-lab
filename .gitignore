@@ -17,6 +17,8 @@ runtime/app/*.sqlite3-*
 runtime/app/*.db
 runtime/app/*.db-*
 runtime/app/logs/
+runtime/app/*.qllicense
+runtime/app/commercial-license-state.json
 runtime/dev/
 runtime/agent-connector/
 runtime/agent-runs/
@@ -72,3 +74,11 @@ runtime/freqtrade/user_data/data/
 
 # Registry is local state; export snapshots before committing
 factor_library/registry.sqlite3
+
+# Commercial licensing secrets and customer-specific files
+*.license-private.pem
+*.qllicense
+license-admin/
+
+# Generated commercial installers and compiler output
+dist/commercial/

@@ -29,6 +29,7 @@ from quant_lab.infrastructure.sqlite_product_repository import SQLiteProductRepo
 from quant_lab.infrastructure.loss_attribution_report import (
     TrainingLossAttributionReportGenerator,
 )
+from quant_lab.infrastructure.offline_licensing import OfflineLicenseService
 from quant_lab.infrastructure.trade_reconciliation_report import (
     TradeReconciliationReportGenerator,
 )
@@ -37,6 +38,7 @@ from quant_lab.registry import initialize, list_factors, register_factor
 from quant_lab.runs import create_run
 
 from .governance_commands import add_governance_parsers, handle_governance_command
+from .licensing_commands import add_licensing_parsers, handle_licensing_command
 from .storage_commands import add_storage_parsers, handle_storage_command
 
 
@@ -49,6 +51,7 @@ def _installed_versions() -> dict[str, str | None]:
         "duckdb",
         "PyYAML",
         "ccxt",
+        "cryptography",
         "quantstats",
         "freqtrade",
         "fastapi",
@@ -67,6 +70,9 @@ def _installed_versions() -> dict[str, str | None]:
 def command_doctor() -> int:
     root = project_root()
     storage = StorageReporter(root).read()
+    commercial_license = OfflineLicenseService.from_environment(root).status(
+        update_clock_state=False
+    )
     uv_path = shutil.which("uv")
     managed_uv = root / ".tools" / "bin" / "uv"
     if not uv_path and managed_uv.is_file():
@@ -99,6 +105,7 @@ def command_doctor() -> int:
         },
         "live_trading_enabled": False,
         "ai_provider_configured": False,
+        "commercial_license": commercial_license.as_dict(),
     }
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if not report["python_supported_for_project"]:
@@ -1075,6 +1082,7 @@ def build_parser() -> argparse.ArgumentParser:
     reject_candidate.add_argument("--version-id", required=True)
     reject_candidate.add_argument("--stress-manifest", required=True)
     reject_candidate.add_argument("--confirmed-by-user", action="store_true")
+    add_licensing_parsers(subparsers)
     add_storage_parsers(subparsers)
     add_governance_parsers(subparsers)
     return parser
@@ -1083,6 +1091,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     modular_result = handle_storage_command(args, root=project_root())
+    if modular_result is not None:
+        return modular_result
+    modular_result = handle_licensing_command(args, root=project_root())
     if modular_result is not None:
         return modular_result
     modular_result = handle_governance_command(

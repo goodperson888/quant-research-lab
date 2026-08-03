@@ -20,6 +20,26 @@ export type ProjectStatus = {
   };
 };
 
+export type CommercialLicenseStatus = {
+  enforcement_mode: "development_disabled" | "commercial_required";
+  state: string;
+  message: string;
+  read_allowed: boolean;
+  export_allowed: boolean;
+  write_allowed: boolean;
+  device_code: string;
+  public_key_configured: boolean;
+  license_present: boolean;
+  license_id: string | null;
+  customer_id: string | null;
+  plan: string | null;
+  features: string[];
+  issued_at: string | null;
+  not_before: string | null;
+  expires_at: string | null;
+  days_remaining: number | null;
+};
+
 export type AgentStatus = {
   architecture: string;
   default_run_mode: string;

@@ -25,6 +25,19 @@ def _git_revision(root: Path) -> str:
 
 
 def _source_tree_digest(root: Path) -> str:
+    commercial_build = root / "runtime" / "product-build.json"
+    if commercial_build.is_file():
+        try:
+            payload = json.loads(commercial_build.read_text(encoding="utf-8"))
+            version = str(payload["version"])
+            revision = str(payload["git_revision"])
+            architecture = str(payload["architecture"])
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            pass
+        else:
+            return (
+                f"commercial:{version}:{revision}:{architecture}"
+            )
     paths = []
     for relative in ("src", "strategies", "scripts"):
         directory = root / relative

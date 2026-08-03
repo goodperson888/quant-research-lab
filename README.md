@@ -25,6 +25,8 @@
 - [批量策略研究闭环](docs/25-批量策略研究闭环.md)：查看 Proposal、批量 Trial、稳定区间、组件证据和恢复语义。
 - [流畅研究授权与失败诊断](docs/26-流畅研究授权与失败诊断.md)：查看一次授权到 Viability、失败归因、Regime screening 和组件假设分流。
 - [保守交易执行模型 v1](docs/27-保守交易执行模型-v1.md)：查看永续精度、成交、保证金、mark 强平、funding 和高杠杆研究边界。
+- [离线商业授权与人工收费](docs/29-离线商业授权与人工收费.md)：查看人工转账、离线签名许可证、设备绑定、续费和商业门禁。
+- [商业安装包构建与发行](docs/30-商业安装包构建与发行.md)：查看 Windows/macOS 商业包、纯手动 Actions、额度和发行验收。
 
 ## 产品化阶段 0
 
@@ -85,11 +87,17 @@ Studio 当前采用“结论优先”的单一研究流程：首页先显示当�
 明确停止并显示原因，不伪造 AI 回复。草稿必须由 Codex/Provider 写回并由用户确认非空结构化规则，API 和网页才允许冻结
 Baseline；保存原文不再等同于 AI 已开始，更不等同于可回测策略。
 
-商业首版计划以客户本地安装包或受管容器交付 Web Studio，不交付 Git 仓库。Native
+商业首版已具备 macOS 与 Windows x64 本地安装包构建骨架，通过纯手动 GitHub Actions
+生成客户制品，不交付 Git 仓库。Native
 Engine 是默认核心；Freqtrade 是客户自行安装、通过独立进程/标准文件协议连接的可选
 external engine，不随商业包捆绑。模型必须满足
 `capability_gated_modern_models_only` 契约；当前首个 BYOK adapter 为
 OpenAI-compatible JSON Schema 形式化链路。
+
+商业授权 MVP 已支持完全离线的 Ed25519 签名许可证、设备码绑定、到期只读、后台统一
+写操作门禁和人工签发/续费 CLI。商业安装包把公钥和强制模式装配进 Nuitka 编译运行器；
+源码开发模式仍默认不强制授权。当前 Windows 尚未 Authenticode 签名，macOS 尚未完成
+Developer ID 公证，因此只适合内部 QA 和明确知情的早期试点。
 
 项目级 Agent 编排 Skill 位于 `.agents/skills/quant-strategy-research/`。所有研究动作先按 `configs/agent_policies/document-routing.yaml` 选择 intent、读取必需文档、检查前置条件和审批门禁；安全不只依赖提示词，后端状态机、Repository、ArtifactStore、Job 白名单和测试共同执行约束。
 
