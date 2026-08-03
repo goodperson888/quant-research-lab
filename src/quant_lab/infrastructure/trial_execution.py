@@ -46,6 +46,7 @@ def _child_entry(
                 peak_rss_mb=max(result.peak_rss_mb, _peak_rss_mb()),
                 result_artifact_key=result.result_artifact_key,
                 stop_reason=result.stop_reason,
+                equity_points=tuple(result.equity_points),
             )
         )
     except BaseException as exc:  # child boundary must preserve deterministic failure evidence
@@ -127,6 +128,7 @@ class InProcessTrialExecutor:
                     peak_rss_mb=rss,
                     result_artifact_key=result.result_artifact_key,
                     stop_reason=result.stop_reason,
+                    equity_points=tuple(result.equity_points),
                 )
             results.append(result)
         return results

@@ -40,12 +40,12 @@ export function WorkflowNavigation({
     })),
   ];
   return (
-    <section className="mt-5 rounded-2xl border border-white/10 bg-[#0a151e]/80 p-3 md:p-4">
-      <div className="mb-3 flex items-center justify-between gap-3">
+    <section className="mt-4 rounded-2xl border border-white/10 bg-[#0a151e]/80 p-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
         <div>
-          <div className="text-sm font-semibold text-slate-200">研究流程</div>
-          <div className="mt-1 text-xs leading-5 text-slate-500">
-            选择阶段只改变页面视图，不会启动任务、跳过门禁或自动批准结果。
+          <div className="text-sm font-semibold text-slate-200">研究阶段</div>
+          <div className="mt-0.5 text-[11px] leading-4 text-slate-500">
+            切换阶段只改变视图，不会启动任务。
           </div>
         </div>
         <button
@@ -96,16 +96,16 @@ export function WorkflowNavigation({
                 aria-current={active ? "step" : undefined}
                 className={
                   active
-                    ? "relative z-[1] min-h-[104px] w-full cursor-pointer rounded-xl border border-sky-300/30 bg-sky-300/10 p-3 text-left transition"
-                    : "relative z-[1] min-h-[104px] w-full cursor-pointer rounded-xl border border-white/[0.08] bg-[#09131b] p-3 text-left transition hover:border-white/20 hover:bg-white/[0.03]"
+                    ? "relative z-[1] min-h-[82px] w-full cursor-pointer rounded-xl border border-sky-300/30 bg-sky-300/10 p-2.5 text-left transition"
+                    : "relative z-[1] min-h-[82px] w-full cursor-pointer rounded-xl border border-white/[0.08] bg-[#09131b] p-2.5 text-left transition hover:border-white/20 hover:bg-white/[0.03]"
                 }
               >
                 <span className="flex items-start justify-between gap-2">
                   <span
                     className={
                       active
-                        ? "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-sky-300/40 bg-sky-300/10 text-xs font-semibold text-sky-100"
-                        : `flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${statusNumberClass(
+                        ? "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-sky-300/40 bg-sky-300/10 text-[11px] font-semibold text-sky-100"
+                        : `flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold ${statusNumberClass(
                             stage.status,
                           )}`
                     }
@@ -122,14 +122,14 @@ export function WorkflowNavigation({
                 </span>
                 <span
                   className={
-                    active
-                      ? "mt-3 block text-sm font-medium text-sky-100"
-                      : "mt-3 block text-sm font-medium text-slate-300"
+                      active
+                        ? "mt-2 block text-sm font-medium text-sky-100"
+                        : "mt-2 block text-sm font-medium text-slate-300"
                   }
                 >
                   {stage.label}
                 </span>
-                <span className="mt-1 block truncate text-[11px] text-slate-500">
+                <span className="mt-0.5 hidden truncate text-[10px] text-slate-500 xl:block">
                   {stage.description}
                 </span>
               </button>

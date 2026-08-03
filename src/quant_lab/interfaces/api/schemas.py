@@ -11,6 +11,9 @@ class StrictModel(BaseModel):
 
 class CreateSessionRequest(StrictModel):
     title: str = Field(min_length=1, max_length=160)
+    assistant_entry_mode: Literal[
+        "external_agent_direct", "web_local_connector", "web_provider"
+    ] = "external_agent_direct"
 
 
 class SessionResponse(StrictModel):
@@ -22,6 +25,15 @@ class SessionResponse(StrictModel):
     research_mode: Literal["quick", "guided", "expert"]
     mode_config: dict[str, Any]
     mode_revision: int
+    assistant_entry_mode: Literal[
+        "external_agent_direct", "web_local_connector", "web_provider"
+    ]
+
+
+class UpdateAssistantEntryModeRequest(StrictModel):
+    assistant_entry_mode: Literal[
+        "external_agent_direct", "web_local_connector", "web_provider"
+    ]
 
 
 class SessionAgentOccupancyResponse(StrictModel):
@@ -88,6 +100,41 @@ class StrategyDraftResponse(StrictModel):
     status: str
     baseline_version_id: str | None
     created_at: str
+
+
+class CreateAgentFormalizationRequest(StrictModel):
+    entry_mode: Literal["web_local_connector", "web_provider"]
+
+
+class AgentRunResponse(StrictModel):
+    id: str
+    session_id: str
+    agent_name: str
+    agent_provider: str
+    execution_target: str
+    mode: str
+    status: str
+    plan_summary: str | None
+    subject_id: str | None
+    task_type: str
+    error: str | None
+    created_at: str
+    lease_expires_at: str | None
+
+
+class ConfigureProviderRequest(StrictModel):
+    provider_name: str = Field(min_length=1, max_length=80)
+    base_url: str = Field(min_length=1, max_length=500)
+    model: str = Field(min_length=1, max_length=160)
+    api_key: str = Field(min_length=1, max_length=2000)
+
+
+class ProviderStatusResponse(StrictModel):
+    configured: bool
+    provider: str | None
+    message: str
+    kind: str
+    model: str | None
 
 
 class FormalizeStrategyRequest(StrictModel):
@@ -221,6 +268,11 @@ class ResearchAuthorizationStageResponse(StrictModel):
     cost_usdt: float
     trials_used: int
     created_at: str
+
+
+class StartResearchAuthorizationRequest(StrictModel):
+    subject_id: str = Field(min_length=1)
+    confirmed_by_user: bool
 
 
 class ParameterSpaceRequest(StrictModel):
@@ -390,6 +442,18 @@ class ComponentArchiveRequest(StrictModel):
     reason: str = Field(default="user_archived", min_length=1, max_length=500)
 
 
+class PromoteFactorCandidateRequest(StrictModel):
+    subject_id: str = Field(min_length=1)
+    confirmed_by_user: bool
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2_000)
+
+
+class FactorStatusRequest(StrictModel):
+    subject_id: str = Field(min_length=1)
+    confirmed_by_user: bool
+
+
 class ComponentEvidenceResponse(StrictModel):
     id: str
     source_strategy_version_id: str
@@ -433,6 +497,11 @@ class ComponentHypothesisResponse(StrictModel):
     contamination_status: str
     status: str
     created_at: str
+
+
+class MaterializeComponentHypothesisRequest(StrictModel):
+    subject_id: str = Field(min_length=1)
+    confirmed_by_user: bool
 
 
 class CreateRegimeValidationJobRequest(StrictModel):
@@ -569,6 +638,11 @@ class ProposalBudgetRequest(StrictModel):
     estimated_minutes: int = Field(gt=0)
 
 
+class LaunchImprovementBatchRequest(StrictModel):
+    subject_id: str = Field(min_length=1)
+    confirmed_by_user: bool
+
+
 class JobActionRequest(StrictModel):
     subject_id: str
     confirmed_by_user: bool
@@ -600,6 +674,7 @@ class TrialResponse(StrictModel):
     peak_rss_mb: float | None
     result_artifact_key: str | None
     metrics_artifact_key: str | None
+    equity_artifact_key: str | None
     created_at: str
 
 

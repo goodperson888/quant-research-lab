@@ -34,7 +34,7 @@ These rules apply to every automated agent working in this project.
 30. Regime work must declare `regime_diagnostic` or `regime_validation`. Diagnostic work may run before viability but can only produce screening/diagnostic evidence; formal validation requires the same subject's passed viability gate.
 31. Freqtrade lookahead/recursive diagnostics are correctness evidence only. They must use the safe wrapper, must not use locked-test data or rejected strategies, and cannot be described as strategy performance evidence.
 32. Every ResearchSession is bounded by the configured hypothesis, Trial, compute-minute and locked-test-use budget. Exceeding a budget must create blocked evidence; an Agent cannot override it in a prompt.
-33. The one-shot Worker must enforce and report its configured time, memory, concurrency and Parquet batch limits. Resource failure preserves the Job, manifest/Trial evidence already produced and failure reason.
+33. Every Worker execution, whether one-shot or watch-queue, must enforce and report its configured time, memory, concurrency and Parquet batch limits. Resource failure preserves the Job, manifest/Trial evidence already produced and failure reason.
 34. Batch parameter research requires a structured Proposal with an exact Baseline/subject, explicit approval, immutable Candidate snapshot, ExperimentPlan and Session budget. Locked-test data is forbidden in the search.
 35. Use deterministic grid or seeded-random search in the first phase. Do not enable Hyperopt/Optuna or use one Agent action per Trial.
 36. Preserve completed Trial records across failure, cancellation and retry. Retry must reference the prior Job, resume only unfinished combinations and must not reserve the same Session budget twice.

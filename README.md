@@ -4,6 +4,7 @@
 
 ## 第一次阅读
 
+- [AI 接手与开发维护指南](docs/28-AI接手与开发维护指南.md)：新 AI/开发者先看当前边界、版本语义、代码入口和验证清单；
 - [产品说明与使用指南](docs/11-产品说明与使用指南.md)：先了解项目为谁服务、如何使用和不做什么；
 - [系统架构](docs/12-系统架构.md)：查看模块、数据流、策略流和安全边界；
 - [当前状态与路线图](docs/13-当前状态与路线图.md)：查看真实完成度、阻塞和下一步；
@@ -15,7 +16,7 @@
 - [产品化目标架构 v1](docs/16-产品化目标架构-v1.md)：查看 Web、External Agent、API、Worker 和审计控制平面；
 - [架构重构实施计划](docs/17-架构重构实施计划.md)：查看阶段0纵切和后续功能渐进路线。
 - [Agent 与 Skill 执行架构](docs/18-Agent与Skill执行架构.md)：查看 Agent、Skill、文档路由、工具白名单和状态机如何共同约束执行。
-- [本地启动与操作手册](docs/19-本地启动与操作手册.md)：单实例启动/停止 API 与 Web、one-shot Worker、排错与备份。
+- [本地启动与操作手册](docs/19-本地启动与操作手册.md)：单实例启动/停止 API、Web 与 Worker、排错与备份。
 - [Freqtrade 能力边界与融合方案](docs/20-Freqtrade能力边界与融合方案.md)：区分 Native 与 Freqtrade 引擎职责；
 - [存储治理与保留策略](docs/21-存储治理与保留策略.md)：查看权威、可重建、可归档数据和 Trial 保留规则；
 - [ETH 永续一年数据扩展记录](docs/22-ETH永续一年数据扩展记录.md)：查看当前年度数据、缺口、metadata 和代理结果。
@@ -27,7 +28,21 @@
 
 ## 产品化阶段 0
 
-产品首页正在演进为“AI 策略研究工作台”。当前采用 Agent-first hybrid architecture：Codex 等 External Local Agent 继续作为可见研究执行者，Web 负责控制、审批、审计和结果展示；二者共享 FastAPI/CLI 领域接口与 append-only 审计记录。当前固定为 `external_local_agent + local_runtime`，Embedded Provider、Hosted Sandbox、Local Connector 和真实 LLM 调用均未实现。
+产品首页是“AI 策略研究工作台”。当前采用 Agent-first hybrid architecture：Codex 等
+External Local Agent、独立 Local Connector 和网页 BYOK 模型共用 FastAPI/CLI 领域接口、
+ResearchSession、AgentRun、审批门禁和 append-only 审计记录。入口由
+`ResearchSession.assistant_entry_mode` 持久化，一次只启用一种执行链。
+
+Studio 现在提供三种真实、互斥入口：
+
+1. **直接在 Codex 研究**：不显示网页策略输入框，用户在当前 Codex 对话中研究；
+2. **网页调用本地助手**：网页保存 Draft 并创建 AgentRun，独立 Local Connector 通过固定、
+   read-only 的 `codex exec` 形式化策略并写回；
+3. **网页模型 / API Key**：网页把 Key 交给 API 进程内存中的 OpenAI-compatible adapter，
+   后台生成结构化提案。Key 不进入浏览器持久存储、Git、配置、SQLite 或日志，API 重启即清空。
+
+后两种入口当前真实覆盖“策略原文 → 结构化提案 → 等待用户确认”。它们不会自动冻结
+Baseline、调参、回测或实盘；后续仍通过同一网页审批和确定性 Worker 流程执行。
 
 阶段0一键启动入口：
 
@@ -35,7 +50,9 @@
 ./scripts/dev.sh
 ```
 
-启动后访问 `http://127.0.0.1:3100/studio`。重复执行时，如果两个端口已经是本项目服务，
+启动后访问 `http://127.0.0.1:3100/studio`。该命令同时管理 API、Web、受控后台 Worker
+和 Local Connector。
+重复执行时，如果服务已经是本项目托管实例，
 脚本会打印“已经运行，可直接访问”并成功退出，不会重复启动。
 
 ```bash
@@ -44,7 +61,7 @@
 ./scripts/dev.sh status     # 查看托管实例状态
 ```
 
-前台启动终端按 `Ctrl+C` 仍会同时关闭 API 和 Web。运行状态保存在被 Git 忽略的
+前台启动终端按 `Ctrl+C` 会同时关闭 API、Web、Worker 和 Local Connector。运行状态保存在被 Git 忽略的
 `runtime/dev/`。如果以前手动启动过本项目服务或状态文件丢失，`start/restart` 会先
 严格核对进程命令和工作目录，再停止旧实例并重新纳管；`stop` 也能直接安全停止它。
 端口被其他软件占用时只报告端口、PID/进程和处理建议，不会自动杀未知进程。
@@ -53,22 +70,26 @@
 ```bash
 ./scripts/dev-api.sh
 ./scripts/dev-web.sh
-./scripts/dev-worker.sh
+./scripts/dev-worker.sh --watch
+./scripts/dev-agent-connector.sh --watch
 ```
 
 API 默认仅监听 `127.0.0.1:8100`，Web 默认监听 `127.0.0.1:3100`。根页面进入 `/studio`。
-`dev-worker.sh` 是 one-shot：无 `--job-id` 只打印 status 并退出，不是正在运行的常驻队列。
-指定 `--job-id job_xxx` 时才执行一个白名单 Job。
+`dev-worker.sh --watch` 会以单并发轮询 SQLite 队列，只执行已注册白名单 Handler；
+`--job-id job_xxx` 仍可用于单个 Job 排错。无参数只打印能力与安全状态。
 
 Studio 当前采用“结论优先”的单一研究流程：首页先显示当前结论、停止原因与下一步，
 再展示亏损瓶颈、最多三个不同类别的改进方向、批量参数进度、资金曲线/回撤和规则分析器
-中文总结。技术 ID、Artifact 路径和英文协议字段收在可折叠技术详情中。网页模型未配置时，
-输入只保存为策略原文或研究指令，不伪造 AI 回复。
+中文总结。技术 ID、Artifact 路径和英文协议字段收在可折叠技术详情中。页面明确展示
+三种入口的真实连接和配置状态；网页模型未配置、Connector 未运行或执行失败时都会
+明确停止并显示原因，不伪造 AI 回复。草稿必须由 Codex/Provider 写回并由用户确认非空结构化规则，API 和网页才允许冻结
+Baseline；保存原文不再等同于 AI 已开始，更不等同于可回测策略。
 
 商业首版计划以客户本地安装包或受管容器交付 Web Studio，不交付 Git 仓库。Native
 Engine 是默认核心；Freqtrade 是客户自行安装、通过独立进程/标准文件协议连接的可选
 external engine，不随商业包捆绑。模型必须满足
-`capability_gated_modern_models_only` 契约，当前 Provider 仍未配置且不提供 Key 录入。
+`capability_gated_modern_models_only` 契约；当前首个 BYOK adapter 为
+OpenAI-compatible JSON Schema 形式化链路。
 
 项目级 Agent 编排 Skill 位于 `.agents/skills/quant-strategy-research/`。所有研究动作先按 `configs/agent_policies/document-routing.yaml` 选择 intent、读取必需文档、检查前置条件和审批门禁；安全不只依赖提示词，后端状态机、Repository、ArtifactStore、Job 白名单和测试共同执行约束。
 
@@ -104,20 +125,24 @@ cheap sensitivity → regime/Pine → full validation/locked/full stress → dry
 少亏的结果只作为 diagnostic improvement，不是完整可交易 strategy candidate。
 
 Studio 支持为精确 subject 一次创建 `ResearchAuthorization`，在已注册执行器和白名单 Job
-存在时连续完成 correctness、smoke、fast_screen 和读取既有指标的 viability，不在内部阶段
-反复询问。Viability 失败后若授权包含廉价诊断，只复用已有 Artifact 做 loss attribution、
+存在时由 `pipeline_execution` 白名单 Job 连续完成 correctness、smoke、fast_screen 和
+读取既有指标的 viability，不在内部阶段反复询问。Studio 的“授权并开始研究”会同时创建
+精确授权与排队 Job；授权记录本身仍不是执行证明。Viability 失败后若授权包含廉价诊断，
+后台自动排队并只复用已有 Artifact 做 loss attribution、
 ex-ante Regime screening 和最多 3 个组件假设草案；组件 Batch、locked test 和 dry-run
 仍需独立批准。授权本身不是已执行证明。详见
 [docs/26-流畅研究授权与失败诊断.md](docs/26-流畅研究授权与失败诊断.md)。
 
 Regime 在 viability 前只能使用 `regime_diagnostic`，正式 `regime_validation` 必须引用同一
-subject 的 passed viability。每个 ResearchSession 和 one-shot Worker 都受机器可读预算
+subject 的 passed viability。每个 ResearchSession 和 Worker Job 都受机器可读预算
 限制；Freqtrade lookahead/recursive 只作为可选外部引擎的 correctness 证据。
 
 冻结 Baseline 后，系统支持最多 3 个结构化改进方向、精确 subject 审批、不可变 Candidate、
 确定性 grid/seeded-random Batch Trials、稳定参数区间和 ComponentEvidence 逻辑签名去重。
 通用 evaluator registry 已建立，Selective Reentry 有真实单组件 adapter；其他新策略仍需
 新增受测的策略实现/配置并注册。内置 deterministic fixture 只验证连线，不能作为收益证据。
+新参数批次会按批次保存每个成功 Trial 的验证区间压缩资金曲线，参数页可在同一时间范围内
+勾选最多 6 个方案同图比较；旧批次缺失曲线时不会用指标伪造。
 
 ## 数据存储方案
 

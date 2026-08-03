@@ -52,7 +52,10 @@ Record detector version, target/suitable/conditional/blocked/unknown sets, per-r
 
 Freqtrade lookahead/recursive analysis is correctness evidence only. Run it through the safety wrapper, never on rejected strategies or locked-test data, and record unsupported external-engine status explicitly.
 
-Load both the ResearchSession budget and ExperimentPlan budget. The session caps hypotheses, aggregate Trials, compute minutes and locked-test uses. The one-shot Worker separately enforces time, RSS, concurrency and Parquet batching; exceeding either budget is a recorded block/failure, not permission to silently continue.
+Load both the ResearchSession budget and ExperimentPlan budget. The session caps hypotheses,
+aggregate Trials, compute minutes and locked-test uses. Every Worker execution, whether one-shot
+or watch-queue, separately enforces time, RSS, concurrency and Parquet batching; exceeding either
+budget is a recorded block/failure, not permission to silently continue.
 
 ## Pine order
 

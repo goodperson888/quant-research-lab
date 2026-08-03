@@ -1,7 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 
 import { apiFetch, Job } from "@/lib/api";
 import {
@@ -15,9 +19,25 @@ type JobFilter = "all" | "active" | "completed" | "failed";
 
 export function JobList() {
   const [filter, setFilter] = useState<JobFilter>("all");
+  const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: ["jobs"],
     queryFn: () => apiFetch<Job[]>("/api/jobs"),
+  });
+  const retryJob = useMutation({
+    mutationFn: (jobId: string) =>
+      apiFetch<Job>(`/api/jobs/${jobId}/retry`, {
+        method: "POST",
+        body: JSON.stringify({
+          subject_id: jobId,
+          confirmed_by_user: true,
+        }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["research-handoff"] });
+      queryClient.invalidateQueries({ queryKey: ["audit-events"] });
+    },
   });
   if (query.isPending) {
     return <div className="text-sm text-slate-500">正在读取后台任务……</div>;
@@ -105,8 +125,23 @@ export function JobList() {
               />
             </div>
             {job.error ? (
-              <div className="mt-3 rounded-lg border border-rose-300/15 bg-rose-300/[0.05] px-3 py-2 text-xs leading-5 text-rose-100/80">
-                停止原因：{jobErrorLabel(job.error)}
+              <div className="mt-3 rounded-lg border border-rose-300/15 bg-rose-300/[0.05] px-3 py-3 text-xs leading-5 text-rose-100/80">
+                <div>停止原因：{jobErrorLabel(job.error)}</div>
+                <div className="mt-2 text-slate-400">
+                  下一步：{jobNextAction(job)}
+                </div>
+                {canRetry(job) ? (
+                  <button
+                    type="button"
+                    onClick={() => retryJob.mutate(job.id)}
+                    disabled={retryJob.isPending}
+                    className="mt-3 min-h-11 rounded-xl border border-rose-200/20 bg-rose-200/[0.08] px-4 text-sm font-medium text-rose-50 transition hover:bg-rose-200/[0.12] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {retryJob.isPending
+                      ? "正在创建重试任务…"
+                      : "确认修复后重试原范围"}
+                  </button>
+                ) : null}
               </div>
             ) : (
               <div className="mt-3 text-xs leading-5 text-slate-500">
@@ -119,6 +154,11 @@ export function JobList() {
                       : "任务没有登记额外错误信息。"}
               </div>
             )}
+            {retryJob.isError && retryJob.variables === job.id ? (
+              <div className="mt-2 text-xs leading-5 text-amber-200">
+                无法重试：{retryErrorLabel(retryJob.error.message)}
+              </div>
+            ) : null}
             <TechnicalDetails label="查看任务技术信息">
               <TechnicalId label="任务对象" value={job.id} />
               <TechnicalId
@@ -173,15 +213,72 @@ function jobTypeLabel(value: string) {
     correctness_diagnostics: "正确性诊断",
     engine_reconciliation: "第二引擎对账",
     stress_test: "压力测试",
+    pipeline_execution: "策略快速研究流程",
+    backtest: "策略回测",
   }[value] ?? value;
 }
 
 function jobErrorLabel(value: string) {
+  if (
+    value.includes(
+      "reviewed StrategySpec has no authorized pipeline metadata",
+    )
+  ) {
+    return "旧版执行程序没有找到当前策略的受控自动研究配置。新版通用策略执行器已补充；重启本地服务后可显式重试原批准范围。";
+  }
+  if (value.includes("incompatible merge keys")) {
+    return "行情或交易时间字段精度不一致，诊断数据无法合并。需要更新到已修复版本后再重试。";
+  }
+  if (value.includes("invalid UTC split interval")) {
+    return "研究数据切分区间无效或超出当前数据范围。请重新生成不重叠的训练、验证和保留区间。";
+  }
   const prerequisite = value.match(
     /^authorization stage prerequisites are incomplete: (.+)$/,
   );
   if (prerequisite) {
     return `一次性研究授权的前置步骤尚未完成：${stageLabel(prerequisite[1])}。`;
+  }
+  return value;
+}
+
+function jobNextAction(job: Job) {
+  if (
+    job.error?.includes(
+      "reviewed StrategySpec has no authorized pipeline metadata",
+    )
+  ) {
+    return "先确认本地服务已重启到最新代码，再点击下方按钮；不会重新批准更大范围，也不会使用最终保留测试。";
+  }
+  if (job.job_type === "parameter_search") {
+    return "修复资源或数据问题后可恢复未完成参数方案，已经完成的结果不会重跑。";
+  }
+  if (job.job_type === "pipeline_execution") {
+    return "如果本任务尚未生成任何阶段证据，可重试原授权；若已有阶段证据，需要回到工作台新建授权。";
+  }
+  return "保留失败证据，回到研究工作台决定修复依赖或停止当前分支。";
+}
+
+function canRetry(job: Job) {
+  return (
+    ["failed", "cancelled"].includes(job.status) &&
+    ["parameter_search", "pipeline_execution"].includes(job.job_type)
+  );
+}
+
+function retryErrorLabel(value: string) {
+  if (
+    value.includes(
+      "pipeline retry after recorded stage evidence requires a new authorization",
+    )
+  ) {
+    return "这次任务已经保存了阶段证据，不能原地重跑。请回到研究工作台重新批准一次明确范围。";
+  }
+  if (
+    value.includes(
+      "pipeline authorization is no longer active",
+    )
+  ) {
+    return "原研究授权已失效，请回到研究工作台重新批准快速初筛。";
   }
   return value;
 }

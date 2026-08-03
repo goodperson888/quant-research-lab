@@ -15,131 +15,153 @@ export type StrategyConclusion = {
 export function StudioOverview({
   strategyTitle,
   researchMode,
-  providerConfigured,
-  externalAgentStatus,
+  assistantEntry,
+  executionStatus,
   conclusion,
-  handoff,
-  versioningAvailable,
+  primaryActionLabel,
+  primaryActionPending = false,
+  primaryActionDisabled = false,
+  onNext,
 }: {
   strategyTitle: string | undefined;
   researchMode: string | undefined;
-  providerConfigured: boolean;
-  externalAgentStatus: string;
+  assistantEntry: string;
+  executionStatus: string;
   conclusion: StrategyConclusion;
-  handoff: ResearchHandoff | undefined;
-  versioningAvailable: boolean;
+  primaryActionLabel: string;
+  primaryActionPending?: boolean;
+  primaryActionDisabled?: boolean;
+  onNext: () => void;
 }) {
   const tone = conclusion.tone === "success"
     ? "positive"
     : conclusion.tone === "danger"
       ? "danger"
       : "neutral";
-  const handoffPresentation = presentHandoff(handoff);
   return (
     <section
       data-testid="strategy-conclusion-card"
-      className="rounded-3xl border border-white/10 bg-[linear-gradient(145deg,rgba(61,214,176,.09),rgba(10,21,30,.92)_45%)] p-5 md:p-7"
+      className="rounded-2xl border border-white/10 bg-[linear-gradient(145deg,rgba(61,214,176,.09),rgba(10,21,30,.92)_48%)] p-4 md:p-5"
     >
-      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
-          <div className="text-xs font-semibold tracking-[0.16em] text-emerald-300">
-            当前结论
-          </div>
-          <h1 className="mt-2 max-w-4xl break-words text-2xl font-semibold tracking-tight text-white [overflow-wrap:anywhere] md:text-3xl">
-            {friendlyStrategyName(strategyTitle)}
-          </h1>
-          <div className="mt-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="text-[11px] font-semibold tracking-[0.16em] text-emerald-300">
+              当前研究
+            </div>
             <StatusBadge value={conclusion.title} tone={tone} />
           </div>
-          <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">
+          <h1 className="mt-2 max-w-4xl break-words text-xl font-semibold tracking-tight text-white [overflow-wrap:anywhere] md:text-2xl">
+            {friendlyStrategyName(strategyTitle)}
+          </h1>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">
             {conclusion.detail}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2 text-xs md:max-w-[280px] md:justify-end">
-          <StatusBadge value={researchMode ?? "引导模式"} />
-          <StatusBadge
-            value={`本地助手：${cnStatus(externalAgentStatus)}`}
-            tone="warning"
-          />
-          <StatusBadge
-            value={providerConfigured ? "网页模型已配置" : "网页模型未配置"}
-            tone={providerConfigured ? "positive" : "warning"}
-          />
+        <div className="flex shrink-0 flex-col gap-3 lg:items-end">
+          <div className="flex flex-wrap gap-2 text-xs lg:max-w-[420px] lg:justify-end">
+            <StatusBadge value={researchMode ?? "引导模式"} />
+            <StatusBadge value={assistantEntry} />
+            <StatusBadge value={executionStatus} tone="warning" />
+          </div>
+          <button
+            type="button"
+            onClick={onNext}
+            disabled={primaryActionDisabled || primaryActionPending}
+            className="min-h-11 w-full cursor-pointer rounded-xl bg-emerald-300 px-4 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200 sm:w-auto"
+          >
+            {primaryActionPending ? "正在处理…" : primaryActionLabel}
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export function ResearchHandoffPanel({
+  handoff,
+  versioningAvailable,
+}: {
+  handoff: ResearchHandoff | undefined;
+  versioningAvailable: boolean;
+}) {
+  const handoffPresentation = presentHandoff(handoff);
+  const actionRequired =
+    handoff?.user_action_required ||
+    handoff?.stop_reason_code === "worker_job_failed" ||
+    handoff?.stop_reason_code === "authorized_pipeline_execution_failed";
+  return (
+    <section
+      data-testid="research-handoff-card"
+      className="rounded-2xl border border-white/[0.08] bg-black/10 p-4"
+    >
+      <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_220px]">
+        <div>
+          <div className="text-sm font-medium text-amber-100">为什么停在这里</div>
+          <p className="mt-1 text-sm leading-6 text-slate-300">
+            {handoffPresentation.reason}
+          </p>
+          <div className="mt-3 text-sm font-medium text-emerald-100">
+            建议下一步
+          </div>
+          <p className="mt-1 text-sm leading-6 text-slate-300">
+            {handoffPresentation.nextAction}
+          </p>
+        </div>
+        <div className="rounded-xl border border-white/10 bg-black/10 p-3 text-xs">
+          <div className="text-slate-500">是否需要你操作</div>
+          <div className="mt-2 leading-5 text-slate-200">
+            {actionRequired
+              ? handoffPresentation.userAction
+              : "当前不需要用户操作。"}
+          </div>
         </div>
       </div>
 
-      <div
-        data-testid="research-handoff-card"
-        className="mt-6 border-t border-white/10 pt-5"
-      >
-        <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_220px]">
+      {handoff ? (
+        <TechnicalDetails label="展开已完成、未执行与审计对象">
           <div>
-            <div className="text-sm font-medium text-amber-100">为什么停在这里</div>
-            <p className="mt-1 text-sm leading-6 text-slate-300">
-              {handoffPresentation.reason}
-            </p>
-            <div className="mt-3 text-sm font-medium text-emerald-100">
-              建议下一步
-            </div>
-            <p className="mt-1 text-sm leading-6 text-slate-300">
-              {handoffPresentation.nextAction}
-            </p>
+            <div className="text-emerald-200">已完成</div>
+            <ul className="mt-1 space-y-1">
+              {handoff.completed_actions.map((item) => (
+                <li key={item}>· {item}</li>
+              ))}
+            </ul>
           </div>
-          <div className="rounded-2xl border border-white/10 bg-black/10 p-4 text-xs">
-            <div className="text-slate-500">是否需要你操作</div>
-            <div className="mt-2 leading-5 text-slate-200">
-              {handoff?.user_action_required
-                ? handoffPresentation.userAction
-                : "当前不需要用户操作。"}
-            </div>
+          <div>
+            <div className="text-slate-300">未执行</div>
+            <ul className="mt-1 space-y-1">
+              {handoff.not_started_actions.map((item) => (
+                <li key={item}>· {item}</li>
+              ))}
+            </ul>
           </div>
-        </div>
-
-        {handoff ? (
-          <TechnicalDetails label="展开已完成、未执行与审计对象">
+          <TechnicalId
+            label="当前研究对象"
+            value={handoff.approval_subject_id ?? handoff.subject_id}
+          />
+          <div>
+            <div className="text-slate-300">原始停止说明</div>
+            <p className="mt-1">{handoff.stop_reason_text}</p>
+          </div>
+          <div>
+            <div className="text-slate-300">原始下一步</div>
+            <p className="mt-1">{handoff.next_recommended_action}</p>
+          </div>
+          {handoff.required_user_action ? (
             <div>
-              <div className="text-emerald-200">已完成</div>
-              <ul className="mt-1 space-y-1">
-                {handoff.completed_actions.map((item) => (
-                  <li key={item}>· {item}</li>
-                ))}
-              </ul>
+              <div className="text-slate-300">原始用户操作</div>
+              <p className="mt-1">{handoff.required_user_action}</p>
             </div>
-            <div>
-              <div className="text-slate-300">未执行</div>
-              <ul className="mt-1 space-y-1">
-                {handoff.not_started_actions.map((item) => (
-                  <li key={item}>· {item}</li>
-                ))}
-              </ul>
-            </div>
-            <TechnicalId
-              label="当前研究对象"
-              value={handoff.approval_subject_id ?? handoff.subject_id}
-            />
-            <div>
-              <div className="text-slate-300">原始停止说明</div>
-              <p className="mt-1">{handoff.stop_reason_text}</p>
-            </div>
-            <div>
-              <div className="text-slate-300">原始下一步</div>
-              <p className="mt-1">{handoff.next_recommended_action}</p>
-            </div>
-            {handoff.required_user_action ? (
-              <div>
-                <div className="text-slate-300">原始用户操作</div>
-                <p className="mt-1">{handoff.required_user_action}</p>
-              </div>
-            ) : null}
-            <div>
-              版本规则：
-              {versioningAvailable
-                ? "本地权威状态为准，Git 仅手动备份"
-                : "版本策略暂不可用"}
-            </div>
-          </TechnicalDetails>
-        ) : null}
-      </div>
+          ) : null}
+          <div>
+            版本规则：
+            {versioningAvailable
+              ? "本地权威状态为准，Git 仅手动备份"
+              : "版本策略暂不可用"}
+          </div>
+        </TechnicalDetails>
+      ) : null}
     </section>
   );
 }
@@ -150,6 +172,25 @@ function presentHandoff(handoff: ResearchHandoff | undefined) {
       reason: "当前会话尚无结构化停止记录。",
       nextAction: "保存策略后，系统会显示明确的研究结论与下一动作。",
       userAction: "当前不需要用户操作。",
+    };
+  }
+  if (
+    handoff.stop_reason_code === "worker_job_failed" ||
+    handoff.stop_reason_code === "authorized_pipeline_execution_failed"
+  ) {
+    const missingPipelineMetadata = handoff.stop_reason_text.includes(
+      "reviewed StrategySpec has no authorized pipeline metadata",
+    );
+    return {
+      reason: missingPipelineMetadata
+        ? "这次任务由旧版执行程序运行，未找到当前策略对应的受控自动研究配置。失败状态和已有证据都已保留。"
+        : /[\u3400-\u9fff]/.test(handoff.stop_reason_text)
+          ? handoff.stop_reason_text
+          : "后台研究任务执行失败，原始技术原因已保留在下方详情中。",
+      nextAction: missingPipelineMetadata
+        ? "确认本地服务已重启到最新代码后，前往“后台任务”显式重试原批准范围；不会扩大预算或使用最终保留测试。"
+        : "前往“后台任务”查看中文原因；能够安全重试时页面会显示重试按钮，否则回到本研究重新授权或停止。",
+      userAction: "需要。请按建议下一步处理失败任务。",
     };
   }
   const known: Record<

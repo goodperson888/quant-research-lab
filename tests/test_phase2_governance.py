@@ -291,6 +291,23 @@ def test_worker_resource_limit_fails_job_and_preserves_metrics(tmp_path: Path) -
     assert any("peak_rss_mb" in item["message"] for item in repository.list_job_logs(job.id))
 
 
+def test_worker_watch_selection_uses_oldest_supported_queued_job(
+    tmp_path: Path,
+) -> None:
+    repository, service, _session, _baseline = build_baseline(tmp_path)
+    unsupported = service.create_job(job_type="report", payload={"order": 1})
+    supported = service.create_job(job_type="data_quality", payload={"order": 2})
+    worker = LocalWorker(
+        repository,
+        handlers={"data_quality": lambda job: {"run_id": job.id}},
+    )
+
+    assert worker.can_handle("data_quality") is True
+    assert worker.can_handle("report") is False
+    assert worker.next_queued_job() == supported
+    assert repository.get_job(unsupported.id).status == "queued"
+
+
 def test_phase2_read_only_policy_api(tmp_path: Path) -> None:
     for relative in (
         "configs/research_budgets/default.yaml",

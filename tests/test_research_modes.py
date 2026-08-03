@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from quant_lab.application.services import ResearchApplicationService
-from quant_lab.domain.errors import ApprovalRequiredError
+from quant_lab.domain.errors import ApprovalRequiredError, ConflictError
 from quant_lab.infrastructure.sqlite_product_repository import (
     SCHEMA_VERSION,
     SQLiteProductRepository,
@@ -70,6 +70,43 @@ def test_mode_update_requires_confirmation_is_audited_and_changes_agent_pacing(
         if item.event_type == "research_session.mode_updated"
     ]
     assert mode_events[0].payload["safety_boundaries_unchanged"] is True
+
+
+def test_mode_update_is_locked_while_agent_or_job_is_active(tmp_path: Path) -> None:
+    service = build_service(tmp_path)
+    session = service.create_research_session(title="locked mode")
+    run = service.create_agent_run(session_id=session.id, agent_name="fixture")
+
+    with pytest.raises(ConflictError, match="AI 任务"):
+        service.update_research_mode(
+            session_id=session.id,
+            research_mode="quick",
+            mode_config=None,
+            confirmed_by_user=True,
+        )
+
+    service.update_agent_run_status(agent_run_id=run.id, status="completed")
+    job = service.create_job(
+        job_type="data_quality",
+        payload={"session_id": session.id, "subject_id": session.id},
+    )
+
+    with pytest.raises(ConflictError, match="后台任务"):
+        service.update_research_mode(
+            session_id=session.id,
+            research_mode="expert",
+            mode_config=None,
+            confirmed_by_user=True,
+        )
+
+    service.cancel_job(job_id=job.id, subject_id=job.id, confirmed_by_user=True)
+    updated = service.update_research_mode(
+        session_id=session.id,
+        research_mode="expert",
+        mode_config=None,
+        confirmed_by_user=True,
+    )
+    assert updated.research_mode == "expert"
 
 
 def test_api_lists_and_updates_research_modes(tmp_path: Path) -> None:

@@ -3,7 +3,9 @@ from __future__ import annotations
 from typing import Any, Mapping, Protocol, Sequence
 
 from .models import (
+    AgentProviderKind,
     AgentRun,
+    AssistantEntryMode,
     Artifact,
     AuditEvent,
     ExperimentPlan,
@@ -47,6 +49,14 @@ class ProductRepository(Protocol):
         research_mode: str,
         mode_config: Mapping[str, Any],
         mode_revision: int,
+        updated_at: str,
+    ) -> ResearchSession: ...
+
+    def update_session_assistant_entry_mode(
+        self,
+        session_id: str,
+        *,
+        assistant_entry_mode: AssistantEntryMode,
         updated_at: str,
     ) -> ResearchSession: ...
 
@@ -230,6 +240,7 @@ class ProductRepository(Protocol):
         peak_rss_mb: float | None = None,
         result_artifact_key: str | None = None,
         metrics_artifact_key: str | None = None,
+        equity_artifact_key: str | None = None,
     ) -> Trial: ...
 
     def get_trial_by_signature(
@@ -242,9 +253,17 @@ class ProductRepository(Protocol):
 
     def get_agent_run(self, agent_run_id: str) -> AgentRun: ...
 
-    def update_agent_run_status(self, agent_run_id: str, *, status: str) -> AgentRun: ...
+    def update_agent_run_status(
+        self, agent_run_id: str, *, status: str, error: str | None = None
+    ) -> AgentRun: ...
 
     def list_agent_runs(self) -> Sequence[AgentRun]: ...
+
+    def list_session_agent_runs(self, session_id: str) -> Sequence[AgentRun]: ...
+
+    def claim_next_agent_run(
+        self, *, agent_provider: AgentProviderKind
+    ) -> AgentRun | None: ...
 
     def get_active_session_agent_run(self, session_id: str) -> AgentRun | None: ...
 
@@ -294,6 +313,10 @@ class ProductRepository(Protocol):
 
     def create_component_hypothesis(
         self, hypothesis: ComponentHypothesis
+    ) -> ComponentHypothesis: ...
+
+    def get_component_hypothesis(
+        self, hypothesis_id: str
     ) -> ComponentHypothesis: ...
 
     def list_component_hypotheses(

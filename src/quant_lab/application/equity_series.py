@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 import json
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 import pandas as pd
@@ -609,6 +609,264 @@ class RunBundleEquityReader:
         }
 
 
+class TrialEquityReader:
+    """Read compressed Trial curves through registered project-relative artifact keys."""
+
+    def __init__(
+        self, repository: ProductRepository, artifacts: ArtifactStore
+    ) -> None:
+        self.repository = repository
+        self.artifacts = artifacts
+
+    def read(
+        self,
+        *,
+        experiment_plan_id: str,
+        trial_ids: Sequence[str] = (),
+        split: str = "validation",
+        max_points: int = 500,
+    ) -> dict[str, Any]:
+        if split not in {"train", "validation"}:
+            raise ValueError("Trial equity split must be train or validation")
+        if not 50 <= max_points <= 2_000:
+            raise ValueError("max_points must be between 50 and 2000")
+        if len(trial_ids) > 20:
+            raise ValueError("at most 20 Trial curves may be requested")
+        self.repository.get_experiment_plan(experiment_plan_id)
+        all_trials = list(self.repository.list_trials(experiment_plan_id))
+        by_id = {item.id: item for item in all_trials}
+        if trial_ids:
+            missing = [trial_id for trial_id in trial_ids if trial_id not in by_id]
+            if missing:
+                raise NotFoundError(
+                    "Trial does not belong to this ExperimentPlan: "
+                    + ", ".join(missing)
+                )
+            selected = [by_id[trial_id] for trial_id in trial_ids]
+        else:
+            selected = [
+                item
+                for item in all_trials
+                if item.status == "succeeded" and item.equity_artifact_key
+            ][:20]
+
+        limitations: list[str] = []
+        if not selected:
+            return self._unavailable(
+                experiment_plan_id,
+                "该批次没有登记真实 Trial 资金曲线。旧批次需要重新运行后才能生成。",
+            )
+
+        frames: dict[str, pd.DataFrame] = {}
+        series: list[dict[str, Any]] = []
+        for index, trial in enumerate(selected):
+            artifact_key = trial.equity_artifact_key
+            if not artifact_key:
+                limitations.append(f"{trial.id} 没有资金曲线 Artifact。")
+                continue
+            if not self.artifacts.exists(artifact_key):
+                limitations.append(f"{trial.id} 登记的资金曲线文件不存在。")
+                continue
+            if artifact_key not in frames:
+                try:
+                    frames[artifact_key] = pd.read_parquet(
+                        io.BytesIO(self.artifacts.get(artifact_key))
+                    )
+                except Exception as exc:
+                    limitations.append(
+                        f"{trial.id} 的资金曲线无法读取：{type(exc).__name__}。"
+                    )
+                    continue
+            frame = frames[artifact_key]
+            required = {
+                "trial_id",
+                "experiment_plan_id",
+                "split",
+                "timestamp",
+                "normalized_equity",
+                "drawdown",
+                "point_index",
+            }
+            if not required.issubset(frame.columns):
+                limitations.append(f"{trial.id} 的资金曲线列不完整。")
+                continue
+            working = frame.loc[
+                (frame["experiment_plan_id"].astype(str) == experiment_plan_id)
+                & (frame["trial_id"].astype(str) == trial.id)
+                & (frame["split"].astype(str) == split),
+                list(required),
+            ].copy()
+            if working.empty:
+                limitations.append(f"{trial.id} 没有 {split} 区间资金曲线。")
+                continue
+            working["timestamp"] = pd.to_datetime(working["timestamp"], utc=True)
+            working["normalized_equity"] = pd.to_numeric(
+                working["normalized_equity"], errors="coerce"
+            )
+            working["drawdown"] = pd.to_numeric(
+                working["drawdown"], errors="coerce"
+            )
+            working = (
+                working.dropna(
+                    subset=["timestamp", "normalized_equity", "drawdown"]
+                )
+                .sort_values(["point_index", "timestamp"])
+                .drop_duplicates("timestamp", keep="last")
+            )
+            if working.empty:
+                limitations.append(f"{trial.id} 的资金曲线没有有效数据点。")
+                continue
+            if len(working) > max_points:
+                indices = np.linspace(
+                    0, len(working) - 1, max_points, dtype=int
+                )
+                working = working.iloc[np.unique(indices)]
+            points = [
+                {
+                    "t": timestamp.isoformat(),
+                    "normalized_equity": float(equity),
+                    "drawdown": float(drawdown),
+                }
+                for timestamp, equity, drawdown in zip(
+                    working["timestamp"],
+                    working["normalized_equity"],
+                    working["drawdown"],
+                    strict=True,
+                )
+            ]
+            series.append(
+                {
+                    "trial_id": trial.id,
+                    "label": f"参数方案 {index + 1}",
+                    "parameters": dict(trial.parameters),
+                    "metrics": dict(trial.metrics),
+                    "split": split,
+                    "line_style": ("solid", "dashed", "dotted")[
+                        index % 3
+                    ],
+                    "points": points,
+                    "source_artifact_key": artifact_key,
+                    "evidence_mode": (
+                        "fixture"
+                        if trial.metrics.get("fixture_evidence") == 1.0
+                        else "research"
+                    ),
+                }
+            )
+
+        if not series:
+            unavailable = self._unavailable(
+                experiment_plan_id,
+                "已登记的 Trial 资金曲线不可读取；不会根据指标伪造曲线。",
+            )
+            unavailable["limitations"] = limitations
+            return unavailable
+
+        ranges = {
+            (
+                item["points"][0]["t"],
+                item["points"][-1]["t"],
+            )
+            for item in series
+        }
+        comparable = len(ranges) == 1
+        if not comparable:
+            limitations.append(
+                "部分 Trial 的时间覆盖不一致，不能在同一坐标轴上直接比较。"
+            )
+        common_range = next(iter(ranges)) if comparable else None
+        return {
+            "available": True,
+            "experiment_plan_id": experiment_plan_id,
+            "split": split,
+            "comparable": comparable,
+            "time_range": (
+                {"start": common_range[0], "end": common_range[1]}
+                if common_range
+                else None
+            ),
+            "series": series,
+            "recommended_trial_ids": self._representative_trial_ids(series),
+            "limitations": limitations,
+            "reason": None,
+        }
+
+    @staticmethod
+    def _representative_trial_ids(
+        series: Sequence[dict[str, Any]],
+    ) -> list[str]:
+        selected: list[str] = []
+
+        def add(item: dict[str, Any] | None) -> None:
+            if item is not None and item["trial_id"] not in selected:
+                selected.append(item["trial_id"])
+
+        baseline_like = next(
+            (
+                item
+                for item in series
+                if any(
+                    str(value).lower() in {"current", "baseline", "原样"}
+                    for value in item["parameters"].values()
+                )
+            ),
+            None,
+        )
+        add(baseline_like)
+        ranked_return = sorted(
+            series,
+            key=lambda item: float(
+                item["metrics"].get("validation_net_return", float("-inf"))
+            ),
+            reverse=True,
+        )
+        for item in ranked_return[:2]:
+            add(item)
+        add(
+            min(
+                series,
+                key=lambda item: float(
+                    item["metrics"].get(
+                        "validation_max_drawdown_abs", float("inf")
+                    )
+                ),
+            )
+        )
+        add(
+            max(
+                series,
+                key=lambda item: float(
+                    item["metrics"].get(
+                        "validation_profit_factor", float("-inf")
+                    )
+                ),
+            )
+        )
+        if ranked_return:
+            add(ranked_return[len(ranked_return) // 2])
+        for item in series:
+            if len(selected) >= 6:
+                break
+            add(item)
+        return selected[:6]
+
+    @staticmethod
+    def _unavailable(
+        experiment_plan_id: str, reason: str
+    ) -> dict[str, Any]:
+        return {
+            "available": False,
+            "experiment_plan_id": experiment_plan_id,
+            "split": "validation",
+            "comparable": False,
+            "time_range": None,
+            "series": [],
+            "recommended_trial_ids": [],
+            "limitations": [],
+            "reason": reason,
+        }
+
+
 def _select_market_dataset(
     market_manifest: dict[str, Any],
     *,
@@ -753,6 +1011,82 @@ def _normalize_equity_frame(
             )
         ]
     return result
+
+
+def compress_equity_points(
+    frame: pd.DataFrame,
+    *,
+    split: str,
+    max_points: int = 500,
+) -> tuple[dict[str, Any], ...]:
+    """Normalize and deterministically downsample one real Trial equity frame."""
+
+    if not 50 <= max_points <= 2_000:
+        raise ValueError("max_points must be between 50 and 2000")
+    timestamp_column = next(
+        (name for name in ("timestamp", "date", "time") if name in frame),
+        None,
+    )
+    equity_column = next(
+        (
+            name
+            for name in (
+                "equity",
+                "marked_equity",
+                "closed_equity",
+                "realized_equity",
+            )
+            if name in frame
+        ),
+        None,
+    )
+    if timestamp_column is None or equity_column is None or frame.empty:
+        return ()
+    working = frame[[timestamp_column, equity_column]].copy()
+    working[timestamp_column] = pd.to_datetime(
+        working[timestamp_column], utc=True
+    )
+    working[equity_column] = pd.to_numeric(
+        working[equity_column], errors="coerce"
+    )
+    working = (
+        working.dropna(subset=[timestamp_column, equity_column])
+        .sort_values(timestamp_column)
+        .drop_duplicates(timestamp_column, keep="last")
+    )
+    if working.empty:
+        return ()
+    initial = float(working[equity_column].iloc[0])
+    if initial <= 0:
+        return ()
+    working["normalized_equity"] = (
+        working[equity_column].astype(float) / initial
+    )
+    working["drawdown"] = (
+        working["normalized_equity"]
+        / working["normalized_equity"].cummax()
+        - 1.0
+    )
+    if len(working) > max_points:
+        indices = np.linspace(0, len(working) - 1, max_points, dtype=int)
+        working = working.iloc[np.unique(indices)]
+    return tuple(
+        {
+            "split": split,
+            "timestamp": timestamp.isoformat(),
+            "normalized_equity": float(equity),
+            "drawdown": float(drawdown),
+            "point_index": index,
+        }
+        for index, (timestamp, equity, drawdown) in enumerate(
+            zip(
+                working[timestamp_column],
+                working["normalized_equity"],
+                working["drawdown"],
+                strict=True,
+            )
+        )
+    )
 
 
 def _series_label(report_type: str, split: str, index: int) -> str:

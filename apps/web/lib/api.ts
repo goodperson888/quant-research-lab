@@ -35,10 +35,21 @@ export type AgentStatus = {
     connection_status: string;
     note: string;
   };
+  local_connector: {
+    supported: boolean;
+    available: boolean;
+    connection_status: string;
+    codex_cli_detected: boolean;
+    connector_heartbeat_fresh: boolean;
+    state: string;
+    active_agent_run_id: string | null;
+    note: string;
+  };
   embedded_provider: {
     configured: boolean;
     provider: string | null;
     message: string;
+    model: string | null;
   };
   model_policy: AgentManifestSummary;
 };
@@ -144,6 +155,43 @@ export type Session = {
     auto_failure_diagnostics?: boolean;
   };
   mode_revision: number;
+  assistant_entry_mode: AssistantEntryMode;
+};
+
+export type AssistantEntryMode =
+  | "external_agent_direct"
+  | "web_local_connector"
+  | "web_provider";
+
+export type AgentRun = {
+  id: string;
+  session_id: string;
+  agent_name: string;
+  agent_provider: string;
+  execution_target: string;
+  mode: string;
+  status:
+    | "queued"
+    | "running"
+    | "waiting_approval"
+    | "paused"
+    | "completed"
+    | "failed"
+    | "cancelled";
+  plan_summary: string | null;
+  subject_id: string | null;
+  task_type: string;
+  error: string | null;
+  created_at: string;
+  lease_expires_at: string | null;
+};
+
+export type ProviderStatus = {
+  configured: boolean;
+  provider: string | null;
+  message: string;
+  kind: string;
+  model: string | null;
 };
 
 export type SessionAgentOccupancy = {
@@ -559,6 +607,7 @@ export type Trial = {
   elapsed_seconds: number | null;
   peak_rss_mb: number | null;
   metrics_artifact_key: string | null;
+  equity_artifact_key: string | null;
 };
 
 export type BatchSummary = {
@@ -572,6 +621,16 @@ export type BatchSummary = {
   stable_parameter_ranges: Record<string, unknown>;
   failed_parameter_ranges: Record<string, unknown>;
   representative_stable_metrics: Record<string, number>;
+  recommendation?: {
+    decision: "stop" | "insufficient_plateau" | "candidate_validation";
+    headline: string;
+    recommended_trial_id: string | null;
+    parameters?: Record<string, unknown>;
+    metrics?: Record<string, number>;
+    stability_score?: number;
+    neighbor_support?: number;
+    reasons: string[];
+  };
   cost_model: Record<string, unknown>;
   baseline_metrics: Record<string, number> | null;
   evidence_mode: "research" | "fixture" | "unavailable";
@@ -594,6 +653,37 @@ export type BatchSummary = {
   continue_reason?: string | null;
 };
 
+export type CandidateValidationSummary = {
+  available: boolean;
+  experiment_plan_id: string;
+  job_id?: string;
+  job_status: string;
+  report_id?: string;
+  report_artifact_key?: string;
+  decision_status: "ready_for_locked_test_review" | "needs_revision" | null;
+  cost_sensitivity_passed?: boolean;
+  positive_rolling_windows?: number;
+  rolling_window_count?: number;
+  perturbation_pass_ratio?: number;
+  regime_evidence_sufficient?: boolean;
+  weakest_evidence: string[];
+  next_action: string;
+  error?: string | null;
+  locked_test_job_id?: string | null;
+  locked_test_status?:
+    | "not_started"
+    | "queued"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "cancelled";
+  locked_test_decision?: "passed" | "failed" | null;
+  locked_test_metrics?: Record<string, number>;
+  locked_test_report_id?: string | null;
+  locked_test_used: boolean;
+  locked_test_automatically_started: boolean;
+};
+
 export type EquityChartSeries = {
   series_id: string;
   label: string;
@@ -605,6 +695,32 @@ export type EquityChartSeries = {
   }>;
   source_artifact_key: string;
   evidence_mode: string;
+};
+
+export type TrialEquityComparison = {
+  available: boolean;
+  experiment_plan_id: string;
+  split: "train" | "validation";
+  comparable: boolean;
+  time_range: { start: string; end: string } | null;
+  recommended_trial_ids: string[];
+  limitations: string[];
+  reason: string | null;
+  series: Array<{
+    trial_id: string;
+    label: string;
+    parameters: Record<string, unknown>;
+    metrics: Record<string, number>;
+    split: "train" | "validation";
+    line_style: "solid" | "dashed" | "dotted";
+    points: Array<{
+      t: string;
+      normalized_equity: number;
+      drawdown: number;
+    }>;
+    source_artifact_key: string;
+    evidence_mode: "research" | "fixture";
+  }>;
 };
 
 export type MarketChartSeries = {

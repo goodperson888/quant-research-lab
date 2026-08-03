@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   apiFetch,
@@ -29,7 +29,9 @@ import {
 type AssetView = "strategies" | "components" | "factors";
 
 export function ResearchAssetLibrary() {
+  const queryClient = useQueryClient();
   const [view, setView] = useState<AssetView>("strategies");
+  const [notice, setNotice] = useState<string | null>(null);
   const drafts = useQuery({
     queryKey: ["asset-library", "strategy-drafts"],
     queryFn: () => apiFetch<StrategyDraft[]>("/api/strategy-drafts"),
@@ -56,6 +58,56 @@ export function ResearchAssetLibrary() {
   const factors = useQuery({
     queryKey: ["asset-library", "factors"],
     queryFn: () => apiFetch<FactorRegistryItem[]>("/api/factors"),
+  });
+  const promoteFactor = useMutation({
+    mutationFn: (candidate: ComponentCandidate) =>
+      apiFetch<FactorRegistryItem>(
+        `/api/component-candidates/${candidate.id}/promote-factor-candidate`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            subject_id: candidate.id,
+            confirmed_by_user: true,
+            name: humanComponentName(candidate.name),
+          }),
+        },
+      ),
+    onSuccess: () => {
+      setNotice(
+        "已沉淀为独立因子候选；状态仍是“候选”，不会自动变成已验证因子。",
+      );
+      queryClient.invalidateQueries({ queryKey: ["asset-library", "factors"] });
+      queryClient.invalidateQueries({ queryKey: ["audit-events"] });
+      setView("factors");
+    },
+  });
+  const archiveFactor = useMutation({
+    mutationFn: ({
+      factorId,
+      restore,
+    }: {
+      factorId: string;
+      restore: boolean;
+    }) =>
+      apiFetch<FactorRegistryItem>(
+        `/api/factors/${factorId}/${restore ? "restore" : "archive"}`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            subject_id: factorId,
+            confirmed_by_user: true,
+          }),
+        },
+      ),
+    onSuccess: (_result, variables) => {
+      setNotice(
+        variables.restore
+          ? "因子候选已恢复到活跃列表。"
+          : "因子候选已软归档；来源、证据和失败记录仍完整保留。",
+      );
+      queryClient.invalidateQueries({ queryKey: ["asset-library", "factors"] });
+      queryClient.invalidateQueries({ queryKey: ["audit-events"] });
+    },
   });
 
   const strategyVersions = versions.data ?? [];
@@ -156,6 +208,11 @@ export function ResearchAssetLibrary() {
         当前资产严格分层：策略候选、组件候选和诊断性改进都不会自动算作“有效策略”或“已验证因子”。
         只有通过样本外、成本、敏感性和压力证据后，才会进入已验证状态。
       </div>
+      {notice ? (
+        <div className="rounded-xl border border-emerald-300/20 bg-emerald-300/[0.06] px-4 py-3 text-sm leading-6 text-emerald-100">
+          {notice}
+        </div>
+      ) : null}
 
       <div
         className="grid gap-2 md:grid-cols-3"
@@ -214,12 +271,19 @@ export function ResearchAssetLibrary() {
           <ComponentAssets
             candidates={componentCandidates}
             evidence={evidence.data ?? []}
+            factors={factorItems}
+            promotePending={promoteFactor.isPending}
+            onPromote={(candidate) => promoteFactor.mutate(candidate)}
             error={firstError(components.error, evidence.error)}
           />
         ) : (
           <FactorAssets
             factors={factorItems}
             componentCount={componentCandidates.length}
+            statusPending={archiveFactor.isPending}
+            onStatusChange={(factorId, restore) =>
+              archiveFactor.mutate({ factorId, restore })
+            }
             error={firstError(factors.error)}
           />
         )}
@@ -345,10 +409,16 @@ function StrategyAssets({
 function ComponentAssets({
   candidates,
   evidence,
+  factors,
+  promotePending,
+  onPromote,
   error,
 }: {
   candidates: ComponentCandidate[];
   evidence: ComponentEvidence[];
+  factors: FactorRegistryItem[];
+  promotePending: boolean;
+  onPromote: (candidate: ComponentCandidate) => void;
   error: string | null;
 }) {
   const evidenceById = useMemo(
@@ -364,6 +434,11 @@ function ComponentAssets({
     }
     return Date.parse(right.created_at) - Date.parse(left.created_at);
   });
+  const promotedComponentIds = new Set(
+    factors
+      .map((factor) => factor.metadata.source_component_candidate_id)
+      .filter((value): value is string => typeof value === "string"),
+  );
 
   if (error) return <ErrorState message={error} />;
   if (!ordered.length) {
@@ -379,7 +454,7 @@ function ComponentAssets({
     <div className="space-y-4">
       <SectionHeading
         title="策略研究中沉淀的组件"
-        description="组件是策略的一部分；component candidate 只代表值得继续验证，不代表已经跨市场有效。"
+        description="组件是策略的一部分；组件候选只代表值得继续验证，不代表已经跨市场有效。"
       />
       <div className="grid gap-3 lg:grid-cols-2">
         {ordered.map((candidate) => {
@@ -419,9 +494,11 @@ function ComponentAssets({
                 <AssetDetail
                   label="适用市场"
                   value={
-                    candidate.target_market_profile ||
-                    item?.target_market_profile ||
-                    "待补充"
+                    humanMarketProfile(
+                      candidate.target_market_profile ||
+                        item?.target_market_profile ||
+                        "",
+                    )
                   }
                 />
                 <AssetDetail
@@ -446,6 +523,23 @@ function ComponentAssets({
                   ? "已达到组件候选层级，仍需独立样本外、成本和稳定性证据后才能讨论验证。"
                   : "仅保留为诊断经验，不能直接组合成策略或写入已验证因子库。"}
               </p>
+              {candidate.status === "component_candidate" &&
+              !candidate.archived_at ? (
+                promotedComponentIds.has(candidate.id) ? (
+                  <div className="mt-3 rounded-lg border border-emerald-300/15 bg-emerald-300/[0.06] p-3 text-xs leading-5 text-emerald-100">
+                    已登记为独立因子候选；仍需按市场、周期和成本单独验证。
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onPromote(candidate)}
+                    disabled={promotePending}
+                    className="mt-3 min-h-11 w-full rounded-xl border border-sky-300/25 bg-sky-300/10 px-3 text-sm font-medium text-sky-100 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    沉淀为独立因子候选
+                  </button>
+                )
+              ) : null}
               <TechnicalDetails label="查看组件证据">
                 <TechnicalId label="组件对象" value={candidate.id} />
                 <TechnicalId label="证据对象" value={candidate.evidence_id} />
@@ -468,10 +562,14 @@ function ComponentAssets({
 function FactorAssets({
   factors,
   componentCount,
+  statusPending,
+  onStatusChange,
   error,
 }: {
   factors: FactorRegistryItem[];
   componentCount: number;
+  statusPending: boolean;
+  onStatusChange: (factorId: string, restore: boolean) => void;
   error: string | null;
 }) {
   if (error) return <ErrorState message={error} />;
@@ -498,7 +596,14 @@ function FactorAssets({
         description="因子思想可以复用，但验证状态必须按市场、周期和成本模型隔离。"
       />
       <div className="divide-y divide-white/[0.06]">
-        {factors.map((factor) => (
+        {[...factors]
+          .sort((left, right) => {
+            if ((left.status === "retired") !== (right.status === "retired")) {
+              return left.status === "retired" ? 1 : -1;
+            }
+            return Date.parse(right.updated_at) - Date.parse(left.updated_at);
+          })
+          .map((factor) => (
           <article
             key={factor.factor_id}
             className="grid gap-3 py-4 md:grid-cols-[minmax(0,1fr)_auto]"
@@ -521,7 +626,7 @@ function FactorAssets({
                 />
               </div>
               <div className="mt-1 text-xs text-slate-500">
-                {factor.category} · v{factor.version} · 更新于{" "}
+                {cnComponentType(factor.category)} · v{factor.version} · 更新于{" "}
                 {formatDate(factor.updated_at)}
               </div>
               {factor.description ? (
@@ -536,6 +641,19 @@ function FactorAssets({
                 ) : null}
               </TechnicalDetails>
             </div>
+            <button
+              type="button"
+              onClick={() =>
+                onStatusChange(
+                  factor.factor_id,
+                  factor.status === "retired",
+                )
+              }
+              disabled={statusPending}
+              className="min-h-11 self-start rounded-xl border border-white/10 px-3 text-xs text-slate-300 transition hover:border-white/20 hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {factor.status === "retired" ? "恢复候选" : "移出活跃列表"}
+            </button>
           </article>
         ))}
       </div>
@@ -684,6 +802,15 @@ function humanComponentName(name: string) {
       "EMA structure-exit confirmation speed": "EMA 结构离场确认速度",
       "confirmation-candle breakout entry": "确认 K 线突破入场",
     }[name] ?? name
+  );
+}
+
+function humanMarketProfile(value: string) {
+  return (
+    ({
+      "crypto_perpetual.binance.eth": "币安 ETH/USDT 永续",
+      "crypto_perpetual.okx.eth": "OKX ETH/USDT 永续",
+    }[value] ?? value) || "待补充"
   );
 }
 

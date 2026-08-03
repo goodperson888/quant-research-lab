@@ -52,7 +52,9 @@ drafts, or presenting a Run Bundle.
 
 - Save the original source before formalization.
 - Treat AI and Agent output as draft/proposal until the user confirms it.
-- Freeze baseline v0 once. Create a new Proposal/StrategyVersion for every later change.
+- Freeze baseline v0 once. A rule or economic-mechanism change requires a new
+  Proposal/Candidate StrategyVersion. Parameter combinations inside one approved Candidate are
+  Trials and must not create new Strategies or StrategyVersions.
 - Test one explicit hypothesis at a time; require ablation for compound changes.
 - Keep failed experiments, contaminated-test markers, costs, data versions, and stopping reasons.
 - Keep strategy Outcome and immutable StrategyVersion distinct: an append-only rejected Outcome is
@@ -118,7 +120,7 @@ Also load the ResearchSession budget before approving a new hypothesis or creati
 
 ## Respect Worker resources
 
-Load `configs/workers/local.yaml`. Default one-shot concurrency to one; an automatic memory-based
+Load `configs/workers/local.yaml`. Default Worker concurrency to one; an automatic memory-based
 recommendation may raise it only within the configured hard cap. Report elapsed time and peak RSS,
 batch Trial metrics using the configured Parquet row target, and fail with preserved evidence when
 time or memory limits are exceeded.
@@ -129,12 +131,16 @@ Store only project-relative `artifact_key` values. Reject absolute paths, `file:
 
 ## Respect the product boundary
 
-- Current provider/target: `external_local_agent + local_runtime`.
+- Current execution target is `local_runtime`. Supported entry modes are direct External Agent,
+  Web → Local Connector, and Web → OpenAI-compatible BYOK Provider.
 - Default ResearchSession mode is `guided`; each session may explicitly select `quick`,
   `guided` or `expert`. AgentRun pacing is derived from that persisted mode unless an exact
   supported override is explicitly supplied.
-- Embedded Provider and Hosted Sandbox are planned/unsupported.
-- Do not request an API key, claim an LLM is connected, or fabricate AI output.
+- Platform-hosted Provider and Hosted Sandbox are planned/unsupported. BYOK formalization is
+  supported, but its key must remain only in API process memory.
+- Do not ask the user to paste an API key into chat or write it to a file. Direct the user to the
+  in-product memory-only configuration when needed. Never claim a Connector/Provider is connected
+  without its real status, and never fabricate AI output.
 - Do not expose or call live trade, credential, arbitrary path, arbitrary Shell, or automatic production-promotion capabilities.
 - Use `scripts/freqtrade.sh`; it must reject `trade`.
 - Leave long work as a white-listed Job; do not execute it inside an HTTP request.

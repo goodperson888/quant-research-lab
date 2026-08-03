@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -45,10 +46,13 @@ def test_baseline_is_frozen_once_and_never_overwritten(tmp_path: Path) -> None:
     assert baseline.version == 0
     assert baseline.immutable is True
     assert baseline.source_snapshot == "Buy when condition A is true."
-    assert baseline.content_snapshot == {
-        "version": "v0.1",
-        "entry": {"rule": "confirmed condition A"},
+    assert baseline.content_snapshot["version"] == "v0.1"
+    assert baseline.content_snapshot["entry"] == {
+        "rule": "confirmed condition A"
     }
+    assert baseline.content_snapshot["execution_readiness"]["status"] == (
+        "unsupported"
+    )
     with pytest.raises(ConflictError, match="immutable"):
         service.freeze_baseline(draft_id=draft.id, confirmed_by_user=True)
     with pytest.raises(ConflictError, match="immutable"):
@@ -56,6 +60,23 @@ def test_baseline_is_frozen_once_and_never_overwritten(tmp_path: Path) -> None:
             draft_id=draft.id,
             structured_content={"version": "v0.2"},
             confirmed_by_user=True,
+        )
+
+
+def test_research_session_accepts_only_one_strategy_intake(tmp_path: Path) -> None:
+    service = build_service(tmp_path)
+    session = service.create_research_session(title="single strategy")
+    service.create_strategy_intake(
+        session_id=session.id,
+        source_type="natural_language",
+        raw_content="First strategy.",
+    )
+
+    with pytest.raises(ConflictError, match="只能包含一份策略"):
+        service.create_strategy_intake(
+            session_id=session.id,
+            source_type="natural_language",
+            raw_content="Second strategy.",
         )
 
 
@@ -120,16 +141,18 @@ def test_api_smoke_and_agent_first_status(tmp_path: Path) -> None:
     assert api_root.json()["web_studio"] == "http://127.0.0.1:3100/studio"
 
     agent = client.get("/api/agent/status").json()
-    assert agent["active_configuration"] == {
-        "agent_provider": "external_local_agent",
-        "execution_target": "local_runtime",
-        "data_location": "local_project",
-        "privacy_note": "Research inputs and product state remain local in phase 0.",
-    }
+    assert agent["active_configuration"]["agent_provider"] == (
+        "selected_per_research_session"
+    )
+    assert agent["active_configuration"]["execution_target"] == "local_runtime"
+    assert agent["active_configuration"]["data_location"] == "local_project"
+    assert agent["external_agent"]["connection_status"] == "direct_interaction"
+    assert agent["local_connector"]["available"] is False
     assert agent["embedded_provider"]["configured"] is False
 
     session = client.post("/api/research/sessions", json={"title": "API session"})
     assert session.status_code == 201
+    assert session.json()["assistant_entry_mode"] == "external_agent_direct"
     session_id = session.json()["id"]
     draft = client.post(
         f"/api/research/sessions/{session_id}/intakes",
@@ -165,10 +188,11 @@ def test_api_smoke_and_agent_first_status(tmp_path: Path) -> None:
     )
     assert frozen.status_code == 201
     assert frozen.json()["immutable"] is True
-    assert frozen.json()["content_snapshot"] == {
-        "version": "v0.1",
-        "source": "confirmed",
-    }
+    assert frozen.json()["content_snapshot"]["version"] == "v0.1"
+    assert frozen.json()["content_snapshot"]["source"] == "confirmed"
+    assert frozen.json()["content_snapshot"]["execution_readiness"][
+        "status"
+    ] == "unsupported"
     baseline_id = frozen.json()["id"]
     versions = client.get("/api/strategy-versions").json()
     assert versions == [frozen.json()]
@@ -277,6 +301,75 @@ def test_openapi_has_no_live_trade_or_arbitrary_execution_endpoint(tmp_path: Pat
     assert all("/live" not in path for path in paths)
     assert all("/shell" not in path for path in paths)
     assert all("credential" not in path for path in paths)
+
+
+def test_web_provider_key_stays_in_memory_and_formalization_is_a_proposal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = tmp_path / "runtime/app/api.sqlite3"
+    app = create_app(root=tmp_path, database_path=database)
+    client = TestClient(app)
+    secret = "test-secret-never-persist"
+    configured = client.post(
+        "/api/agent/provider",
+        json={
+            "provider_name": "fixture",
+            "base_url": "http://127.0.0.1:9999/v1",
+            "model": "fixture-model",
+            "api_key": secret,
+        },
+    )
+    assert configured.status_code == 200
+    assert configured.json()["configured"] is True
+    assert secret not in database.read_bytes().decode("utf-8", errors="ignore")
+
+    monkeypatch.setattr(
+        app.state.llm_provider,
+        "propose_formalization",
+        lambda _raw: {
+            "structured_content": {
+                "strategy_name": "fixture",
+                "entry_rules": ["待用户确认"],
+                "ambiguities": ["入场价定义不清"],
+            },
+            "assistant_message": "已生成结构化提案，请确认入场价定义。",
+            "ambiguities": ["入场价定义不清"],
+            "requires_user_confirmation": True,
+        },
+    )
+    session = client.post(
+        "/api/research/sessions",
+        json={
+            "title": "provider session",
+            "assistant_entry_mode": "web_provider",
+        },
+    ).json()
+    draft = client.post(
+        f"/api/research/sessions/{session['id']}/intakes",
+        json={"source_type": "natural_language", "raw_content": "价格突破时买入"},
+    ).json()
+    started = client.post(
+        f"/api/strategy-drafts/{draft['id']}/agent-runs",
+        json={"entry_mode": "web_provider"},
+    )
+    assert started.status_code == 201
+    for _ in range(50):
+        runs = client.get(
+            f"/api/research/sessions/{session['id']}/agent-runs"
+        ).json()
+        if runs and runs[0]["status"] == "waiting_approval":
+            break
+        time.sleep(0.02)
+    assert runs[0]["status"] == "waiting_approval"
+    detail = client.get(f"/api/research/sessions/{session['id']}").json()
+    assert detail["drafts"][0]["status"] == "awaiting_confirmation"
+    assert detail["drafts"][0]["baseline_version_id"] is None
+    assert detail["messages"][-1]["role"] == "assistant"
+    assert secret not in json.dumps(client.get("/api/audit/events").json())
+
+    cleared = client.delete("/api/agent/provider")
+    assert cleared.status_code == 200
+    assert cleared.json()["configured"] is False
 
 
 def test_data_summary_prefers_two_year_manifest(tmp_path: Path) -> None:

@@ -134,6 +134,43 @@ def list_factors(path: Path) -> Iterable[sqlite3.Row]:
     return rows
 
 
+def get_factor(path: Path, factor_id: str) -> sqlite3.Row:
+    initialize(path)
+    with connect(path) as connection:
+        row = connection.execute(
+            """
+            SELECT factor_id, name, category, version, status, formula_path,
+                   description, metadata_json, created_at, updated_at
+            FROM factors
+            WHERE factor_id = ?
+            """,
+            (factor_id,),
+        ).fetchone()
+    if row is None:
+        raise KeyError(f"factor not found: {factor_id}")
+    return row
+
+
+def set_factor_status(path: Path, *, factor_id: str, status: str) -> sqlite3.Row:
+    if status not in VALID_STATUSES:
+        raise ValueError("invalid factor status: %s" % status)
+    if status == "production":
+        raise ValueError("production promotion requires explicit human approval")
+    initialize(path)
+    with connect(path) as connection:
+        updated = connection.execute(
+            """
+            UPDATE factors
+            SET status = ?, updated_at = ?
+            WHERE factor_id = ?
+            """,
+            (status, utc_now(), factor_id),
+        )
+        if updated.rowcount != 1:
+            raise KeyError(f"factor not found: {factor_id}")
+    return get_factor(path, factor_id)
+
+
 def register_experiment(
     path: Path, *, run_id: str, run_type: str, manifest_path: str
 ) -> None:

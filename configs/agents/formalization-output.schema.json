@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "assistant_message",
+    "ambiguities",
+    "structured_content",
+    "requires_user_confirmation"
+  ],
+  "properties": {
+    "assistant_message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ambiguities": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "structured_content": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": true
+    },
+    "requires_user_confirmation": {
+      "const": true
+    }
+  }
+}

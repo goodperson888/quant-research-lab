@@ -1,4 +1,8 @@
-import { BatchSummary, Job } from "@/lib/api";
+import {
+  BatchSummary,
+  CandidateValidationSummary,
+  Job,
+} from "@/lib/api";
 import { cnStatus } from "@/components/studio/studio-labels";
 import {
   EmptyState,
@@ -10,12 +14,16 @@ import {
 
 export function BatchProgressPanel({
   summary,
+  candidateValidation,
   job,
   onCancel,
+  onValidate,
 }: {
   summary: BatchSummary | undefined;
+  candidateValidation: CandidateValidationSummary | undefined;
   job: Job | undefined;
   onCancel: (jobId: string) => void;
+  onValidate: (planId: string) => void;
 }) {
   if (!summary) {
     return (
@@ -90,6 +98,35 @@ export function BatchProgressPanel({
           : summary.continue_reason ??
             (running ? "系统正在已批准预算内继续。" : "当前批次范围已结束。")}
       </div>
+      {!running && summary.recommendation ? (
+        <div className="rounded-lg border border-white/[0.08] bg-white/[0.025] p-3">
+          <div className="font-medium text-slate-200">
+            {summary.recommendation.headline}
+          </div>
+          <div className="mt-1 space-y-1 leading-5 text-slate-500">
+            {summary.recommendation.reasons.map((reason) => (
+              <div key={reason}>{reason}</div>
+            ))}
+          </div>
+          {summary.recommendation.decision === "candidate_validation" &&
+          !candidateValidation?.available ? (
+            <button
+              type="button"
+              onClick={() => onValidate(summary.experiment_plan_id)}
+              className="mt-3 w-full rounded-lg border border-sky-300/25 bg-sky-300/10 px-3 py-2 text-sky-100"
+            >
+              运行有界候选验证
+            </button>
+          ) : null}
+          {candidateValidation?.available ? (
+            <div className="mt-3 rounded-lg bg-white/[0.03] p-2 leading-5 text-slate-400">
+              {["queued", "running"].includes(candidateValidation.job_status)
+                ? "有界候选验证已经排队，系统正在更新最终结论。"
+                : "有界候选验证已完成，请查看“最终研究判断”。"}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {running && job ? (
         <button
           type="button"

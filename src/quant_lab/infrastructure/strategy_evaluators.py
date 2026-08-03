@@ -13,6 +13,7 @@ import yaml
 
 from quant_lab.application.boll_rsi_slope import BollRsiSlopeBacktester
 from quant_lab.application.ema_mtf_scalp import EmaMtfScalpBacktester
+from quant_lab.application.equity_series import compress_equity_points
 from quant_lab.application.ports import TrialEvaluationRequest, TrialEvaluationResult
 from quant_lab.application.selective_reentry_smoke import SelectiveReentrySmokeBacktester
 from quant_lab.domain.models import Job, validate_artifact_key
@@ -50,6 +51,16 @@ class DeterministicFixtureStrategyEvaluator:
             elapsed_seconds=0.001,
             peak_rss_mb=1.0,
             stop_reason=None,
+            equity_points=tuple(
+                {
+                    "split": "validation",
+                    "timestamp": f"2026-01-{day:02d}T00:00:00+00:00",
+                    "normalized_equity": 1.0 + score / 2000 * index / 9,
+                    "drawdown": 0.0,
+                    "point_index": index,
+                }
+                for index, day in enumerate(range(1, 11))
+            ),
         )
 
 
@@ -77,6 +88,13 @@ class StrategySpec:
     strategy_spec_id: str
     backtest_handlers: Mapping[str, Callable[[Job], Mapping[str, Any]]]
     evaluator_ids: tuple[str, ...]
+    snapshot_strategy_id: str | None = None
+    config_artifact_key: str | None = None
+    config_resolver: Callable[[Any, str], str] | None = None
+    smoke_intent: str | None = None
+    fast_screen_intent: str | None = None
+    market_profile: str | None = None
+    pipeline_profile: str = "fast_screen"
 
 
 class StrategyPluginRegistry:
@@ -109,6 +127,31 @@ class StrategyPluginRegistry:
 
     def list_specs(self) -> tuple[StrategySpec, ...]:
         return tuple(self._specs.values())
+
+    def get_spec(self, strategy_spec_id: str) -> StrategySpec:
+        try:
+            return self._specs[strategy_spec_id]
+        except KeyError as exc:
+            raise ValueError(
+                f"strategy spec is unsupported: {strategy_spec_id}; "
+                "no generic strategy execution is being fabricated"
+            ) from exc
+
+    def find_for_snapshot(self, snapshot: Mapping[str, Any]) -> StrategySpec:
+        explicit = snapshot.get("strategy_spec_id")
+        if isinstance(explicit, str) and explicit:
+            return self.get_spec(explicit)
+        strategy_id = snapshot.get("strategy_id")
+        matches = [
+            spec
+            for spec in self._specs.values()
+            if spec.snapshot_strategy_id == strategy_id
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                "baseline does not select exactly one reviewed StrategySpec"
+            )
+        return matches[0]
 
 
 class EmaMtfScalpComponentEvaluator:
@@ -299,6 +342,10 @@ class EmaMtfScalpComponentEvaluator:
                 elapsed_seconds=time.monotonic() - started,
                 peak_rss_mb=0.0,
                 stop_reason="diagnostic_split_validation_already_observed",
+                equity_points=compress_equity_points(
+                    results["validation"].equity,
+                    split="validation",
+                ),
             )
         except Exception as exc:
             return TrialEvaluationResult(
@@ -622,6 +669,10 @@ class BollRsiSlopeExitComponentEvaluator:
                 elapsed_seconds=time.monotonic() - started,
                 peak_rss_mb=0.0,
                 stop_reason="diagnostic_split_validation_already_observed",
+                equity_points=compress_equity_points(
+                    results["validation"].equity,
+                    split="validation",
+                ),
             )
         except Exception as exc:
             return TrialEvaluationResult(
@@ -1036,6 +1087,10 @@ class SelectiveReentryComponentEvaluator:
                 elapsed_seconds=time.monotonic() - started,
                 peak_rss_mb=0.0,
                 stop_reason="diagnostic_split_validation_already_observed",
+                equity_points=compress_equity_points(
+                    results["validation"].equity,
+                    split="validation",
+                ),
             )
         except Exception as exc:
             return TrialEvaluationResult(

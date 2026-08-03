@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 
 import { apiFetch, RunBundle } from "@/lib/api";
@@ -93,6 +94,12 @@ export function ReportList() {
                 </span>
               ))}
             </div>
+            <Link
+              href={`/reports/${encodeURIComponent(report.bundle_id)}`}
+              className="mt-4 inline-flex min-h-11 items-center rounded-xl border border-sky-300/20 bg-sky-300/[0.06] px-4 text-sm font-medium text-sky-100 transition hover:border-sky-300/30 hover:bg-sky-300/[0.1] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+            >
+              查看结论、指标与图表
+            </Link>
             <TechnicalDetails label="查看报告技术信息">
               <TechnicalId label="报告对象" value={report.bundle_id} />
               <TechnicalId label="后台任务" value={report.job_id} />
@@ -169,6 +176,8 @@ function numberValue(value: unknown) {
 }
 
 function reportTypeLabel(value: string) {
+  if (value.includes("locked")) return "最终保留测试报告";
+  if (value.includes("candidate")) return "候选稳健性报告";
   if (value.includes("baseline")) return "冻结基准回测";
   if (value.includes("fast_screen")) return "快速初筛报告";
   if (value.includes("smoke")) return "小范围试跑报告";
@@ -182,12 +191,13 @@ function reportTypeLabel(value: string) {
 function jobTypeLabel(value: string) {
   return {
     baseline_backtest: "基准回测",
+    backtest: "策略回测",
     fast_screen: "快速初筛",
     parameter_search: "参数试验",
     research_diagnostic: "研究诊断",
     research_diagnostics: "研究诊断",
     regime_validation: "行情验证",
-    stress_test: "压力测试",
+    stress_test: "稳健性与保留测试",
   }[value] ?? value;
 }
 

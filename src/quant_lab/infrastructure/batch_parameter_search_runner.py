@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 import time
 from typing import Any, Mapping
 
@@ -9,11 +11,21 @@ from quant_lab.application.batch_trials import (
     parameter_signature,
     summarize_stable_ranges,
 )
-from quant_lab.application.ports import TrialEvaluationRequest, TrialExecutor, TrialMetricsSink
-from quant_lab.application.services import ResearchApplicationService
+from quant_lab.application.ports import (
+    TrialEquitySink,
+    TrialEvaluationRequest,
+    TrialExecutor,
+    TrialMetricsSink,
+)
+from quant_lab.application.services import (
+    ResearchApplicationService,
+    new_id,
+    utc_now,
+)
 from quant_lab.domain.errors import JobCancelledError
-from quant_lab.domain.models import Job, Trial
+from quant_lab.domain.models import Job, Report, Trial
 from quant_lab.domain.repositories import ProductRepository
+from quant_lab.infrastructure.artifact_store import LocalArtifactStore
 from quant_lab.infrastructure.policy_readers import WorkerResourcePolicy
 from quant_lab.infrastructure.strategy_evaluators import StrategyEvaluatorRegistry
 
@@ -38,16 +50,26 @@ class BatchParameterSearchRunner:
         executor: TrialExecutor,
         metrics_sink: TrialMetricsSink,
         resource_policy: WorkerResourcePolicy,
+        equity_sink: TrialEquitySink | None = None,
         component_aggregator=None,
+        artifact_root: Path | None = None,
     ) -> None:
         self.repository = repository
         self.service = ResearchApplicationService(repository)
         self.evaluators = evaluator_registry
         self.executor = executor
         self.metrics_sink = metrics_sink
+        self.equity_sink = equity_sink or (
+            metrics_sink if hasattr(metrics_sink, "append_equity_batch") else None
+        )
         self.policy = resource_policy
         self.generator = DeterministicParameterGenerator()
         self.component_aggregator = component_aggregator
+        self.artifacts = (
+            LocalArtifactStore(artifact_root.resolve())
+            if artifact_root is not None
+            else None
+        )
 
     def __call__(self, job: Job) -> Mapping[str, Any]:
         if job.payload.get("batch_mode") is not True:
@@ -122,21 +144,36 @@ class BatchParameterSearchRunner:
 
         started = time.monotonic()
         metrics_artifacts: list[str] = []
+        equity_artifacts: list[str] = []
         pending_metric_rows: list[Mapping[str, Any]] = []
+        pending_equity_rows: list[Mapping[str, Any]] = []
         stop_reason: str | None = None
 
-        def flush_metric_rows() -> None:
+        def flush_result_rows() -> None:
             if not pending_metric_rows:
                 return
             rows = list(pending_metric_rows)
             pending_metric_rows.clear()
-            artifact_keys = self.metrics_sink.append_batch(
+            metric_keys = self.metrics_sink.append_batch(
                 experiment_plan_id=plan.id, rows=rows
             )
-            metrics_artifacts.extend(artifact_keys)
-            if not artifact_keys:
-                return
-            artifact_key = artifact_keys[0]
+            metrics_artifacts.extend(metric_keys)
+            equity_rows = list(pending_equity_rows)
+            pending_equity_rows.clear()
+            equity_keys = (
+                self.equity_sink.append_equity_batch(
+                    experiment_plan_id=plan.id,
+                    rows=equity_rows,
+                )
+                if self.equity_sink is not None and equity_rows
+                else ()
+            )
+            equity_artifacts.extend(equity_keys)
+            metric_key = metric_keys[0] if metric_keys else None
+            equity_key = equity_keys[0] if equity_keys else None
+            trials_with_equity = {
+                str(item["trial_id"]) for item in equity_rows
+            }
             for row in rows:
                 current = next(
                     item
@@ -152,14 +189,19 @@ class BatchParameterSearchRunner:
                     elapsed_seconds=current.elapsed_seconds,
                     peak_rss_mb=current.peak_rss_mb,
                     result_artifact_key=current.result_artifact_key,
-                    metrics_artifact_key=artifact_key,
+                    metrics_artifact_key=metric_key,
+                    equity_artifact_key=(
+                        equity_key
+                        if current.id in trials_with_equity
+                        else current.equity_artifact_key
+                    ),
                 )
 
         for offset in range(0, len(runnable), concurrency):
             current_job = self.repository.get_job(job.id)
             if current_job.status == "cancelled":
                 stop_reason = "cancelled_by_user"
-                flush_metric_rows()
+                flush_result_rows()
                 for item in runnable[offset:]:
                     self.service.update_trial(
                         trial_id=item.id,
@@ -234,11 +276,23 @@ class BatchParameterSearchRunner:
                         "evidence_mode": job.payload.get("evidence_mode", "research"),
                     }
                 )
+                pending_equity_rows.extend(
+                    {
+                        "trial_id": result.trial_id,
+                        "experiment_plan_id": plan.id,
+                        "split": str(point["split"]),
+                        "timestamp": str(point["timestamp"]),
+                        "normalized_equity": float(point["normalized_equity"]),
+                        "drawdown": float(point["drawdown"]),
+                        "point_index": int(point["point_index"]),
+                    }
+                    for point in result.equity_points
+                )
             pending_metric_rows.extend(rows)
             if len(pending_metric_rows) >= self.policy.parquet_batch_rows:
-                flush_metric_rows()
+                flush_result_rows()
 
-        flush_metric_rows()
+        flush_result_rows()
 
         trials = list(self.repository.list_trials(plan.id))
         summary = summarize_stable_ranges(trials, plan.constraints)
@@ -261,6 +315,7 @@ class BatchParameterSearchRunner:
                 "peak_rss_mb": round(peak_rss, 3),
                 "stop_reason": stop_reason,
                 "metrics_artifact_keys": metrics_artifacts,
+                "trial_equity_artifact_keys": equity_artifacts,
                 "evidence_mode": job.payload.get("evidence_mode", "research"),
                 "research_conclusion_allowed": job.payload.get("evidence_mode") != "fixture",
             }
@@ -279,7 +334,108 @@ class BatchParameterSearchRunner:
                 "deduplicated": aggregated["deduplicated"],
                 "automatic_validation": False,
             }
+        summary["run_id"] = job.id
+        summary["artifact_keys"] = [
+            *metrics_artifacts,
+            *equity_artifacts,
+        ]
+        self._persist_report(job, summary)
         return summary
+
+    def _persist_report(
+        self, job: Job, summary: dict[str, Any]
+    ) -> None:
+        if self.artifacts is None:
+            return
+        json_key = f"reports/experiments/{job.id}.json"
+        markdown_key = f"reports/experiments/{job.id}.md"
+        summary["report_artifact_key"] = markdown_key
+        summary["report_json_artifact_key"] = json_key
+        summary["artifact_keys"].extend((json_key, markdown_key))
+        self.artifacts.put(
+            json_key,
+            (
+                json.dumps(
+                    summary,
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n"
+            ).encode("utf-8"),
+        )
+        self.artifacts.put(
+            markdown_key,
+            self._markdown_report(summary).encode("utf-8"),
+        )
+        self.repository.create_report(
+            Report(
+                id=new_id("report"),
+                job_id=job.id,
+                report_type="parameter_search_batch",
+                artifact_key=markdown_key,
+                summary=dict(summary),
+                created_at=utc_now(),
+            )
+        )
+
+    @staticmethod
+    def _markdown_report(summary: Mapping[str, Any]) -> str:
+        recommendation = dict(summary.get("recommendation", {}))
+        metrics = dict(recommendation.get("metrics", {}))
+        parameters = dict(recommendation.get("parameters", {}))
+        reasons = [
+            f"- {item}"
+            for item in recommendation.get("reasons", [])
+        ] or ["- 当前没有可推荐的稳定方案。"]
+        parameter_rows = [
+            f"| {name} | {value} |"
+            for name, value in sorted(parameters.items())
+        ] or ["| — | — |"]
+        metric_rows = [
+            f"| {name} | {value:.6g} |"
+            for name, value in sorted(metrics.items())
+            if isinstance(value, (int, float))
+        ] or ["| — | — |"]
+        return "\n".join(
+            [
+                "# 有限批量参数研究结论",
+                "",
+                f"- 试验计划：`{summary.get('experiment_plan_id')}`",
+                f"- 完成方案：{summary.get('trial_count', 0)}",
+                f"- 满足约束：{summary.get('stable_count', 0)}",
+                "- 最终保留测试：未使用",
+                "",
+                "## 当前判断",
+                "",
+                f"**{recommendation.get('headline', '暂无结论')}**",
+                "",
+                *reasons,
+                "",
+                "## 推荐参数",
+                "",
+                "| 参数 | 值 |",
+                "|---|---:|",
+                *parameter_rows,
+                "",
+                "## 推荐方案指标",
+                "",
+                "| 指标 | 数值 |",
+                "|---|---:|",
+                *metric_rows,
+                "",
+                "## 下一步",
+                "",
+                (
+                    "- 可以进入候选验证：成本敏感性、滚动窗口、参数扰动和行情分解。"
+                    if recommendation.get("decision")
+                    == "candidate_validation"
+                    else "- 停止扩大参数搜索，先审阅失败归因或补充稳定性证据。"
+                ),
+                "- 不会自动使用 locked test、晋升生产或启动实盘。",
+                "",
+            ]
+        )
 
 
 class ParameterSearchRouter:

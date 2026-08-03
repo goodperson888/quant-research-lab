@@ -21,6 +21,9 @@ export function ComponentLibrary({
   candidates,
   archivedCandidates,
   evidence,
+  materializedHypothesisIds,
+  materializePending,
+  onMaterialize,
   onArchive,
   onRestore,
 }: {
@@ -28,6 +31,9 @@ export function ComponentLibrary({
   candidates: ComponentCandidate[];
   archivedCandidates: ComponentCandidate[];
   evidence: ComponentEvidence[];
+  materializedHypothesisIds: Set<string>;
+  materializePending: boolean;
+  onMaterialize: (hypothesisId: string) => void;
   onArchive: (candidateId: string) => void;
   onRestore: (candidateId: string) => void;
 }) {
@@ -51,6 +57,22 @@ export function ComponentLibrary({
               </div>
               <p className="mt-2 text-xs leading-5 text-slate-500">
                 来源：{cnSource(item.source)}。这不是模型自由生成的交易建议。
+              </p>
+              <button
+                type="button"
+                onClick={() => onMaterialize(item.id)}
+                disabled={
+                  materializePending ||
+                  materializedHypothesisIds.has(item.id)
+                }
+                className="mt-3 min-h-11 w-full rounded-lg border border-sky-300/25 bg-sky-300/[0.06] px-3 py-2 text-xs font-medium text-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {materializedHypothesisIds.has(item.id)
+                  ? "已形成可审阅方案"
+                  : "形成可审阅的改进方案"}
+              </button>
+              <p className="mt-2 text-xs leading-5 text-slate-500">
+                这里只生成草稿，不会创建候选版本，也不会自动运行参数测试。
               </p>
               <TechnicalDetails>
                 <TechnicalId label="方向对象" value={item.id} />

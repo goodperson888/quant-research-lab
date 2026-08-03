@@ -11,6 +11,7 @@ from quant_lab.domain.errors import ApprovalRequiredError, ConflictError, NotFou
 from quant_lab.domain.models import (
     AgentProviderKind,
     AgentRun,
+    AssistantEntryMode,
     Artifact,
     AuditEvent,
     Constraint,
@@ -41,7 +42,7 @@ from quant_lab.domain.models import (
 )
 
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 14
 AGENT_RUN_LEASE_MINUTES = 120
 
 
@@ -87,7 +88,8 @@ class SQLiteProductRepository:
                     updated_at TEXT NOT NULL,
                     research_mode TEXT NOT NULL DEFAULT 'guided',
                     mode_config_json TEXT NOT NULL DEFAULT '{}',
-                    mode_revision INTEGER NOT NULL DEFAULT 1
+                    mode_revision INTEGER NOT NULL DEFAULT 1,
+                    assistant_entry_mode TEXT NOT NULL DEFAULT 'external_agent_direct'
                 );
 
                 CREATE TABLE IF NOT EXISTS research_budgets (
@@ -357,6 +359,7 @@ class SQLiteProductRepository:
                     peak_rss_mb REAL,
                     result_artifact_key TEXT,
                     metrics_artifact_key TEXT,
+                    equity_artifact_key TEXT,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (experiment_plan_id) REFERENCES experiment_plans(id)
                 );
@@ -370,6 +373,9 @@ class SQLiteProductRepository:
                     mode TEXT NOT NULL,
                     status TEXT NOT NULL,
                     plan_summary TEXT,
+                    subject_id TEXT,
+                    task_type TEXT NOT NULL DEFAULT 'research_orchestration',
+                    error TEXT,
                     created_at TEXT NOT NULL,
                     lease_expires_at TEXT,
                     FOREIGN KEY (session_id) REFERENCES research_sessions(id)
@@ -525,6 +531,9 @@ class SQLiteProductRepository:
                     "research_mode": "TEXT NOT NULL DEFAULT 'guided'",
                     "mode_config_json": "TEXT NOT NULL DEFAULT '{}'",
                     "mode_revision": "INTEGER NOT NULL DEFAULT 1",
+                    "assistant_entry_mode": (
+                        "TEXT NOT NULL DEFAULT 'external_agent_direct'"
+                    ),
                 },
                 "proposals": {
                     "baseline_version_id": "TEXT",
@@ -563,9 +572,13 @@ class SQLiteProductRepository:
                     "peak_rss_mb": "REAL",
                     "result_artifact_key": "TEXT",
                     "metrics_artifact_key": "TEXT",
+                    "equity_artifact_key": "TEXT",
                 },
                 "agent_runs": {
                     "lease_expires_at": "TEXT",
+                    "subject_id": "TEXT",
+                    "task_type": "TEXT NOT NULL DEFAULT 'research_orchestration'",
+                    "error": "TEXT",
                 },
                 "component_evidence": {
                     "logic_signature": "TEXT NOT NULL DEFAULT ''",
@@ -611,6 +624,14 @@ class SQLiteProductRepository:
                     ),
                 )
             connection.execute(
+                """
+                UPDATE agent_runs
+                SET task_type = 'research_orchestration'
+                WHERE task_type = 'strategy_formalization'
+                  AND subject_id IS NULL
+                """
+            )
+            connection.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS one_trial_per_parameter_signature "
                 "ON trials(experiment_plan_id, parameter_signature) "
                 "WHERE parameter_signature IS NOT NULL"
@@ -632,9 +653,10 @@ class SQLiteProductRepository:
                 """
                 INSERT INTO research_sessions (
                     id, title, status, created_at, updated_at,
-                    research_mode, mode_config_json, mode_revision
+                    research_mode, mode_config_json, mode_revision,
+                    assistant_entry_mode
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.id,
@@ -647,6 +669,7 @@ class SQLiteProductRepository:
                         session.mode_config, ensure_ascii=False, sort_keys=True
                     ),
                     session.mode_revision,
+                    session.assistant_entry_mode,
                 ),
             )
         return session
@@ -675,6 +698,26 @@ class SQLiteProductRepository:
                     updated_at,
                     session_id,
                 ),
+            )
+            if cursor.rowcount != 1:
+                raise NotFoundError(f"research session not found: {session_id}")
+        return self.get_session(session_id)
+
+    def update_session_assistant_entry_mode(
+        self,
+        session_id: str,
+        *,
+        assistant_entry_mode: AssistantEntryMode,
+        updated_at: str,
+    ) -> ResearchSession:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE research_sessions
+                SET assistant_entry_mode = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (assistant_entry_mode, updated_at, session_id),
             )
             if cursor.rowcount != 1:
                 raise NotFoundError(f"research session not found: {session_id}")
@@ -1871,8 +1914,8 @@ class SQLiteProductRepository:
                     status, metrics_json, log_artifact_key, candidate_version_id,
                     parameter_signature, split, cost_model_json, seed, error,
                     elapsed_seconds, peak_rss_mb, result_artifact_key,
-                    metrics_artifact_key, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    metrics_artifact_key, equity_artifact_key, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     trial.id,
@@ -1892,6 +1935,7 @@ class SQLiteProductRepository:
                     trial.peak_rss_mb,
                     trial.result_artifact_key,
                     trial.metrics_artifact_key,
+                    trial.equity_artifact_key,
                     trial.created_at,
                 ),
             )
@@ -1917,6 +1961,7 @@ class SQLiteProductRepository:
         peak_rss_mb: float | None = None,
         result_artifact_key: str | None = None,
         metrics_artifact_key: str | None = None,
+        equity_artifact_key: str | None = None,
     ) -> Trial:
         with self._connect() as connection:
             cursor = connection.execute(
@@ -1924,7 +1969,8 @@ class SQLiteProductRepository:
                 UPDATE trials
                 SET status = ?, metrics_json = ?, log_artifact_key = ?,
                     error = ?, elapsed_seconds = ?, peak_rss_mb = ?,
-                    result_artifact_key = ?, metrics_artifact_key = ?
+                    result_artifact_key = ?, metrics_artifact_key = ?,
+                    equity_artifact_key = ?
                 WHERE id = ?
                 """,
                 (
@@ -1936,6 +1982,7 @@ class SQLiteProductRepository:
                     peak_rss_mb,
                     result_artifact_key,
                     metrics_artifact_key,
+                    equity_artifact_key,
                     trial_id,
                 ),
             )
@@ -1987,8 +2034,9 @@ class SQLiteProductRepository:
                 """
                 INSERT INTO agent_runs (
                     id, session_id, agent_name, agent_provider, execution_target,
-                    mode, status, plan_summary, created_at, lease_expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    mode, status, plan_summary, subject_id, task_type, error,
+                    created_at, lease_expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     agent_run.id,
@@ -1999,6 +2047,9 @@ class SQLiteProductRepository:
                     agent_run.mode,
                     agent_run.status,
                     agent_run.plan_summary,
+                    agent_run.subject_id,
+                    agent_run.task_type,
+                    agent_run.error,
                     agent_run.created_at,
                     lease_expires_at,
                 ),
@@ -2019,7 +2070,9 @@ class SQLiteProductRepository:
             raise NotFoundError(f"agent run not found: {agent_run_id}")
         return self._agent_run(row)
 
-    def update_agent_run_status(self, agent_run_id: str, *, status: str) -> AgentRun:
+    def update_agent_run_status(
+        self, agent_run_id: str, *, status: str, error: str | None = None
+    ) -> AgentRun:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             current = connection.execute(
@@ -2051,10 +2104,10 @@ class SQLiteProductRepository:
             cursor = connection.execute(
                 """
                 UPDATE agent_runs
-                SET status = ?, lease_expires_at = ?
+                SET status = ?, lease_expires_at = ?, error = ?
                 WHERE id = ?
                 """,
-                (status, lease_expires_at, agent_run_id),
+                (status, lease_expires_at, error, agent_run_id),
             )
             if cursor.rowcount != 1:
                 raise NotFoundError(f"agent run not found: {agent_run_id}")
@@ -2066,6 +2119,48 @@ class SQLiteProductRepository:
                 "SELECT * FROM agent_runs ORDER BY created_at DESC"
             ).fetchall()
         return [self._agent_run(row) for row in rows]
+
+    def list_session_agent_runs(self, session_id: str) -> Sequence[AgentRun]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM agent_runs
+                WHERE session_id = ?
+                ORDER BY created_at DESC
+                """,
+                (session_id,),
+            ).fetchall()
+        return [self._agent_run(row) for row in rows]
+
+    def claim_next_agent_run(
+        self, *, agent_provider: AgentProviderKind
+    ) -> AgentRun | None:
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT id
+                FROM agent_runs
+                WHERE agent_provider = ? AND status = 'queued'
+                ORDER BY created_at
+                LIMIT 1
+                """,
+                (agent_provider,),
+            ).fetchone()
+            if row is None:
+                return None
+            connection.execute(
+                """
+                UPDATE agent_runs
+                SET status = 'running', lease_expires_at = ?, error = NULL
+                WHERE id = ? AND status = 'queued'
+                """,
+                (_agent_run_lease_expiry(), row["id"]),
+            )
+            claimed = connection.execute(
+                "SELECT * FROM agent_runs WHERE id = ?", (row["id"],)
+            ).fetchone()
+        return self._agent_run(claimed) if claimed is not None else None
 
     def get_active_session_agent_run(self, session_id: str) -> AgentRun | None:
         with self._connect() as connection:
@@ -2393,6 +2488,20 @@ class SQLiteProductRepository:
             )
         return hypothesis
 
+    def get_component_hypothesis(
+        self, hypothesis_id: str
+    ) -> ComponentHypothesis:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM component_hypotheses WHERE id = ?",
+                (hypothesis_id,),
+            ).fetchone()
+        if row is None:
+            raise NotFoundError(
+                f"component hypothesis not found: {hypothesis_id}"
+            )
+        return self._component_hypothesis(row)
+
     def list_component_hypotheses(
         self, *, subject_id: str | None = None
     ) -> Sequence[ComponentHypothesis]:
@@ -2463,6 +2572,7 @@ class SQLiteProductRepository:
             research_mode=row["research_mode"],
             mode_config=mode_config,
             mode_revision=row["mode_revision"],
+            assistant_entry_mode=AssistantEntryMode(row["assistant_entry_mode"]),
         )
 
     @staticmethod
@@ -2816,6 +2926,7 @@ class SQLiteProductRepository:
             peak_rss_mb=row["peak_rss_mb"],
             result_artifact_key=row["result_artifact_key"],
             metrics_artifact_key=row["metrics_artifact_key"],
+            equity_artifact_key=row["equity_artifact_key"],
             created_at=row["created_at"],
         )
 
@@ -2830,6 +2941,9 @@ class SQLiteProductRepository:
             mode=row["mode"],
             status=row["status"],
             plan_summary=row["plan_summary"],
+            subject_id=row["subject_id"],
+            task_type=row["task_type"],
+            error=row["error"],
             created_at=row["created_at"],
             lease_expires_at=row["lease_expires_at"],
         )

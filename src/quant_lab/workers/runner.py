@@ -58,9 +58,9 @@ class LocalWorker:
     def status(self) -> dict[str, Any]:
         return {
             "worker": "local_sqlite",
-            "execution_mode": "one_shot",
+            "execution_mode": "one_shot_or_watch",
             "process_running": False,
-            "requires_job_id": True,
+            "requires_job_id": False,
             "registered_handlers": sorted(self.handlers),
             "resource_policy": {
                 "policy_id": self.resource_policy.policy_id,
@@ -72,12 +72,23 @@ class LocalWorker:
                 "kill_on_memory_limit": self.resource_policy.kill_on_memory_limit,
             },
             "note": (
-                "Without --job-id this command prints status and exits; it is not a "
-                "resident queue consumer."
+                "Use --job-id for one queued Job, or --watch for a resident "
+                "single-concurrency queue consumer."
             ),
             "arbitrary_shell_enabled": False,
             "live_trading_enabled": False,
         }
+
+    def can_handle(self, job_type: str) -> bool:
+        return job_type in self.handlers
+
+    def next_queued_job(self) -> Job | None:
+        queued = [
+            job
+            for job in self.repository.list_jobs()
+            if job.status == "queued" and self.can_handle(job.job_type)
+        ]
+        return min(queued, key=lambda job: (job.created_at, job.id), default=None)
 
     def _mark_batch_proposal_evaluated(self, job: Job) -> None:
         if job.job_type != "parameter_search" or job.payload.get("batch_mode") is not True:
@@ -383,6 +394,7 @@ class LocalWorker:
                 )
             )
             dependency_blocked = job.job_type == "correctness_diagnostic"
+            action_required = not dependency_blocked
             self._record_job_handoff(
                 job,
                 agent_run_id=agent_run_id if isinstance(agent_run_id, str) else None,
@@ -396,12 +408,16 @@ class LocalWorker:
                 stop_reason_text=str(exc),
                 completed_actions=("保存 Job 失败状态", "保留日志、manifest 与已有 Trial"),
                 not_started_actions=("依赖该 Job 的后续 Gate", "候选晋升"),
-                user_action_required=False,
-                required_user_action=None,
+                user_action_required=action_required,
+                required_user_action=(
+                    None
+                    if dependency_blocked
+                    else "请在后台任务中查看中文停止原因；修复依赖后显式重试，或停止当前研究分支。"
+                ),
                 next_recommended_action=(
                     "继续使用 Native correctness 能力，或稍后安装/修复可选 Freqtrade external engine。"
                     if dependency_blocked
-                    else "审阅失败证据后决定修复依赖或停止当前研究分支。"
+                    else "请查看停止原因；如果页面提供“修复后重试”，确认后只重试原批准范围，否则停止当前分支。"
                 ),
                 safe_to_continue=dependency_blocked,
                 actor_type="system",
@@ -493,6 +509,68 @@ class LocalWorker:
                 ),
                 "next_recommended_action": next_action,
             }
+        elif job.job_type == "pipeline_execution":
+            diagnostic_job_id = result.get("diagnostic_job_id")
+            pipeline_status = str(result.get("status", "completed"))
+            if pipeline_status in {"blocked", "stopped"}:
+                stopped_at = str(result.get("stopped_at", "correctness"))
+                handoff_values = {
+                    "stop_reason_code": "authorized_pipeline_gate_stopped",
+                    "stop_reason_text": str(
+                        result.get(
+                            "reason",
+                            f"授权研究在 {stopped_at} 阶段停止；未伪造后续结果。",
+                        )
+                    ),
+                    "completed_actions": (
+                        f"评估并记录 {stopped_at} 阶段",
+                        "保留 Gate、Job 日志和审计证据",
+                    ),
+                    "not_started_actions": (
+                        "后续 smoke/fast_screen/viability 阶段",
+                        "参数搜索、locked test、dry-run 与 live trade",
+                    ),
+                    "next_recommended_action": (
+                        "查看停止原因；若为未注册策略，请先实现并审阅 StrategySpec 执行适配器。"
+                    ),
+                }
+            elif isinstance(diagnostic_job_id, str):
+                handoff_values = {
+                    "stop_reason_code": "viability_failed_diagnostics_queued",
+                    "stop_reason_text": (
+                        "策略未通过可行性门槛；完整策略保持 rejected。"
+                        "授权内廉价失败归因与行情诊断已自动进入后台队列。"
+                    ),
+                    "completed_actions": (
+                        "完成 correctness、smoke、fast_screen 与 viability",
+                        "保存 rejected StrategyOutcome 和完整回测证据",
+                        f"创建廉价诊断 Job {diagnostic_job_id}",
+                    ),
+                    "not_started_actions": (
+                        "组件 Trial 或参数搜索",
+                        "locked test、full stress、dry-run 与 live trade",
+                    ),
+                    "next_recommended_action": (
+                        "无需回复；等待后台诊断完成后审阅亏损归因、适合行情和组件假设。"
+                    ),
+                }
+            else:
+                handoff_values = {
+                    "stop_reason_code": "authorized_pipeline_scope_completed",
+                    "stop_reason_text": (
+                        "已完成一次授权覆盖的规则检查、小范围试跑、快速初筛与可行性评估。"
+                    ),
+                    "completed_actions": (
+                        "完成 correctness、smoke、fast_screen 与 viability",
+                        "保存 Gate、StrategyOutcome、Run Bundle 与审计证据",
+                    ),
+                    "not_started_actions": (
+                        "参数搜索、locked test、full stress、dry-run 与 live trade",
+                    ),
+                    "next_recommended_action": (
+                        "审阅可行性结论；如需改进，选择一个明确假设再批准有限 Trial Batch。"
+                    ),
+                }
         else:
             handoff_values = {
                 "stop_reason_code": "worker_job_scope_completed",
@@ -512,14 +590,25 @@ class LocalWorker:
                     "审阅结果和 Gate 证据，再决定是否批准下一阶段。"
                 ),
             }
+        pipeline_result_status = str(result.get("status", "completed"))
+        pipeline_stopped = (
+            job.job_type == "pipeline_execution"
+            and pipeline_result_status in {"blocked", "stopped"}
+        )
         self._record_job_handoff(
             job,
             agent_run_id=agent_run_id if isinstance(agent_run_id, str) else None,
             subject_id=self._subject_id_for_job(job),
-            status="completed_scope",
+            status=(
+                "gate_failed"
+                if pipeline_result_status == "stopped"
+                else "blocked_dependency"
+                if pipeline_result_status == "blocked"
+                else "completed_scope"
+            ),
             user_action_required=False,
             required_user_action=None,
-            safe_to_continue=True,
+            safe_to_continue=not pipeline_stopped,
             actor_type="system",
             **handoff_values,
         )

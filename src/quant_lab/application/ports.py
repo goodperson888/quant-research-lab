@@ -12,6 +12,7 @@ class LLMProviderStatus:
     provider: str | None
     message: str
     kind: AgentProviderKind = AgentProviderKind.EXTERNAL_LOCAL_AGENT
+    model: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +86,14 @@ class TrialMetricsSink(Protocol):
     ) -> tuple[str, ...]: ...
 
 
+class TrialEquitySink(Protocol):
+    """Batch compressed Trial equity points into shared columnar artifacts."""
+
+    def append_equity_batch(
+        self, *, experiment_plan_id: str, rows: Sequence[Mapping[str, Any]]
+    ) -> tuple[str, ...]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class TrialEvaluationRequest:
     trial_id: str
@@ -108,6 +117,7 @@ class TrialEvaluationResult:
     peak_rss_mb: float = 0.0
     result_artifact_key: str | None = None
     stop_reason: str | None = None
+    equity_points: tuple[Mapping[str, Any], ...] = ()
 
 
 class StrategyEvaluator(Protocol):

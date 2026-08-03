@@ -20,6 +20,7 @@ from quant_lab.application.services import ResearchApplicationService, new_id, u
 from quant_lab.domain.errors import ApprovalRequiredError, GatePolicyError
 from quant_lab.domain.models import Job, StrategyOutcome
 from quant_lab.infrastructure.sqlite_product_repository import SQLiteProductRepository
+from quant_lab.infrastructure.authorized_pipeline_runner import AuthorizedPipelineRunner
 from quant_lab.infrastructure.strategy_evaluators import (
     SelectiveReentryComponentEvaluator,
     StrategyPluginRegistry,
@@ -88,6 +89,60 @@ def test_one_authorization_advances_to_viability_without_stage_approvals(
     assert [item.stage for item in service.stages(authorization.id)] == calls
 
 
+def test_failed_initial_pipeline_can_be_explicitly_retried_without_new_scope(
+    tmp_path: Path,
+) -> None:
+    repository, session, baseline = _baseline(tmp_path)
+    authorization = ResearchAuthorizationService(repository).create(
+        subject_id=baseline.id,
+        session_id=session.id,
+        allowed_stages=("correctness", "smoke", "fast_screen", "viability"),
+        auto_continue=True,
+        max_cost_usdt=0,
+        max_time_minutes=10,
+        max_trials=0,
+        locked_test_allowed=False,
+        stop_conditions=("gate_failed", "scope_completed"),
+        expires_at=_expiry(),
+        confirmed_by_user=True,
+    )
+    service = ResearchApplicationService(repository)
+    agent_run = service.create_agent_run(
+        session_id=session.id,
+        agent_name="authorized-pipeline-worker",
+    )
+    failed = service.create_job(
+        job_type="pipeline_execution",
+        payload={
+            "authorization_id": authorization.id,
+            "session_id": session.id,
+            "subject_id": baseline.id,
+            "agent_run_id": agent_run.id,
+            "pipeline_profile": "fast_screen",
+            "locked_test_used": False,
+        },
+    )
+    repository.update_job(
+        failed.id,
+        status="failed",
+        updated_at=failed.updated_at,
+        error="old worker metadata missing",
+    )
+
+    retried = service.retry_job(
+        job_id=failed.id,
+        subject_id=failed.id,
+        confirmed_by_user=True,
+    )
+
+    assert retried.status == "queued"
+    assert retried.payload["retry_of_job_id"] == failed.id
+    assert retried.payload["authorization_id"] == authorization.id
+    assert retried.payload["subject_id"] == baseline.id
+    assert retried.payload["locked_test_used"] is False
+    assert retried.payload["agent_run_id"] != agent_run.id
+
+
 def test_authorization_stops_on_gate_failure_and_blocks_scope_escape(
     tmp_path: Path,
 ) -> None:
@@ -137,6 +192,70 @@ def test_authorization_stops_on_gate_failure_and_blocks_scope_escape(
             expires_at=_expiry(),
             confirmed_by_user=True,
         )
+
+
+def test_authorized_pipeline_blocks_unregistered_strategy_without_fake_run(
+    tmp_path: Path,
+) -> None:
+    shutil.copytree(ROOT / "configs/pipelines", tmp_path / "configs/pipelines")
+    repository = SQLiteProductRepository(tmp_path / "runtime/app/test.sqlite3")
+    research = ResearchApplicationService(repository)
+    session = research.create_research_session(title="unsupported pipeline")
+    draft = research.create_strategy_intake(
+        session_id=session.id,
+        source_type="natural_language",
+        raw_content="an unregistered strategy",
+    )
+    research.formalize_strategy(
+        draft_id=draft.id,
+        structured_content={
+            "formalization_status": "user_confirmed",
+            "strategy_id": "unregistered_strategy",
+        },
+        confirmed_by_user=True,
+    )
+    baseline = research.freeze_baseline(
+        draft_id=draft.id, confirmed_by_user=True
+    )
+    authorization = ResearchAuthorizationService(repository).create(
+        subject_id=baseline.id,
+        session_id=session.id,
+        allowed_stages=("correctness", "smoke", "fast_screen", "viability"),
+        auto_continue=True,
+        max_cost_usdt=0,
+        max_time_minutes=10,
+        max_trials=0,
+        locked_test_allowed=False,
+        stop_conditions=("blocked_dependency",),
+        expires_at=_expiry(),
+        confirmed_by_user=True,
+    )
+    agent_run = research.create_agent_run(
+        session_id=session.id,
+        agent_name="fixture-pipeline",
+    )
+    job = research.create_job(
+        job_type="pipeline_execution",
+        payload={
+            "authorization_id": authorization.id,
+            "session_id": session.id,
+            "subject_id": baseline.id,
+            "agent_run_id": agent_run.id,
+            "locked_test_used": False,
+        },
+    )
+    result = AuthorizedPipelineRunner(
+        tmp_path,
+        repository,
+        StrategyPluginRegistry(),
+    )(job)
+
+    assert result["status"] == "blocked"
+    stages = ResearchAuthorizationService(repository).stages(authorization.id)
+    assert [(item.stage, item.status) for item in stages] == [
+        ("correctness", "blocked")
+    ]
+    assert repository.list_reports() == []
 
 
 def test_viability_failure_auto_continues_only_into_authorized_diagnostics(
@@ -487,6 +606,19 @@ def test_authorization_api_uses_explicit_subject_and_openapi_stays_safe(
     )
     assert response.status_code == 201
     assert response.json()["subject_id"] == baseline.id
+    started = client.post(
+        f"/api/research-authorizations/{response.json()['id']}/start",
+        json={"subject_id": baseline.id, "confirmed_by_user": True},
+    )
+    assert started.status_code == 201
+    assert started.json()["job_type"] == "pipeline_execution"
+    assert started.json()["status"] == "queued"
+    assert started.json()["payload"]["authorization_id"] == response.json()["id"]
+    repeated = client.post(
+        f"/api/research-authorizations/{response.json()['id']}/start",
+        json={"subject_id": baseline.id, "confirmed_by_user": True},
+    )
+    assert repeated.status_code == 409
     paths = " ".join(client.get("/openapi.json").json()["paths"]).lower()
     for forbidden in ("live_trade", "/trade", "/shell", "credential", "api-key"):
         assert forbidden not in paths

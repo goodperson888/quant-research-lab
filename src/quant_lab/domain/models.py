@@ -93,6 +93,12 @@ class AgentProviderKind(StrEnum):
     LOCAL_MODEL_PROVIDER = "local_model_provider"
 
 
+class AssistantEntryMode(StrEnum):
+    EXTERNAL_AGENT_DIRECT = "external_agent_direct"
+    WEB_LOCAL_CONNECTOR = "web_local_connector"
+    WEB_PROVIDER = "web_provider"
+
+
 class ExecutionTargetKind(StrEnum):
     LOCAL_RUNTIME = "local_runtime"
     HOSTED_SANDBOX = "hosted_sandbox"
@@ -137,6 +143,9 @@ class ResearchSession:
     research_mode: ResearchMode = "guided"
     mode_config: Mapping[str, Any] = field(default_factory=dict)
     mode_revision: int = 1
+    assistant_entry_mode: AssistantEntryMode = (
+        AssistantEntryMode.EXTERNAL_AGENT_DIRECT
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -366,6 +375,9 @@ class AgentRun:
         "cancelled",
     ] = "queued"
     plan_summary: str | None = None
+    subject_id: str | None = None
+    task_type: str = "research_orchestration"
+    error: str | None = None
     created_at: str = ""
     lease_expires_at: str | None = None
 
@@ -519,6 +531,7 @@ class Trial:
     peak_rss_mb: float | None = None
     result_artifact_key: str | None = None
     metrics_artifact_key: str | None = None
+    equity_artifact_key: str | None = None
     created_at: str = ""
 
     def __post_init__(self) -> None:
@@ -526,6 +539,7 @@ class Trial:
             self.log_artifact_key,
             self.result_artifact_key,
             self.metrics_artifact_key,
+            self.equity_artifact_key,
         ):
             if artifact_key is not None:
                 validate_artifact_key(artifact_key)

@@ -18,6 +18,8 @@ runtime/app/*.db
 runtime/app/*.db-*
 runtime/app/logs/
 runtime/dev/
+runtime/agent-connector/
+runtime/agent-runs/
 
 # Next.js / Node local state
 apps/web/node_modules/

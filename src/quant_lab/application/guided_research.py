@@ -61,12 +61,21 @@ class GuidedResearchService:
         stopping_conditions: Sequence[str],
         rollback_plan: str,
         source: str = "external_agent",
+        source_component_hypothesis_id: str | None = None,
     ) -> Proposal:
         baseline = self.repository.get_strategy_version(baseline_version_id)
         if baseline.status != "baseline" or not baseline.immutable:
             raise ConflictError("improvement direction requires an immutable baseline")
         if subject_id != baseline_version_id:
             raise ConflictError("proposal subject_id must identify its baseline")
+        if source_component_hypothesis_id is not None:
+            for item in self.repository.list_proposals(baseline.strategy_id):
+                if (
+                    item.proposal_type == "improvement_direction"
+                    and item.content.get("source_component_hypothesis_id")
+                    == source_component_hypothesis_id
+                ):
+                    return item
         active = [
             item
             for item in self.repository.list_proposals(baseline.strategy_id)
@@ -86,6 +95,14 @@ class GuidedResearchService:
                 "ai_generated": False,
                 "baseline_immutable": True,
                 "production_promotion_requested": False,
+                "source_component_hypothesis_id": (
+                    source_component_hypothesis_id
+                ),
+                "version_semantics": {
+                    "baseline": "immutable_original_strategy",
+                    "candidate": "same_strategy_improvement_version",
+                    "trial": "parameter_combination_not_strategy_version",
+                },
             },
             status="draft",
             baseline_version_id=baseline.id,
@@ -114,6 +131,9 @@ class GuidedResearchService:
                 "subject_id": subject_id,
                 "status": created.status,
                 "source": source,
+                "source_component_hypothesis_id": (
+                    source_component_hypothesis_id
+                ),
                 "automatic_approval": False,
             },
         )

@@ -8,13 +8,29 @@ from quant_lab.application.pipeline import (
     PipelineApplicationService,
     PipelineProfileCatalog,
 )
-from quant_lab.application.services import ResearchApplicationService
+from quant_lab.application.services import ResearchApplicationService, utc_now
 from quant_lab.domain.errors import ApprovalRequiredError, GatePolicyError
+from quant_lab.domain.models import ComponentCandidate, ComponentEvidence
 from quant_lab.infrastructure.sqlite_product_repository import SQLiteProductRepository
 from quant_lab.interfaces.api.app import create_app
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def formalize_api_draft(client: TestClient, draft: dict) -> None:
+    response = client.post(
+        f"/api/strategy-drafts/{draft['id']}/formalize",
+        json={
+            "subject_id": draft["id"],
+            "confirmed_by_user": True,
+            "structured_content": {
+                "formalization_status": "user_confirmed",
+                "strategy_id": "fixture",
+            },
+        },
+    )
+    assert response.status_code == 200
 
 
 def build_services(tmp_path: Path):
@@ -230,6 +246,12 @@ def test_pipeline_api_and_explicit_approval_subject(tmp_path: Path) -> None:
         json={"confirmed_by_user": True, "subject_id": "another_draft"},
     )
     assert mismatch.status_code == 400
+    unformalized = client.post(
+        f"/api/strategy-drafts/{draft['id']}/freeze-baseline",
+        json={"confirmed_by_user": True, "subject_id": draft["id"]},
+    )
+    assert unformalized.status_code == 409
+    formalize_api_draft(client, draft)
     frozen = client.post(
         f"/api/strategy-drafts/{draft['id']}/freeze-baseline",
         json={"confirmed_by_user": True, "subject_id": draft["id"]},
@@ -253,6 +275,7 @@ def test_component_candidate_soft_archive_preserves_evidence_and_audit(
         f"/api/research/sessions/{session['id']}/intakes",
         json={"source_type": "natural_language", "raw_content": "rule"},
     ).json()
+    formalize_api_draft(client, draft)
     baseline = client.post(
         f"/api/strategy-drafts/{draft['id']}/freeze-baseline",
         json={"confirmed_by_user": True, "subject_id": draft["id"]},
@@ -314,6 +337,106 @@ def test_component_candidate_soft_archive_preserves_evidence_and_audit(
     }
 
 
+def test_component_candidate_promotes_only_to_soft_archivable_factor_candidate(
+    tmp_path: Path,
+) -> None:
+    shutil.copytree(ROOT / "configs/pipelines", tmp_path / "configs/pipelines")
+    database_path = tmp_path / "runtime/app/api.sqlite3"
+    client = TestClient(create_app(root=tmp_path, database_path=database_path))
+    session = client.post(
+        "/api/research/sessions", json={"title": "factor candidate"}
+    ).json()
+    draft = client.post(
+        f"/api/research/sessions/{session['id']}/intakes",
+        json={"source_type": "natural_language", "raw_content": "rule"},
+    ).json()
+    formalize_api_draft(client, draft)
+    baseline = client.post(
+        f"/api/strategy-drafts/{draft['id']}/freeze-baseline",
+        json={"confirmed_by_user": True, "subject_id": draft["id"]},
+    ).json()
+
+    repository = SQLiteProductRepository(database_path)
+    created_at = utc_now()
+    evidence = repository.create_component_evidence(
+        ComponentEvidence(
+            id="component_evidence_factor",
+            source_strategy_version_id=baseline["id"],
+            lineage={"evidence_mode": "research"},
+            component_type="exit",
+            target_market_profile="crypto_perpetual.binance.eth",
+            incremental_metrics={"best_incremental_net_return": 0.02},
+            out_of_sample_status="screening",
+            failure_conditions=(),
+            created_at=created_at,
+            logic_signature="a" * 64,
+            timeframe="15m",
+            source_trial_ids=("trial_1", "trial_2"),
+            evidence_level="screening",
+        )
+    )
+    candidate = repository.create_component_candidate(
+        ComponentCandidate(
+            id="component_factor_candidate",
+            evidence_id=evidence.id,
+            name="early exit timing",
+            status="component_candidate",
+            created_at=created_at,
+            logic_signature=evidence.logic_signature,
+            target_market_profile=evidence.target_market_profile,
+            timeframe=evidence.timeframe,
+        )
+    )
+
+    mismatch = client.post(
+        f"/api/component-candidates/{candidate.id}/promote-factor-candidate",
+        json={
+            "subject_id": "component_other",
+            "confirmed_by_user": True,
+        },
+    )
+    assert mismatch.status_code == 400
+    promoted = client.post(
+        f"/api/component-candidates/{candidate.id}/promote-factor-candidate",
+        json={
+            "subject_id": candidate.id,
+            "confirmed_by_user": True,
+            "name": "提前离场时机",
+        },
+    )
+    assert promoted.status_code == 201, promoted.text
+    factor = promoted.json()
+    assert factor["status"] == "candidate"
+    assert factor["metadata"]["source_component_candidate_id"] == candidate.id
+    assert factor["metadata"]["automatic_validation"] is False
+
+    archived = client.post(
+        f"/api/factors/{factor['factor_id']}/archive",
+        json={
+            "subject_id": factor["factor_id"],
+            "confirmed_by_user": True,
+        },
+    )
+    assert archived.status_code == 200
+    assert archived.json()["status"] == "retired"
+    restored = client.post(
+        f"/api/factors/{factor['factor_id']}/restore",
+        json={
+            "subject_id": factor["factor_id"],
+            "confirmed_by_user": True,
+        },
+    )
+    assert restored.status_code == 200
+    assert restored.json()["status"] == "candidate"
+    assert {item["event_type"] for item in client.get(
+        "/api/audit/events?limit=100"
+    ).json()} >= {
+        "factor_candidate.promoted_from_component",
+        "factor_candidate.archived",
+        "factor_candidate.restored",
+    }
+
+
 def test_engine_reconciliation_entry_requires_viability_and_never_fakes_job(
     tmp_path: Path,
 ) -> None:
@@ -327,6 +450,7 @@ def test_engine_reconciliation_entry_requires_viability_and_never_fakes_job(
         f"/api/research/sessions/{session['id']}/intakes",
         json={"source_type": "natural_language", "raw_content": "rule"},
     ).json()
+    formalize_api_draft(client, draft)
     baseline = client.post(
         f"/api/strategy-drafts/{draft['id']}/freeze-baseline",
         json={"confirmed_by_user": True, "subject_id": draft["id"]},

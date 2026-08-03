@@ -30,8 +30,8 @@ export function ProjectStatusStrip() {
         active={!project.isPending}
       />
       <StatusPill
-        label="研究助手"
-        value={cnRuntimeValue(agent.data?.active_configuration.agent_provider)}
+        label="当前入口"
+        value={entryLabel(agent.data)}
         active={Boolean(agent.data)}
       />
       <StatusPill
@@ -40,12 +40,29 @@ export function ProjectStatusStrip() {
         active={Boolean(agent.data)}
       />
       <StatusPill
-        label="网页内 AI"
-        value={project.data?.ai_provider.configured ? "已配置" : "未配置"}
-        active={false}
+        label="网页发起研究"
+        value={webResearchLabel(agent.data)}
+        active={Boolean(
+          agent.data?.local_connector.available ||
+            agent.data?.embedded_provider.configured,
+        )}
       />
     </div>
   );
+}
+
+function entryLabel(agent: AgentStatus | undefined) {
+  if (!agent) return "读取中";
+  if (agent.local_connector.available) return "网页调用本地助手";
+  if (agent.embedded_provider.configured) return "网页模型 / API Key";
+  return "Codex / CLI 直接研究";
+}
+
+function webResearchLabel(agent: AgentStatus | undefined) {
+  if (!agent) return "读取中";
+  if (agent.local_connector.available) return "本地助手已连接";
+  if (agent.embedded_provider.configured) return "网页模型已配置";
+  return "尚未配置";
 }
 
 function cnRuntimeValue(value: string | undefined) {

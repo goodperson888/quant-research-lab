@@ -4,15 +4,20 @@
 
 本文件定义 Quant Research Lab 中“谁决定、谁编排、谁执行、谁记录”。目标不是用更长提示词约束 AI，而是让本地 External Agent 和未来线上 Embedded Agent 共用同一组领域工具、状态机、审批与审计协议。
 
-当前优先模式是：
+当前执行组合是：
 
 ```text
-external_local_agent + local_runtime + ResearchSession mode
+assistant_entry_mode + agent_provider + local_runtime + ResearchSession mode
 ```
 
-默认会话模式为 `guided`，也可显式选择 `quick` 或 `expert`。Codex 等本地 Agent 先读取
-会话模式，再调用安全 CLI/API；Web 显示同一任务、事件、审批和成果。Embedded Provider、
-BYOK、Local Model、Hosted Sandbox、Local Connector 均是 planned/unsupported。
+默认会话模式为 `guided`，也可显式选择 `quick` 或 `expert`。入口另由
+`ResearchSession.assistant_entry_mode` 选择 Direct、Web → Local Connector 或 Web → BYOK
+Provider。三者复用同一状态机和审计协议，一次只允许一个写入型 AgentRun lease。
+
+Local Connector 是独立进程，只领取 `external_local_agent + strategy_formalization` 任务，
+并通过固定参数、read-only sandbox 的 `codex exec` 执行；它不属于确定性 Worker，也不接受
+用户提供的命令。BYOK Provider Key 只在 API 进程内存中，后台执行后把提案写回同一 Draft。
+两条链路都停在 `waiting_approval`，不得自动冻结 Baseline。
 
 模式只决定展示密度、授权范围内的机械连续性和 AgentRun pacing：
 
@@ -22,7 +27,7 @@ BYOK、Local Model、Hosted Sandbox、Local Connector 均是 planned/unsupported
 | `guided` | `guided` | 关键证据与真正判断点 |
 | `expert` | `supervised` | 展示完整阶段并允许更细控制 |
 
-网页、本地 Agent 和未来网页模型都读写 `ResearchSession.research_mode/mode_config`；任何模式
+网页、本地 Agent 和网页 BYOK 模型都读写 `ResearchSession.research_mode/mode_config`；任何模式
 都不能绕过 Baseline、Proposal/Diff、Batch 预算、locked test、dry-run 或 live trade 门禁。
 
 ## 2. 七层职责
@@ -91,7 +96,7 @@ flowchart LR
     subgraph Providers["Agent Providers"]
       ELA["external_local_agent<br/>supported"]
       ECP["embedded_cloud_provider<br/>planned"]
-      BYOK["byok_provider<br/>planned"]
+      BYOK["byok_provider<br/>supported: formalization"]
       LMP["local_model_provider<br/>planned"]
     end
     subgraph Protocol["Shared Research Protocol"]
@@ -223,10 +228,12 @@ Web 时间线只读这些结构化事件，不从聊天文本反推事实。SQLi
 
 ## 10. Worker
 
-Worker 是确定性执行层，不是自主 Agent。它接收已校验的 Job ID，加载不可变计划和版本，执行注册 Handler，写 Trial/Run/Report/Artifact 和日志。
+Worker 是确定性执行层，不是自主 Agent。它接收已校验的 Job，加载不可变计划和版本，
+执行注册 Handler，写 Trial/Run/Report/Artifact 和日志。
 
-当前 Worker 是 one-shot：无 `--job-id` 只打印能力/status 并退出，不得在 Web 显示为
-正在常驻消费。Full stress Handler 必须自己复查 passed viability，不信任单独的 Agent 说明。
+Worker 同时支持 `--job-id` 单次排错和 `--watch` 单并发队列消费。一键 `dev.sh` 默认带起
+`--watch`；它只领取自己注册的 queued Job，单个 Job 失败后继续轮询，不接受任意 Shell。
+Full stress Handler 必须自己复查 passed viability，不信任单独的 Agent 说明。
 
 当前 Handler 限于 baseline、一个有边界的入场确认 Trial、通用 Batch router、成本压力测试和
 ex-ante regime validation。新增或现有 Handler 都必须：
@@ -240,22 +247,28 @@ ex-ante regime validation。新增或现有 Handler 都必须：
 
 ## 11. External Agent 与 Embedded Agent 一致性
 
-External Agent 可以通过 CLI/API/未来 MCP 工作；Embedded Agent 由 Worker 调用 AgentProvider。两者的差异只在 Provider adapter，不在业务权限：
+External Agent 可以通过 CLI/API/未来 MCP 工作；BYOK Provider 由 API 控制面调用
+AgentProvider，确定性 Worker 不保存模型 Key，也不执行自主 Agent。两者的差异只在
+Provider adapter，不在业务权限：
 
 - 都只能生成 draft/proposal；
 - 都必须走文档路由；
-- 都必须记录 AgentRun、ToolCall 和 AuditEvent；
+- 都必须记录 AgentRun 和 AuditEvent；实际调用研究工具时再记录 ToolCall；
 - 都必须在 approval gate 暂停；
 - 都不能覆盖 baseline、运行未批准参数搜索或实盘；
 - 都通过 ArtifactStore 使用 project-relative key。
 
 因此 Web 不是本地 Agent 的替代品，而是所有 Agent 模式共享的控制、审计和审批界面。
 
+Web 只有在真实 AgentRun、heartbeat/lease 和写回事件存在时，才能显示 AI 已开始或完成。
+未形式化 Draft 不能由网页用原文拼装伪 JSON 后直接冻结。Direct 模式仍允许用户在当前
+Codex 对话中完整研究；Web 模式不再要求手工复制 Session/Draft 任务。
+
 ## 12. Phase 0/本轮边界
 
-本轮实现文档路由、项目 Skill、端口、领域验证、SQLite 持久化和有预算 Batch 编排。
-不实现完整 MCP Server、LLM 调用、Hyperopt/Optuna、Local Connector、Hosted Sandbox、
-多用户或远程事件总线。
+本轮实现文档路由、项目 Skill、端口、领域验证、SQLite 持久化、有预算 Batch 编排、
+Local Connector 和 OpenAI-compatible BYOK 形式化链路。不实现完整 MCP Server、通用
+Agent tool loop、Hyperopt/Optuna、Hosted Sandbox、多用户或远程事件总线。
 
 ## 13. 模型能力与密钥契约
 
@@ -334,7 +347,25 @@ boundary 不再产生重复审批，但 Repository/Worker 必须逐阶段复查�
   ComponentHypothesis generation；
 - 授权不覆盖组件/参数 Batch、locked test、dry-run、live trade 或 Git；
 - Authorization 不是执行证明，没有 reviewed StrategySpec/白名单 Job 时不得声称已运行；
+- Studio 可在一次用户动作中先创建 Authorization，再通过精确
+  `POST /api/research-authorizations/{id}/start` 创建 `pipeline_execution` Job；
+- `pipeline_execution` 仅支持已登记流水线元数据的 StrategySpec；当前自动 Baseline
+  执行器为 EMA MTF 与 BOLL-RSI，其他策略明确 blocked，不使用通用假结果；
 - 已观察 validation 生成的新假设标记 `screening_contaminated`；
 - 每次范围完成、Gate 失败或依赖阻塞都写 Handoff 和 Run Bundle。
 
 详见 [流畅研究授权与失败诊断](26-流畅研究授权与失败诊断.md)。
+
+## 21. 模型与确定性执行器的职责分界
+
+支持项目 JSON Schema 和工具协议的现代模型均可生成同一份 `strategy_dsl`，不依赖 Codex
+私有自然语言格式。模型输出先经过后端白名单校验：
+
+- 通过后才附加 `strategy_spec_id=generic_strategy_dsl_v1`；
+- 超出白名单时返回 `unsupported`，不允许注入 Python、Pine 或 Shell；
+- Baseline freeze 后，smoke、fast-screen、Trial 和候选验证由确定性程序执行；
+- AI 不能覆盖 Baseline、批准未知 Diff、扩大预算、查看 locked test 或循环调参；
+- Batch 的每个参数组合不创建独立 AI 调用。
+
+因此 Direct Codex、Local Connector 和网页 BYOK 只是入口不同，进入项目后共用
+StrategySpec、Approval、Job、Artifact、Report 和 Handoff。

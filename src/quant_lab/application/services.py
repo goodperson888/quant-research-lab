@@ -16,6 +16,7 @@ from quant_lab.domain.models import (
     ALLOWED_JOB_TYPES,
     AgentProviderKind,
     AgentRun,
+    AssistantEntryMode,
     Artifact,
     AuditEvent,
     Constraint,
@@ -39,6 +40,8 @@ from quant_lab.domain.models import (
 )
 from quant_lab.domain.repositories import ProductRepository
 
+from .batch_trials import summarize_stable_ranges
+from .strategy_dsl import attach_execution_readiness
 from .tool_ports import ALLOWED_RESEARCH_TOOLS
 
 
@@ -121,6 +124,51 @@ class ResearchApplicationService:
         except NotFoundError:
             return self.repository.create_research_budget(self._new_budget(session_id))
 
+    def _job_session_id(self, job: Job) -> str | None:
+        session_id = job.payload.get("session_id")
+        if isinstance(session_id, str):
+            return session_id
+        agent_run_id = job.payload.get("agent_run_id")
+        if isinstance(agent_run_id, str):
+            try:
+                return self.repository.get_agent_run(agent_run_id).session_id
+            except NotFoundError:
+                return None
+        for key in (
+            "subject_id",
+            "strategy_version_id",
+            "candidate_version_id",
+            "baseline_version_id",
+        ):
+            version_id = job.payload.get(key)
+            if not isinstance(version_id, str):
+                continue
+            try:
+                return self.repository.get_session_id_for_strategy_version(version_id)
+            except NotFoundError:
+                continue
+        plan_id = job.payload.get("experiment_plan_id")
+        if isinstance(plan_id, str):
+            try:
+                plan = self.repository.get_experiment_plan(plan_id)
+                return self.repository.get_session_id_for_strategy_version(
+                    plan.baseline_version_id
+                )
+            except NotFoundError:
+                return None
+        return None
+
+    def _active_job_for_session(self, session_id: str) -> Job | None:
+        return next(
+            (
+                job
+                for job in self.repository.list_jobs()
+                if job.status in {"queued", "running"}
+                and self._job_session_id(job) == session_id
+            ),
+            None,
+        )
+
     def _audit(
         self,
         *,
@@ -159,7 +207,14 @@ class ResearchApplicationService:
             return False
         return all(stage in authorization.allowed_stages for stage in stages)
 
-    def create_research_session(self, *, title: str) -> ResearchSession:
+    def create_research_session(
+        self,
+        *,
+        title: str,
+        assistant_entry_mode: AssistantEntryMode = (
+            AssistantEntryMode.EXTERNAL_AGENT_DIRECT
+        ),
+    ) -> ResearchSession:
         now = utc_now()
         mode_config = self.research_mode_definition("guided")
         session = ResearchSession(
@@ -171,6 +226,7 @@ class ResearchApplicationService:
             research_mode="guided",
             mode_config=mode_config,
             mode_revision=1,
+            assistant_entry_mode=assistant_entry_mode,
         )
         created = self.repository.create_session(session)
         self.repository.create_research_budget(self._new_budget(created.id))
@@ -183,9 +239,37 @@ class ResearchApplicationService:
                 "status": created.status,
                 "research_mode": created.research_mode,
                 "mode_revision": created.mode_revision,
+                "assistant_entry_mode": created.assistant_entry_mode,
             },
         )
         return created
+
+    def update_assistant_entry_mode(
+        self,
+        *,
+        session_id: str,
+        assistant_entry_mode: AssistantEntryMode,
+    ) -> ResearchSession:
+        current = self.repository.get_session(session_id)
+        active = self.repository.get_active_session_agent_run(session_id)
+        if active is not None:
+            raise ConflictError(
+                "当前研究会话有正在排队或运行的 AI 任务，结束后才能切换助手入口。"
+            )
+        if current.assistant_entry_mode == assistant_entry_mode:
+            return current
+        updated = self.repository.update_session_assistant_entry_mode(
+            session_id,
+            assistant_entry_mode=assistant_entry_mode,
+            updated_at=utc_now(),
+        )
+        self._audit(
+            event_type="research_session.assistant_entry_changed",
+            aggregate_type="research_session",
+            aggregate_id=session_id,
+            payload={"assistant_entry_mode": updated.assistant_entry_mode},
+        )
+        return updated
 
     @staticmethod
     def list_research_mode_definitions() -> Sequence[Mapping[str, Any]]:
@@ -210,6 +294,16 @@ class ResearchApplicationService:
                 "research mode update requires explicit user confirmation"
             )
         current = self.repository.get_session(session_id)
+        active_run = self.repository.get_active_session_agent_run(session_id)
+        if active_run is not None:
+            raise ConflictError(
+                "当前研究会话有正在排队或运行的 AI 任务；任务结束后才能修改研究模式。"
+            )
+        active_job = self._active_job_for_session(session_id)
+        if active_job is not None:
+            raise ConflictError(
+                "当前研究会话有正在排队或运行的后台任务；任务结束后才能修改研究模式。"
+            )
         resolved = self.research_mode_definition(research_mode)
         overrides = dict(mode_config or {})
         unknown = sorted(set(overrides) - RESEARCH_MODE_CONFIG_KEYS)
@@ -290,6 +384,27 @@ class ResearchApplicationService:
         )
         return created
 
+    def add_assistant_message(
+        self, *, session_id: str, content: str, actor_type: str
+    ) -> Message:
+        self.repository.get_session(session_id)
+        message = Message(
+            id=new_id("message"),
+            session_id=session_id,
+            role="assistant",
+            content=content.strip(),
+            created_at=utc_now(),
+        )
+        created = self.repository.add_message(message)
+        self._audit(
+            event_type="message.created",
+            aggregate_type="research_session",
+            aggregate_id=session_id,
+            payload={"message_id": created.id, "role": created.role},
+            actor_type=actor_type,
+        )
+        return created
+
     def list_messages(self, session_id: str) -> Sequence[Message]:
         self.repository.get_session(session_id)
         return self.repository.list_messages(session_id)
@@ -303,6 +418,10 @@ class ResearchApplicationService:
         source_name: str | None = None,
     ) -> StrategyDraft:
         self.repository.get_session(session_id)
+        if self.repository.list_drafts(session_id):
+            raise ConflictError(
+                "一个研究会话只能包含一份策略；请为新策略创建新的研究会话。"
+            )
         draft = StrategyDraft(
             id=new_id("draft"),
             session_id=session_id,
@@ -364,9 +483,10 @@ class ResearchApplicationService:
             )
         if not structured_content:
             raise ConflictError("confirmed strategy formalization cannot be empty")
+        prepared_content = attach_execution_readiness(structured_content)
         draft = self.repository.update_draft_formalization(
             draft_id=draft_id,
-            structured_content=structured_content,
+            structured_content=prepared_content,
         )
         self._audit(
             event_type="strategy_formalization.confirmed",
@@ -392,6 +512,61 @@ class ResearchApplicationService:
             next_recommended_action=f"使用精确 subject_id {draft.id} 冻结 Baseline。",
             approval_subject_id=draft.id,
             safe_to_continue=False,
+        )
+        return draft
+
+    def propose_strategy_formalization(
+        self,
+        *,
+        draft_id: str,
+        structured_content: Mapping[str, Any],
+        agent_run_id: str,
+        assistant_message: str,
+        actor_type: str,
+    ) -> StrategyDraft:
+        if not structured_content:
+            raise ConflictError("AI formalization proposal cannot be empty")
+        run = self.repository.get_agent_run(agent_run_id)
+        draft_before = self.repository.get_draft(draft_id)
+        if run.session_id != draft_before.session_id or run.subject_id != draft_id:
+            raise ConflictError("AgentRun subject does not match StrategyDraft")
+        prepared_content = attach_execution_readiness(structured_content)
+        draft = self.repository.update_draft_formalization(
+            draft_id=draft_id,
+            structured_content=prepared_content,
+        )
+        self.add_assistant_message(
+            session_id=draft.session_id,
+            content=assistant_message,
+            actor_type=actor_type,
+        )
+        self._audit(
+            event_type="strategy_formalization.proposed",
+            aggregate_type="strategy_draft",
+            aggregate_id=draft.id,
+            payload={
+                "agent_run_id": agent_run_id,
+                "status": draft.status,
+                "baseline_frozen": False,
+                "requires_user_confirmation": True,
+            },
+            actor_type=actor_type,
+        )
+        self.record_handoff(
+            session_id=draft.session_id,
+            agent_run_id=agent_run_id,
+            subject_id=draft.id,
+            status="waiting_user_approval",
+            stop_reason_code="ai_formalization_requires_user_confirmation",
+            stop_reason_text="AI 已生成结构化策略提案，尚未获得用户确认。",
+            completed_actions=("保存原始策略", "生成结构化策略提案"),
+            not_started_actions=("用户确认形式化规则", "冻结 Baseline", "运行回测"),
+            user_action_required=True,
+            required_user_action=f"审阅并确认 Draft {draft.id} 的结构化规则。",
+            next_recommended_action="先核对歧义和交易语义，再确认形式化结果。",
+            approval_subject_id=draft.id,
+            safe_to_continue=False,
+            actor_type=actor_type,
         )
         return draft
 
@@ -790,6 +965,79 @@ class ResearchApplicationService:
                 ):
                     raise ApprovalRequiredError(
                         "cheap cost sensitivity requires the subject's passed fast_screen gate"
+                    )
+            elif stress_level == "bounded_candidate_validation":
+                required = {
+                    "intent",
+                    "experiment_plan_id",
+                    "recommended_trial_id",
+                    "subject_id",
+                    "confirmed_by_user",
+                    "locked_test_used",
+                }
+                missing = sorted(required - set(payload))
+                if missing:
+                    raise InvalidJobError(
+                        "候选验证 Job 缺少：" + "、".join(missing)
+                    )
+                plan_id = str(payload["experiment_plan_id"])
+                if (
+                    payload["confirmed_by_user"] is not True
+                    or payload["subject_id"] != plan_id
+                ):
+                    raise ApprovalRequiredError(
+                        "候选验证要求用户明确批准当前试验计划"
+                    )
+                if payload["locked_test_used"] is not False:
+                    raise InvalidJobError(
+                        "有界候选验证不得使用最终保留测试"
+                    )
+                plan = self.repository.get_experiment_plan(plan_id)
+                if (
+                    plan.status != "approved"
+                    or not plan.candidate_version_id
+                    or payload["intent"]
+                    != "generic_strategy_dsl_candidate_validation"
+                ):
+                    raise InvalidJobError(
+                        "候选验证要求已批准的通用策略试验计划"
+                    )
+                batch_jobs = [
+                    item
+                    for item in self.repository.list_jobs()
+                    if item.job_type == "parameter_search"
+                    and item.payload.get("batch_mode") is True
+                    and item.payload.get("experiment_plan_id") == plan.id
+                    and item.status == "succeeded"
+                ]
+                if len(batch_jobs) != 1:
+                    raise ApprovalRequiredError(
+                        "候选验证要求同一计划先完成一次有限批量试验"
+                    )
+                trials = self.repository.list_trials(plan.id)
+                recommendation = summarize_stable_ranges(
+                    trials, plan.constraints
+                )["recommendation"]
+                if (
+                    recommendation.get("decision")
+                    != "candidate_validation"
+                    or recommendation.get("recommended_trial_id")
+                    != payload["recommended_trial_id"]
+                ):
+                    raise ApprovalRequiredError(
+                        "当前批量结果没有形成可进入候选验证的稳定推荐方案"
+                    )
+                duplicates = [
+                    item
+                    for item in self.repository.list_jobs()
+                    if item.job_type == "stress_test"
+                    and item.payload.get("experiment_plan_id") == plan.id
+                    and item.payload.get("stress_level")
+                    == "bounded_candidate_validation"
+                ]
+                if duplicates:
+                    raise ConflictError(
+                        "该试验计划已经存在候选验证任务"
                     )
         if job_type == "regime_validation":
             required = {
@@ -1200,11 +1448,65 @@ class ResearchApplicationService:
         if not confirmed_by_user or subject_id != job_id:
             raise ApprovalRequiredError("job retry requires the exact subject_id")
         previous = self.repository.get_job(job_id)
-        if previous.job_type != "parameter_search" or previous.status not in {
+        if previous.status not in {
             "failed",
             "cancelled",
         }:
-            raise ConflictError("only failed/cancelled parameter-search jobs can be retried")
+            raise ConflictError("only failed/cancelled jobs can be retried")
+        if previous.job_type == "pipeline_execution":
+            authorization_id = previous.payload.get("authorization_id")
+            session_id = previous.payload.get("session_id")
+            if not isinstance(authorization_id, str) or not isinstance(
+                session_id, str
+            ):
+                raise ConflictError(
+                    "pipeline retry is missing its authorization or session"
+                )
+            if self.repository.list_research_authorization_stages(
+                authorization_id
+            ):
+                raise ConflictError(
+                    "pipeline retry after recorded stage evidence requires a new authorization"
+                )
+            authorization = self.repository.get_research_authorization(
+                authorization_id
+            )
+            if authorization.status != "active":
+                raise ConflictError(
+                    "pipeline authorization is no longer active; create a new authorization"
+                )
+            previous_agent_run_id = previous.payload.get("agent_run_id")
+            if isinstance(previous_agent_run_id, str):
+                previous_agent_run = self.repository.get_agent_run(
+                    previous_agent_run_id
+                )
+                if previous_agent_run.status in {"queued", "running"}:
+                    self.repository.update_agent_run_status(
+                        previous_agent_run_id,
+                        status="failed",
+                        error=(
+                            previous.error
+                            or "superseded by explicit pipeline retry"
+                        ),
+                    )
+            agent_run = self.create_agent_run(
+                session_id=session_id,
+                agent_name="authorized-pipeline-worker",
+                plan_summary=(
+                    "显式重试 correctness → smoke → fast_screen → viability；"
+                    "仍不使用最终保留测试"
+                ),
+            )
+            payload = dict(previous.payload)
+            payload["agent_run_id"] = agent_run.id
+            payload["retry_of_job_id"] = previous.id
+            return self.create_job(
+                job_type=previous.job_type, payload=payload
+            )
+        if previous.job_type != "parameter_search":
+            raise ConflictError(
+                "only failed/cancelled parameter-search or initial pipeline jobs can be retried"
+            )
         payload = dict(previous.payload)
         payload["resume_of_job_id"] = previous.id
         return self.create_job(job_type=previous.job_type, payload=payload)
@@ -1525,6 +1827,8 @@ class ResearchApplicationService:
         agent_provider: AgentProviderKind = AgentProviderKind.EXTERNAL_LOCAL_AGENT,
         execution_target: ExecutionTargetKind = ExecutionTargetKind.LOCAL_RUNTIME,
         plan_summary: str | None = None,
+        subject_id: str | None = None,
+        task_type: str = "research_orchestration",
     ) -> AgentRun:
         session = self.repository.get_session(session_id)
         resolved_mode = mode or str(
@@ -1544,6 +1848,8 @@ class ResearchApplicationService:
             mode=resolved_mode,  # type: ignore[arg-type]
             status="queued",
             plan_summary=plan_summary,
+            subject_id=subject_id,
+            task_type=task_type,
             created_at=utc_now(),
         )
         created = self.repository.create_agent_run(agent_run)
@@ -1557,12 +1863,16 @@ class ResearchApplicationService:
                 "mode": created.mode,
                 "research_mode": session.research_mode,
                 "mode_revision": session.mode_revision,
+                "subject_id": created.subject_id,
+                "task_type": created.task_type,
             },
             actor_type="external_agent",
         )
         return created
 
-    def update_agent_run_status(self, *, agent_run_id: str, status: str) -> AgentRun:
+    def update_agent_run_status(
+        self, *, agent_run_id: str, status: str, error: str | None = None
+    ) -> AgentRun:
         allowed = {
             "queued",
             "running",
@@ -1574,15 +1884,21 @@ class ResearchApplicationService:
         }
         if status not in allowed:
             raise ValueError("invalid agent run status")
-        updated = self.repository.update_agent_run_status(agent_run_id, status=status)
+        updated = self.repository.update_agent_run_status(
+            agent_run_id, status=status, error=error
+        )
         self._audit(
             event_type="agent_run.status_changed",
             aggregate_type="agent_run",
             aggregate_id=agent_run_id,
-            payload={"status": updated.status},
+            payload={"status": updated.status, "has_error": bool(updated.error)},
             actor_type="external_agent",
         )
         return updated
+
+    def list_session_agent_runs(self, session_id: str) -> Sequence[AgentRun]:
+        self.repository.get_session(session_id)
+        return self.repository.list_session_agent_runs(session_id)
 
     def get_session_agent_occupancy(self, session_id: str) -> dict[str, Any]:
         self.repository.get_session(session_id)
@@ -1731,6 +2047,7 @@ class ResearchApplicationService:
         peak_rss_mb: float | None = None,
         result_artifact_key: str | None = None,
         metrics_artifact_key: str | None = None,
+        equity_artifact_key: str | None = None,
     ) -> Trial:
         if status not in {"running", "succeeded", "failed", "cancelled"}:
             raise ValueError("invalid trial status")
@@ -1744,6 +2061,7 @@ class ResearchApplicationService:
             peak_rss_mb=peak_rss_mb,
             result_artifact_key=result_artifact_key,
             metrics_artifact_key=metrics_artifact_key,
+            equity_artifact_key=equity_artifact_key,
         )
         self._audit(
             event_type="trial.status_changed",

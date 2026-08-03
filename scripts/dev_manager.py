@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single-instance manager for the local API and Web development servers."""
+"""Single-instance manager for API, Web, Worker, and Local AI Connector."""
 
 from __future__ import annotations
 
@@ -19,7 +19,12 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_STATE_DIR = ROOT / "runtime" / "dev"
-ROLE_LABELS = {"api": "API", "web": "Web"}
+ROLE_LABELS = {
+    "api": "API",
+    "web": "Web",
+    "worker": "Worker",
+    "connector": "Local Connector",
+}
 
 
 class DevManagerError(RuntimeError):
@@ -106,6 +111,16 @@ def process_matches_role(pid: int, role: str) -> bool:
             is_within(cwd, ROOT / "apps" / "web")
             or str(ROOT / "apps" / "web") in command
         )
+    elif role == "worker":
+        command_matches = (
+            "quant_lab.workers.cli" in command and "--watch" in command
+        )
+        location_matches = is_within(cwd, ROOT) or root_text in command
+    elif role == "connector":
+        command_matches = (
+            "quant_lab.agents.cli" in command and "--watch" in command
+        )
+        location_matches = is_within(cwd, ROOT) or root_text in command
     else:
         return False
     if command:
@@ -173,6 +188,44 @@ def managed_listener_exists(role: str, port: int, run_id: str) -> bool:
         process_is_managed(pid, role, run_id, port)
         for pid in listener_pids(port)
     )
+
+
+def project_worker_pids() -> list[int]:
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "quant_lab\\.workers\\.cli.*--watch"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    pids: list[int] = []
+    for line in result.stdout.splitlines():
+        with contextlib.suppress(ValueError):
+            pid = int(line.strip())
+            if process_matches_role(pid, "worker"):
+                pids.append(pid)
+    return sorted(set(pids))
+
+
+def project_connector_pids() -> list[int]:
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "quant_lab\\.agents\\.cli.*--watch"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    pids: list[int] = []
+    for line in result.stdout.splitlines():
+        with contextlib.suppress(ValueError):
+            pid = int(line.strip())
+            if process_matches_role(pid, "connector"):
+                pids.append(pid)
+    return sorted(set(pids))
 
 
 def describe_process(pid: int) -> str:
@@ -321,18 +374,26 @@ class DevManager:
                 or not managed_listener_exists(role, port, run_id)
             ):
                 return False
+        for role in ("worker", "connector"):
+            pid = self.state_pid(state, role)
+            if not process_is_managed(pid, role, run_id):
+                return False
         return True
 
     def print_running(self, api_port: int, web_port: int) -> None:
         print("Quant Research Lab 已经运行，可直接访问：")
         print(f"Web Studio: http://127.0.0.1:{web_port}/studio")
         print(f"API health: http://127.0.0.1:{api_port}/health")
+        print("后台 Worker 正在自动领取已批准的排队任务（单并发、白名单执行）。")
+        print("Local Connector 正在领取网页发起的本地 Codex 形式化任务。")
         print("前端和 Python API 源码热更新已开启，日常修改无需重启。")
         print("停止：./scripts/dev.sh stop    重启：./scripts/dev.sh restart")
 
     def preflight(self) -> str:
         api_class, api_pids = classify_port("api", self.api_port)
         web_class, web_pids = classify_port("web", self.web_port)
+        worker_pids = project_worker_pids()
+        connector_pids = project_connector_pids()
 
         if api_class == "unknown":
             report_unknown_port("api", self.api_port, api_pids)
@@ -340,18 +401,27 @@ class DevManager:
             report_unknown_port("web", self.web_port, web_pids)
         if "unknown" in (api_class, web_class):
             raise DevManagerError("端口预检失败，未启动或终止任何进程。")
-        if "project" in (api_class, web_class):
+        if "project" in (api_class, web_class) or worker_pids or connector_pids:
             print(
-                "检测到本项目手动启动或失去状态文件的旧服务；"
+                "检测到本项目手动启动或失去状态文件的旧服务/Worker；"
                 "正在安全停止并重新纳入 dev.sh 管理。"
             )
-            self.stop_unmanaged_project_services(
-                classified={
-                    "api": (api_class, api_pids),
-                    "web": (web_class, web_pids),
-                },
-                announce=False,
-            )
+            classified = {
+                "api": (api_class, api_pids),
+                "web": (web_class, web_pids),
+            }
+            if worker_pids:
+                self.stop_unmanaged_project_services(
+                    classified=classified,
+                    worker_pids=worker_pids,
+                    connector_pids=connector_pids,
+                    announce=False,
+                )
+            else:
+                self.stop_unmanaged_project_services(
+                    classified=classified,
+                    announce=False,
+                )
         return "start"
 
     def terminate_verified_listeners(
@@ -425,6 +495,8 @@ class DevManager:
         self,
         *,
         classified: dict[str, tuple[str, list[int]]] | None = None,
+        worker_pids: list[int] | None = None,
+        connector_pids: list[int] | None = None,
         announce: bool,
     ) -> bool:
         results = classified or {
@@ -453,8 +525,58 @@ class DevManager:
                 )
                 or stopped
             )
+        workers = project_worker_pids() if worker_pids is None else worker_pids
+        for pid in workers:
+            if not process_matches_role(pid, "worker"):
+                raise DevManagerError(
+                    f"Worker 进程 PID {pid} 的身份在停止前发生变化；本次没有终止。"
+                )
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                continue
+            except PermissionError as exc:
+                raise DevManagerError(
+                    f"没有权限停止已确认的本项目 Worker PID {pid}。"
+                ) from exc
+            stopped = True
+        if workers and any(
+            not self.wait_for_pid_exit(pid) for pid in workers if process_exists(pid)
+        ):
+            raise DevManagerError(
+                "已发送 Worker 停止信号，但进程仍未退出；未强制终止，请查看原启动终端。"
+            )
+        connectors = (
+            project_connector_pids()
+            if connector_pids is None
+            else connector_pids
+        )
+        for pid in connectors:
+            if not process_matches_role(pid, "connector"):
+                raise DevManagerError(
+                    f"Local Connector 进程 PID {pid} 的身份在停止前发生变化；"
+                    "本次没有终止。"
+                )
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                continue
+            except PermissionError as exc:
+                raise DevManagerError(
+                    f"没有权限停止已确认的 Local Connector PID {pid}。"
+                ) from exc
+            stopped = True
+        if connectors and any(
+            not self.wait_for_pid_exit(pid)
+            for pid in connectors
+            if process_exists(pid)
+        ):
+            raise DevManagerError(
+                "已发送 Local Connector 停止信号，但进程仍未退出；"
+                "未强制终止，请查看原启动终端。"
+            )
         if stopped and announce:
-            print("已停止可确认属于本项目的 API/Web 服务。")
+            print("已停止可确认属于本项目的 API/Web/Worker/Local Connector 服务。")
         return stopped
 
     def terminate_managed_group(
@@ -462,7 +584,11 @@ class DevManager:
     ) -> bool:
         run_id = state.get("run_id")
         pid = self.state_pid(state, role)
-        port = self.state_port(state, role)
+        port = (
+            None
+            if role in {"worker", "connector"}
+            else self.state_port(state, role)
+        )
         if (
             not isinstance(run_id, str)
             or not process_is_managed(pid, role, run_id, port)
@@ -494,7 +620,7 @@ class DevManager:
     def stop_state(self, state: dict[str, Any], *, announce: bool) -> bool:
         stopped = False
         tracked: list[int] = []
-        for role in ("web", "api"):
+        for role in ("connector", "worker", "web", "api"):
             pid = self.state_pid(state, role)
             if self.terminate_managed_group(state, role):
                 stopped = True
@@ -508,7 +634,7 @@ class DevManager:
             state.get("run_id") if isinstance(state.get("run_id"), str) else None
         )
         if stopped and announce:
-            print("Quant Research Lab API 和 Web 已停止。")
+            print("Quant Research Lab API、Web、Worker 和 Local Connector 已停止。")
         return stopped
 
     def stop(self) -> int:
@@ -563,7 +689,7 @@ class DevManager:
         state: dict[str, Any],
         processes: Iterable[subprocess.Popen[Any]],
     ) -> None:
-        for role in ("web", "api"):
+        for role in ("connector", "worker", "web", "api"):
             self.terminate_managed_group(state, role)
         remaining = False
         for process in processes:
@@ -623,6 +749,28 @@ class DevManager:
                 self.save_state(state)
                 self.wait_until_ready(api, "api", self.api_port, run_id)
 
+                worker = self.launch(
+                    [str(ROOT / "scripts" / "dev-worker.sh"), "--watch"],
+                    base_env.copy(),
+                )
+                processes.append(worker)
+                state["worker_pid"] = worker.pid
+                self.save_state(state)
+                time.sleep(0.3)
+                if worker.poll() is not None:
+                    raise DevManagerError("Worker 启动进程已提前退出。")
+
+                connector = self.launch(
+                    [str(ROOT / "scripts" / "dev-agent-connector.sh"), "--watch"],
+                    base_env.copy(),
+                )
+                processes.append(connector)
+                state["connector_pid"] = connector.pid
+                self.save_state(state)
+                time.sleep(0.3)
+                if connector.poll() is not None:
+                    raise DevManagerError("Local Connector 启动进程已提前退出。")
+
                 web_env = base_env.copy()
                 web_env["NEXT_PUBLIC_QUANT_LAB_API_URL"] = (
                     f"http://127.0.0.1:{self.api_port}"
@@ -651,8 +799,10 @@ class DevManager:
         print("启动完成：")
         print(f"Web Studio: http://127.0.0.1:{self.web_port}/studio")
         print(f"API health: http://127.0.0.1:{self.api_port}/health")
+        print("Worker queue: 已启动（单并发、仅执行白名单研究任务）")
+        print("Local Connector: 已启动（只执行固定的策略形式化任务）")
         print("前端和 Python API 源码热更新已开启，修改后浏览器会自动刷新。")
-        print("按 Ctrl+C 可同时停止 API 和 Web。")
+        print("按 Ctrl+C 可同时停止 API、Web、Worker 和 Local Connector。")
         print("其他终端可运行：./scripts/dev.sh stop 或 ./scripts/dev.sh restart")
 
         try:
@@ -662,8 +812,10 @@ class DevManager:
                 (process for process in processes if process.poll() is not None),
                 processes[0],
             )
-            role = "API" if failed is processes[0] else "Web"
-            print(f"{role} 已停止，正在关闭另一服务。", file=sys.stderr)
+            role = ("API", "Worker", "Local Connector", "Web")[
+                processes.index(failed)
+            ]
+            print(f"{role} 已停止，正在关闭其他服务。", file=sys.stderr)
             return failed.returncode or 0
         except (KeyboardInterrupt, Interrupted):
             return 130
@@ -717,7 +869,7 @@ def positive_float(value: str) -> float:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="管理 Quant Research Lab 本地单实例 API/Web 服务"
+        description="管理 Quant Research Lab 本地单实例 API/Web/Worker 服务"
     )
     parser.add_argument(
         "action",

@@ -1,9 +1,15 @@
 "use client";
 
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { apiFetch, RunBundle, RunBundleChart, Trial } from "@/lib/api";
+import {
+  apiFetch,
+  RunBundle,
+  RunBundleChart,
+  Trial,
+  TrialEquityComparison as TrialEquityComparisonData,
+} from "@/lib/api";
 import {
   formatPercent,
   formatTrialParameters,
@@ -153,8 +159,9 @@ export function PerformanceCharts({
           </div>
           {trialCount ? (
             <div className="rounded-lg border border-amber-300/15 bg-amber-300/[0.05] px-3 py-2 text-xs leading-5 text-amber-100/80">
-              当前 {trialCount} 个参数方案只保留了指标，没有保留逐时点资金曲线；
-              因此这里不会伪造“多参数资金线”。当前图只展示实际保存的运行结果。
+              当前所选历史批次的 {trialCount} 个参数方案创建于 Trial
+              曲线保留功能之前；因此这里不会伪造“多参数资金线”。重新运行的新批次可在“参数试验
+              → 资金曲线”中同图比较。
             </div>
           ) : null}
           {availableMarketTimeframes.length ? (
@@ -478,9 +485,25 @@ const TRIAL_METRICS = [
   },
 ] as const;
 
-export function TrialMetricComparison({ trials }: { trials: Trial[] }) {
+export function TrialMetricComparison({
+  experimentPlanId,
+  trials,
+}: {
+  experimentPlanId: string;
+  trials: Trial[];
+}) {
+  const [view, setView] = useState<"metrics" | "equity">("metrics");
   const [metricKey, setMetricKey] =
     useState<(typeof TRIAL_METRICS)[number]["key"]>("validation_net_return");
+  const equityQuery = useQuery({
+    queryKey: ["trial-equity", experimentPlanId],
+    queryFn: () =>
+      apiFetch<TrialEquityComparisonData>(
+        `/api/experiment-plans/${encodeURIComponent(experimentPlanId)}/trial-equity?split=validation&max_points=500`,
+      ),
+    enabled: Boolean(experimentPlanId),
+    retry: false,
+  });
   const succeeded = trials
     .filter((item) => item.status === "succeeded")
     .slice(0, 20);
@@ -515,12 +538,48 @@ export function TrialMetricComparison({ trials }: { trials: Trial[] }) {
     <div className="space-y-4">
       <div>
         <div className="mb-1 text-sm font-medium text-slate-200">
-          参数方案指标对比
+          参数方案对比
         </div>
         <div className="text-xs leading-5 text-slate-500">
-          单个连续参数会按数值顺序绘制折线；多个参数同时变化时保留独立条形，避免用连线制造不存在的顺序。
+          指标页看参数敏感性；资金曲线页比较每次 Trial 在同一验证区间内的真实资金路径。
         </div>
       </div>
+      <div
+        className="inline-flex rounded-xl border border-white/10 bg-black/10 p-1"
+        role="tablist"
+        aria-label="参数方案对比方式"
+      >
+        {(
+          [
+            ["metrics", "指标对比"],
+            ["equity", "资金曲线"],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={view === id}
+            onClick={() => setView(id)}
+            className={
+              view === id
+                ? "min-h-11 rounded-lg bg-sky-300/12 px-4 text-xs font-medium text-sky-100"
+                : "min-h-11 rounded-lg px-4 text-xs text-slate-400 hover:text-slate-200"
+            }
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {view === "equity" ? (
+        <TrialEquityCurves
+          key={experimentPlanId}
+          data={equityQuery.data}
+          loading={equityQuery.isPending}
+          failed={equityQuery.isError}
+        />
+      ) : (
+        <>
       <div className="flex max-w-full gap-1 overflow-x-auto">
         {TRIAL_METRICS.map((item) => (
           <button
@@ -559,6 +618,186 @@ export function TrialMetricComparison({ trials }: { trials: Trial[] }) {
           colorMode={metric.colorMode}
         />
       )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function TrialEquityCurves({
+  data,
+  loading,
+  failed,
+}: {
+  data: TrialEquityComparisonData | undefined;
+  loading: boolean;
+  failed: boolean;
+}) {
+  const [selectedTrialIds, setSelectedTrialIds] = useState<string[] | null>(
+    null,
+  );
+
+  if (loading) {
+    return (
+      <div className="h-72 animate-pulse rounded-xl border border-white/10 bg-white/[0.025]" />
+    );
+  }
+  if (failed) {
+    return (
+      <EmptyState>
+        资金曲线读取失败。指标表仍然可用；请确认 API 已重载后重试。
+      </EmptyState>
+    );
+  }
+  if (!data?.available || !data.series.length) {
+    return (
+      <EmptyState>
+        {data?.reason ??
+          "该批次没有真实资金曲线；重新运行新的参数批次后会自动保留压缩曲线。"}
+      </EmptyState>
+    );
+  }
+
+  const recommended = data.recommended_trial_ids.length
+    ? data.recommended_trial_ids
+    : data.series.slice(0, 6).map((item) => item.trial_id);
+  const selected = selectedTrialIds ?? recommended;
+  const selectedSet = new Set(selected);
+  const visibleSeries = data.comparable
+    ? data.series.filter((item) => selectedSet.has(item.trial_id)).slice(0, 6)
+    : data.series.filter((item) => selectedSet.has(item.trial_id)).slice(0, 1);
+  const toggle = (trialId: string) => {
+    const current = selectedTrialIds ?? recommended;
+    if (current.includes(trialId)) {
+      setSelectedTrialIds(current.filter((item) => item !== trialId));
+      return;
+    }
+    if (current.length >= 6) return;
+    setSelectedTrialIds([...current, trialId]);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="text-xs leading-5 text-slate-500">
+        默认展示最多 6 个代表方案，并同时用颜色、线型和参数文字区分。锁定测试不进入这里。
+      </div>
+      {!data.comparable ? (
+        <div className="rounded-lg border border-amber-300/20 bg-amber-300/10 p-3 text-xs leading-5 text-amber-100">
+          这些方案的时间覆盖不一致，因此一次只显示一条，避免把不同区间误当成同条件比较。
+        </div>
+      ) : null}
+      {data.series.some((item) => item.evidence_mode === "fixture") ? (
+        <div className="rounded-lg border border-amber-300/20 bg-amber-300/10 p-3 text-xs leading-5 text-amber-100">
+          当前包含连线测试数据，只能检查页面与批量执行流程，不能形成收益结论。
+        </div>
+      ) : null}
+      <div className="grid gap-2 lg:grid-cols-2">
+        {data.series.map((item, index) => {
+          const active = selectedSet.has(item.trial_id);
+          const disabled = !active && selected.length >= 6;
+          return (
+            <button
+              key={item.trial_id}
+              type="button"
+              aria-pressed={active}
+              disabled={disabled}
+              onClick={() => toggle(item.trial_id)}
+              className={
+                active
+                  ? "min-h-20 rounded-xl border border-sky-300/25 bg-sky-300/[0.07] p-3 text-left"
+                  : "min-h-20 rounded-xl border border-white/[0.08] bg-white/[0.02] p-3 text-left hover:border-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+              }
+            >
+              <div className="flex items-start gap-3">
+                <span
+                  className="mt-1 h-3 w-3 shrink-0 rounded-sm border"
+                  style={{
+                    borderColor: CHART_COLORS[index % CHART_COLORS.length],
+                    backgroundColor: active
+                      ? CHART_COLORS[index % CHART_COLORS.length]
+                      : "transparent",
+                  }}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-medium text-slate-200">
+                    {formatTrialParameters(item.parameters)}
+                  </span>
+                  <span className="mt-1 grid grid-cols-4 gap-2 text-[10px] tabular-nums text-slate-500">
+                    <span>
+                      收益{" "}
+                      <b className="font-medium text-slate-300">
+                        {formatSignedPercentValue(
+                          item.metrics.validation_net_return ?? 0,
+                        )}
+                      </b>
+                    </span>
+                    <span>
+                      回撤{" "}
+                      <b className="font-medium text-slate-300">
+                        {formatPercent(
+                          item.metrics.validation_max_drawdown_abs ?? 0,
+                        )}
+                      </b>
+                    </span>
+                    <span>
+                      盈亏效率{" "}
+                      <b className="font-medium text-slate-300">
+                        {(item.metrics.validation_profit_factor ?? 0).toFixed(2)}
+                      </b>
+                    </span>
+                    <span>
+                      交易{" "}
+                      <b className="font-medium text-slate-300">
+                        {Math.round(
+                          item.metrics.validation_trade_count ?? 0,
+                        )}
+                      </b>
+                    </span>
+                  </span>
+                </span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      {visibleSeries.length ? (
+        <InteractiveEquityChart
+          title="同一验证区间的 Trial 资金曲线"
+          description={
+            data.comparable
+              ? "只叠加时间范围一致的真实曲线，可用底部滑块缩放查看局部差异。"
+              : "当前只显示所选方案，切换方案后再逐条查看。"
+          }
+          series={visibleSeries.map((item) => {
+            const index = data.series.findIndex(
+              (candidate) => candidate.trial_id === item.trial_id,
+            );
+            return {
+              id: item.trial_id,
+              label: formatTrialParameters(item.parameters),
+              color: CHART_COLORS[index % CHART_COLORS.length],
+              points: item.points.map((point) => ({
+                t: point.t,
+                value: point.normalized_equity,
+              })),
+            };
+          })}
+        />
+      ) : (
+        <EmptyState>请至少选择一个参数方案。</EmptyState>
+      )}
+      {data.limitations.length ? (
+        <details className="rounded-lg bg-white/[0.03] p-3 text-xs leading-5 text-slate-400">
+          <summary className="cursor-pointer text-slate-300">
+            查看曲线限制
+          </summary>
+          <ul className="mt-2 list-disc space-y-1 pl-5">
+            {data.limitations.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
     </div>
   );
 }

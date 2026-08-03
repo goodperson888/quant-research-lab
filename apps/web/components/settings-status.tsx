@@ -84,7 +84,8 @@ export function SettingsStatus() {
 
       {view === "common" ? (
         <div className="grid gap-4 lg:grid-cols-2">
-          <Section title="当前运行方式">
+          <Section title="当前可用入口">
+            <Row label="研究入口" value="直接在 Codex / Claude CLI 中开始" />
             <Row
               label="研究助手"
               value={cnRuntimeValue(agent.data.active_configuration.agent_provider)}
@@ -101,20 +102,30 @@ export function SettingsStatus() {
               label="研究数据位置"
               value={cnRuntimeValue(agent.data.active_configuration.data_location)}
             />
+            <Row label="网页自动唤起本地助手" value="尚未实现" />
             <p className="text-xs leading-5 text-slate-500">
-              当前由本地研究助手理解策略，回测和文件处理在本机执行。
+              当前支持外部本地助手模式，但需要用户在 Codex 或 Claude CLI 中主动开始任务。
+              网页保存策略只会建档，不会自动唤起或操控本地助手。
             </p>
           </Section>
 
-          <Section title="网页内 AI">
+          <Section title="网页模型与本地连接器">
             <Row
-              label="配置状态"
+              label="网页模型配置"
               value={project.data.ai_provider.configured ? "已配置" : "尚未配置"}
+            />
+            <Row
+              label="网页模型调用"
+              value="尚未接入"
+            />
+            <Row
+              label="本地 Connector"
+              value="尚未接入"
             />
             <p className="text-xs leading-5 text-slate-500">
               {project.data.ai_provider.configured
-                ? "网页可以直接调用已配置的模型服务。"
-                : "当前仍使用本地研究助手；以后配置模型 API 后，可在网页内完成相同研究流程。"}
+                ? "已检测到模型配置，但当前网页调用链尚未实现，因此不会把它显示成可用入口。"
+                : "未来配置模型 API 或本地 Connector 后，可从网页发起同一套研究流程；当前不会伪造连接或 AI 回复。"}
             </p>
           </Section>
 

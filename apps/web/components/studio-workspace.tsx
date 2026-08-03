@@ -5,7 +5,9 @@ import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 
 import {
+  AgentRun,
   AgentStatus,
+  AssistantEntryMode,
   apiFetch,
   AuditEvent,
   ComponentCandidate,
@@ -17,9 +19,11 @@ import {
   EngineReconciliationStatus,
   Trial,
   BatchSummary,
+  CandidateValidationSummary,
   Job,
   PipelineProfile,
   ProjectStatus,
+  ProviderStatus,
   RegimeValidation,
   ResearchBudget,
   ResearchBudgetPolicy,
@@ -34,16 +38,20 @@ import {
   ResearchModeDefinition,
   StrategyOutcome,
   StrategyDraft,
+  StrategyVersion,
   VersioningPolicy,
 } from "@/lib/api";
 import { BatchProgressPanel } from "@/components/studio/batch-progress";
+import { CandidateValidationResultCard } from "@/components/studio/candidate-validation-result";
 import { ComponentLibrary } from "@/components/studio/component-library";
 import { IntakeComposer } from "@/components/studio/intake-composer";
 import { ImprovementDirections } from "@/components/studio/improvement-directions";
+import { StrategyVersionLineage } from "@/components/studio/strategy-version-lineage";
 import {
   ResearchAnalysis,
   ResearchAnalysisView,
 } from "@/components/studio/research-analysis";
+import { ResearchDecisionSheet } from "@/components/studio/research-decision-sheet";
 import {
   StageContainer,
   StageTabs,
@@ -53,6 +61,7 @@ import {
 } from "@/components/studio/research-workflow";
 import {
   buildTopConclusion,
+  ResearchHandoffPanel,
   StudioOverview,
 } from "@/components/studio/studio-overview";
 import {
@@ -122,6 +131,14 @@ export function StudioWorkspace() {
     "natural_language",
   );
   const [content, setContent] = useState("");
+  const [assistantModeOverride, setAssistantModeOverride] =
+    useState<AssistantEntryMode | null>(null);
+  const [providerName, setProviderName] = useState("OpenAI");
+  const [providerBaseUrl, setProviderBaseUrl] = useState(
+    "https://api.openai.com/v1",
+  );
+  const [providerModel, setProviderModel] = useState("");
+  const [providerApiKey, setProviderApiKey] = useState("");
   const [session, setSession] = useState<Session | null>(null);
   const [draft, setDraft] = useState<StrategyDraft | null>(null);
   const [baseline, setBaseline] = useState<BaselineVersion | null>(null);
@@ -135,6 +152,8 @@ export function StudioWorkspace() {
   const [workflowLocationInitialized, setWorkflowLocationInitialized] =
     useState(false);
   const [controlPanelOpen, setControlPanelOpen] = useState(false);
+  const [creatingNewSession, setCreatingNewSession] = useState(false);
+  const [researchModeEditing, setResearchModeEditing] = useState(false);
   const [notice, setNotice] = useState(
     "可输入下一份策略或新研究假设。当前已保留一份未通过策略及诊断性组件证据；网页模型未配置。",
   );
@@ -146,6 +165,11 @@ export function StudioWorkspace() {
   const agent = useQuery({
     queryKey: ["agent-status"],
     queryFn: () => apiFetch<AgentStatus>("/api/agent/status"),
+    refetchInterval: 5000,
+  });
+  const providerStatus = useQuery({
+    queryKey: ["provider-status"],
+    queryFn: () => apiFetch<ProviderStatus>("/api/agent/provider"),
   });
   const events = useQuery({
     queryKey: ["audit-events"],
@@ -155,12 +179,19 @@ export function StudioWorkspace() {
     queryKey: ["research-sessions"],
     queryFn: () => apiFetch<Session[]>("/api/research/sessions"),
   });
-  const activeSession = session ?? sessions.data?.[0] ?? null;
+  const activeSession = creatingNewSession
+    ? null
+    : session ?? sessions.data?.[0] ?? null;
+  const assistantMode =
+    assistantModeOverride ??
+    activeSession?.assistant_entry_mode ??
+    "external_agent_direct";
   const sessionDetail = useQuery({
     queryKey: ["research-session-detail", activeSession?.id],
     queryFn: () =>
       apiFetch<SessionDetail>(`/api/research/sessions/${activeSession?.id}`),
     enabled: Boolean(activeSession?.id),
+    refetchInterval: 5000,
   });
   const agentOccupancy = useQuery({
     queryKey: ["session-agent-occupancy", activeSession?.id],
@@ -172,14 +203,45 @@ export function StudioWorkspace() {
     refetchInterval: 5000,
     retry: false,
   });
+  const agentRuns = useQuery({
+    queryKey: ["session-agent-runs", activeSession?.id],
+    queryFn: () =>
+      apiFetch<AgentRun[]>(
+        `/api/research/sessions/${activeSession?.id}/agent-runs`,
+      ),
+    enabled: Boolean(activeSession?.id),
+    refetchInterval: 2000,
+    retry: false,
+  });
+  const persistedDraft = draft
+    ? sessionDetail.data?.drafts.find((item) => item.id === draft.id) ?? null
+    : sessionDetail.data?.drafts[0] ?? null;
   const activeDraft =
     draft?.session_id === activeSession?.id
-      ? draft
-      : sessionDetail.data?.drafts[0] ?? null;
+      ? persistedDraft ?? draft
+      : persistedDraft;
+  const latestAgentRun =
+    agentRuns.data?.find(
+      (run) =>
+        run.task_type === "strategy_formalization" &&
+        (!activeDraft || run.subject_id === activeDraft.id),
+    ) ?? null;
   const currentBaselineId =
     baseline && activeDraft?.baseline_version_id === baseline.id
       ? baseline.id
       : activeDraft?.baseline_version_id ?? null;
+  const draftIsFormalized =
+    Boolean(activeDraft?.baseline_version_id) ||
+    activeDraft?.status === "baseline_frozen" ||
+    (activeDraft?.status === "awaiting_confirmation" &&
+      Object.keys(activeDraft.structured_content ?? {}).length > 0);
+  const defaultFormalizationText = useMemo(() => {
+    if (!activeDraft) return "";
+    const structured = activeDraft.structured_content ?? {};
+    return Object.keys(structured).length
+      ? JSON.stringify(structured, null, 2)
+      : "";
+  }, [activeDraft]);
   const researchModes = useQuery({
     queryKey: ["research-modes"],
     queryFn: () => apiFetch<ResearchModeDefinition[]>("/api/research-modes"),
@@ -315,6 +377,14 @@ export function StudioWorkspace() {
       ),
     enabled: Boolean(currentBaselineId),
   });
+  const strategyVersions = useQuery({
+    queryKey: ["strategy-versions", activeDraft?.id],
+    queryFn: () =>
+      apiFetch<StrategyVersion[]>(
+        `/api/strategy-versions?strategy_id=${encodeURIComponent(activeDraft?.id ?? "")}`,
+      ),
+    enabled: Boolean(activeDraft?.id && currentBaselineId),
+  });
   const plans = useQuery({
     queryKey: ["experiment-plans", currentBaselineId],
     queryFn: () =>
@@ -333,6 +403,11 @@ export function StudioWorkspace() {
         ? 3000
         : false,
   });
+  const activePipelineJob = jobs.data?.find(
+    (job) =>
+      job.job_type === "pipeline_execution" &&
+      job.payload.subject_id === currentSubjectId,
+  );
   const activePlan =
     plans.data?.find(
       (plan) =>
@@ -345,9 +420,46 @@ export function StudioWorkspace() {
       job.job_type === "parameter_search" &&
       job.payload.experiment_plan_id === activePlan?.id,
   );
+  const candidateValidationJob = jobs.data?.find(
+    (job) =>
+      job.job_type === "stress_test" &&
+      job.payload.intent === "generic_strategy_dsl_candidate_validation" &&
+      job.payload.experiment_plan_id === activePlan?.id,
+  );
+  const lockedTestJob = jobs.data?.find(
+    (job) =>
+      job.job_type === "stress_test" &&
+      job.payload.intent === "generic_strategy_dsl_locked_test" &&
+      job.payload.experiment_plan_id === activePlan?.id,
+  );
   const batchIsRunning = Boolean(
     activeBatchJob && ["queued", "running"].includes(activeBatchJob.status),
   );
+  const candidateValidationIsRunning = Boolean(
+    (candidateValidationJob &&
+      ["queued", "running"].includes(candidateValidationJob.status)) ||
+      (lockedTestJob &&
+        ["queued", "running"].includes(lockedTestJob.status)),
+  );
+  const sessionHasActiveJob = Boolean(
+    activeSession &&
+      jobs.data?.some(
+        (job) =>
+          ["queued", "running"].includes(job.status) &&
+          (job.payload.session_id === activeSession.id ||
+            job.id === activePipelineJob?.id ||
+            job.id === activeBatchJob?.id ||
+            job.id === candidateValidationJob?.id),
+      ),
+  );
+  const researchModeLocked = Boolean(
+    agentOccupancy.data?.occupied || sessionHasActiveJob,
+  );
+  const executionStatus = agentOccupancy.data?.occupied
+    ? "AI 正在处理"
+    : sessionHasActiveJob
+      ? "后台任务运行中"
+      : "当前空闲";
   const trials = useQuery({
     queryKey: ["trials", activePlan?.id],
     queryFn: () =>
@@ -361,6 +473,15 @@ export function StudioWorkspace() {
       apiFetch<BatchSummary>(`/api/experiment-plans/${activePlan?.id}/batch-summary`),
     enabled: Boolean(activePlan?.id),
     refetchInterval: batchIsRunning ? 3000 : false,
+  });
+  const candidateValidation = useQuery({
+    queryKey: ["candidate-validation-summary", activePlan?.id],
+    queryFn: () =>
+      apiFetch<CandidateValidationSummary>(
+        `/api/experiment-plans/${activePlan?.id}/candidate-validation-summary`,
+      ),
+    enabled: Boolean(activePlan?.id),
+    refetchInterval: candidateValidationIsRunning ? 3000 : false,
   });
   const sessionBudget = useQuery({
     queryKey: ["research-budget", activeSession?.id],
@@ -392,13 +513,47 @@ export function StudioWorkspace() {
           unknown: latestRegime.unknown_regimes,
         }
       : { suitable: [], conditional: [], blocked: [], unknown: [] });
-  const topConclusion = buildTopConclusion({
+  const baseTopConclusion = buildTopConclusion({
     hasBaseline: Boolean(currentBaselineId),
     outcome: latestOutcome?.outcome_type,
     viability: latestViability?.status,
     suitableRegimeCount: regimeGroups.suitable.length,
     regimeCount: Object.keys(regimeMetrics).length,
   });
+  const topConclusion =
+    candidateValidation.data?.locked_test_decision === "passed"
+      ? {
+          tone: "success" as const,
+          title: "最终保留测试通过，等待人工审阅",
+          detail:
+            "冻结候选和冻结参数已在独立保留区间完成一次测试；仍未自动晋升、模拟运行或实盘。",
+        }
+      : candidateValidation.data?.locked_test_decision === "failed"
+        ? {
+            tone: "danger" as const,
+            title: "最终保留测试未通过",
+            detail:
+              "当前候选停止。不得针对已查看的保留区间继续调参；如需继续，应建立新假设和新的保留期。",
+          }
+        : candidateValidation.data?.decision_status ===
+    "ready_for_locked_test_review"
+      ? {
+          tone: "success" as const,
+          title: "候选已通过有界稳健性检查",
+          detail:
+            "成本、滚动窗口、参数扰动和行情拆分达到当前门槛；最终保留测试仍需单独审阅和批准。",
+        }
+      : candidateValidation.data?.decision_status === "needs_revision"
+        ? {
+            tone: "danger" as const,
+            title: "候选验证未通过",
+            detail:
+              "系统已指出最弱证据，不会自动扩大搜索、查看最终保留测试或覆盖冻结基准。",
+          }
+        : baseTopConclusion;
+  const researchMode = activeSession?.research_mode ?? "guided";
+  const quickMode = researchMode === "quick";
+  const expertMode = researchMode === "expert";
   const scopedAggregateIds = new Set<string>();
   if (activeSession?.id) scopedAggregateIds.add(activeSession.id);
   if (activeDraft?.id) scopedAggregateIds.add(activeDraft.id);
@@ -417,15 +572,18 @@ export function StudioWorkspace() {
   const scopedEvents = (events.data ?? []).filter((event) =>
     scopedAggregateIds.has(event.aggregate_id),
   );
-  const inferredStage: WorkflowStage = !currentBaselineId
-    ? "strategy"
-    : !latestViability
-      ? "screening"
-      : latestViability.status === "failed"
-        ? "diagnosis"
-        : latestViability.status === "passed"
-          ? "validation"
-          : "screening";
+  const inferredStage: WorkflowStage = candidateValidation.data?.decision_status
+    ? "conclusion"
+    : !currentBaselineId
+      ? "strategy"
+      : !latestViability
+        ? "screening"
+        : latestViability.status === "failed"
+          ? "diagnosis"
+          : latestViability.status === "passed"
+            ? "validation"
+            : "screening";
+  const visibleStage = quickMode ? inferredStage : activeStage;
   const workflowStages: WorkflowStageItem[] = [
     {
       id: "strategy",
@@ -495,6 +653,14 @@ export function StudioWorkspace() {
   useEffect(() => {
     if (workflowLocationInitialized) return;
     if (typeof window === "undefined") return;
+    const workflowDataReady =
+      creatingNewSession ||
+      (!activeSession && sessions.isSuccess) ||
+      (Boolean(activeSession?.id) &&
+        sessionDetail.isSuccess &&
+        sessionDetail.data.session.id === activeSession?.id &&
+        (!currentBaselineId || gates.isSuccess));
+    if (!workflowDataReady) return;
     const params = new URLSearchParams(window.location.search);
     const requestedStage = params.get("stage") as WorkflowStage | null;
     const requestedView = params.get("view");
@@ -504,10 +670,8 @@ export function StudioWorkspace() {
       WORKFLOW_STAGE_IDS.includes(requestedStage)
     ) {
       nextStage = requestedStage;
-    } else if (!sessions.isPending) {
-      nextStage = inferredStage;
     } else {
-      return;
+      nextStage = inferredStage;
     }
     const nextDiagnosisView =
       requestedStage === "diagnosis" &&
@@ -521,16 +685,26 @@ export function StudioWorkspace() {
       VALIDATION_VIEW_IDS.includes(requestedView as ValidationView)
         ? (requestedView as ValidationView)
         : null;
-    const frame = window.requestAnimationFrame(() => {
+    let cancelled = false;
+    window.queueMicrotask(() => {
+      if (cancelled) return;
       setActiveStage(nextStage);
       if (nextDiagnosisView) setDiagnosisView(nextDiagnosisView);
       if (nextValidationView) setValidationView(nextValidationView);
       setWorkflowLocationInitialized(true);
     });
-    return () => window.cancelAnimationFrame(frame);
+    return () => {
+      cancelled = true;
+    };
   }, [
+    activeSession,
+    creatingNewSession,
     inferredStage,
-    sessions.isPending,
+    currentBaselineId,
+    gates.isSuccess,
+    sessionDetail.data,
+    sessionDetail.isSuccess,
+    sessions.isSuccess,
     workflowLocationInitialized,
   ]);
 
@@ -575,6 +749,7 @@ export function StudioWorkspace() {
     },
     onSuccess: (updated) => {
       setSession(updated);
+      setResearchModeEditing(false);
       setNotice(
         `已切换为${researchModes.data?.find((item) => item.mode === updated.research_mode)?.label ?? updated.research_mode}。网页、本地研究助手和命令行将读取同一会话配置。`,
       );
@@ -585,11 +760,13 @@ export function StudioWorkspace() {
   });
 
   const authorizeToViability = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       if (!currentSubjectId || !activeSession?.id) {
         throw new Error("需要先选择明确的策略 subject 和研究会话。");
       }
-      return apiFetch<ResearchAuthorization>("/api/research-authorizations", {
+      const authorization = await apiFetch<ResearchAuthorization>(
+        "/api/research-authorizations",
+        {
         method: "POST",
         body: JSON.stringify({
           subject_id: currentSubjectId,
@@ -618,46 +795,110 @@ export function StudioWorkspace() {
           expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
           confirmed_by_user: true,
         }),
-      });
+        },
+      );
+      const job = await apiFetch<Job>(
+        `/api/research-authorizations/${authorization.id}/start`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            subject_id: authorization.subject_id,
+            confirmed_by_user: true,
+          }),
+        },
+      );
+      return { authorization, job };
     },
     onSuccess: () => {
       setNotice(
-        "已一次授权规则检查 → 小范围试跑 → 快速初筛 → 可行性门槛；内部阶段不再逐次询问，门槛失败或授权范围结束时才停止。",
+        "研究任务已排队：规则检查 → 小范围试跑 → 快速初筛 → 可行性门槛。后台 Worker 会自动推进，门槛失败时仅进入已授权的廉价诊断。",
       );
       queryClient.invalidateQueries({ queryKey: ["research-authorizations"] });
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
       queryClient.invalidateQueries({ queryKey: ["audit-events"] });
       queryClient.invalidateQueries({ queryKey: ["research-handoff"] });
     },
   });
 
+  const startExistingAuthorization = useMutation({
+    mutationFn: () => {
+      if (!activeAuthorization || !currentSubjectId) {
+        throw new Error("没有可启动的有效研究授权。");
+      }
+      return apiFetch<Job>(
+        `/api/research-authorizations/${activeAuthorization.id}/start`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            subject_id: currentSubjectId,
+            confirmed_by_user: true,
+          }),
+        },
+      );
+    },
+    onSuccess: () => {
+      setNotice("已授权研究任务已进入后台队列，页面会自动刷新阶段进度。");
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["research-authorizations"] });
+      queryClient.invalidateQueries({ queryKey: ["research-handoff"] });
+    },
+  });
+
   const approveDirection = useMutation({
-    mutationFn: (proposalId: string) =>
-      apiFetch(`/api/improvement-directions/${proposalId}/approve`, {
+    mutationFn: async (proposalId: string) => {
+      const current = directions.data?.find((item) => item.id === proposalId);
+      if (current?.status === "draft") {
+        await apiFetch(`/api/improvement-directions/${proposalId}/submit`, {
+          method: "POST",
+        });
+      }
+      return apiFetch(`/api/improvement-directions/${proposalId}/launch-batch`, {
         method: "POST",
         body: JSON.stringify({
           subject_id: proposalId,
           confirmed_by_user: true,
         }),
-      }),
+      });
+    },
     onSuccess: () => {
-      setNotice("已批准明确的改进方向并创建不可变候选快照；冻结基准未被覆盖。");
+      setNotice(
+        "已批准明确方向和预算，并自动创建不可变候选、试验计划与有限批量任务；冻结基准未被覆盖。",
+      );
       queryClient.invalidateQueries({ queryKey: ["improvement-directions"] });
+      queryClient.invalidateQueries({ queryKey: ["experiment-plans"] });
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["batch-summary"] });
       queryClient.invalidateQueries({ queryKey: ["audit-events"] });
       queryClient.invalidateQueries({ queryKey: ["research-sessions"] });
       queryClient.invalidateQueries({ queryKey: ["research-session-detail"] });
       queryClient.invalidateQueries({ queryKey: ["research-handoff"] });
     },
   });
-  const submitDirection = useMutation({
-    mutationFn: (proposalId: string) =>
-      apiFetch(`/api/improvement-directions/${proposalId}/submit`, {
-        method: "POST",
-      }),
+  const materializeComponentHypothesis = useMutation({
+    mutationFn: (hypothesisId: string) =>
+      apiFetch<ImprovementDirection>(
+        `/api/component-hypotheses/${hypothesisId}/materialize-proposal`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            subject_id: hypothesisId,
+            confirmed_by_user: true,
+          }),
+        },
+      ),
     onSuccess: () => {
-      setNotice("改进方向已提交等待审批；批准按钮会自动携带精确研究对象。");
+      setNotice(
+        "已把诊断假设转换成待审阅改进方案。Baseline 未改变，也尚未创建 Candidate 或运行参数测试。",
+      );
       queryClient.invalidateQueries({ queryKey: ["improvement-directions"] });
       queryClient.invalidateQueries({ queryKey: ["audit-events"] });
-      queryClient.invalidateQueries({ queryKey: ["research-handoff"] });
+    },
+    onError: (error) => {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "当前诊断假设还不能形成可执行方案，请让本地研究助手补全。",
+      );
     },
   });
   const reviseDirectionBudget = useMutation({
@@ -685,6 +926,57 @@ export function StudioWorkspace() {
     onSuccess: () => {
       setNotice("已记录当前后台任务的取消请求；现有参数试验证据保留，执行程序会在安全批次边界停止。");
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["audit-events"] });
+    },
+  });
+  const launchCandidateValidation = useMutation({
+    mutationFn: (planId: string) =>
+      apiFetch<Job>(
+        `/api/experiment-plans/${planId}/launch-candidate-validation`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            subject_id: planId,
+            confirmed_by_user: true,
+          }),
+        },
+      ),
+    onSuccess: () => {
+      setNotice(
+        "候选验证已排队：成本敏感性、三个滚动窗口、参数 ±10% 扰动与可观察行情拆分；最终保留测试仍未使用。",
+      );
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["run-bundles"] });
+      queryClient.invalidateQueries({
+        queryKey: ["candidate-validation-summary"],
+      });
+      queryClient.invalidateQueries({ queryKey: ["research-handoff"] });
+      queryClient.invalidateQueries({ queryKey: ["audit-events"] });
+    },
+  });
+  const launchLockedTest = useMutation({
+    mutationFn: (planId: string) =>
+      apiFetch<Job>(
+        `/api/experiment-plans/${planId}/launch-locked-test`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            subject_id: planId,
+            confirmed_by_user: true,
+          }),
+        },
+      ),
+    onSuccess: () => {
+      setNotice(
+        "最终保留测试已明确批准并排队。该区间只运行一次，不参与参数搜索；结果不会自动晋升策略。",
+      );
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["run-bundles"] });
+      queryClient.invalidateQueries({
+        queryKey: ["candidate-validation-summary"],
+      });
+      queryClient.invalidateQueries({ queryKey: ["research-budget"] });
+      queryClient.invalidateQueries({ queryKey: ["research-handoff"] });
       queryClient.invalidateQueries({ queryKey: ["audit-events"] });
     },
   });
@@ -723,22 +1015,94 @@ export function StudioWorkspace() {
     },
   });
 
+  const updateAssistantEntry = useMutation({
+    mutationFn: async (mode: AssistantEntryMode) => {
+      setAssistantModeOverride(mode);
+      if (!activeSession) return null;
+      return apiFetch<Session>(
+        `/api/research/sessions/${activeSession.id}/assistant-entry`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ assistant_entry_mode: mode }),
+        },
+      );
+    },
+    onSuccess: (updated) => {
+      if (updated) {
+        setSession(updated);
+        setAssistantModeOverride(null);
+      }
+      queryClient.invalidateQueries({ queryKey: ["research-sessions"] });
+      queryClient.invalidateQueries({ queryKey: ["research-session-detail"] });
+    },
+    onError: () => {
+      setAssistantModeOverride(null);
+    },
+  });
+
+  const configureProvider = useMutation({
+    mutationFn: () =>
+      apiFetch<ProviderStatus>("/api/agent/provider", {
+        method: "POST",
+        body: JSON.stringify({
+          provider_name: providerName,
+          base_url: providerBaseUrl,
+          model: providerModel,
+          api_key: providerApiKey,
+        }),
+      }),
+    onSuccess: () => {
+      setProviderApiKey("");
+      setNotice("网页模型已在当前 API 进程内存中启用；现在可以提交策略。");
+      queryClient.invalidateQueries({ queryKey: ["provider-status"] });
+      queryClient.invalidateQueries({ queryKey: ["agent-status"] });
+      queryClient.invalidateQueries({ queryKey: ["project-status"] });
+    },
+  });
+
+  const clearProvider = useMutation({
+    mutationFn: () =>
+      apiFetch<ProviderStatus>("/api/agent/provider", {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      setProviderApiKey("");
+      setNotice("网页模型内存配置已清除。");
+      queryClient.invalidateQueries({ queryKey: ["provider-status"] });
+      queryClient.invalidateQueries({ queryKey: ["agent-status"] });
+      queryClient.invalidateQueries({ queryKey: ["project-status"] });
+    },
+  });
+
   const saveIntake = useMutation({
     mutationFn: async () => {
       const values = intakeSchema.parse({ title, sourceType, content });
-      const activeSession =
-        session ??
+      if (assistantMode === "external_agent_direct") {
+        throw new Error("直接在 Codex 研究模式不从网页提交策略");
+      }
+      if (!creatingNewSession && activeDraft) {
+        throw new Error("当前研究会话已经包含策略；请先新建研究会话。");
+      }
+      let targetSession =
+        (!creatingNewSession ? activeSession : null) ??
         (await apiFetch<Session>("/api/research/sessions", {
           method: "POST",
-          body: JSON.stringify({ title: values.title }),
+          body: JSON.stringify({
+            title: values.title,
+            assistant_entry_mode: assistantMode,
+          }),
         }));
-      if (!session) setSession(activeSession);
-      await apiFetch(`/api/research/sessions/${activeSession.id}/messages`, {
-        method: "POST",
-        body: JSON.stringify({ content: values.content }),
-      });
-      return apiFetch<StrategyDraft>(
-        `/api/research/sessions/${activeSession.id}/intakes`,
+      if (targetSession.assistant_entry_mode !== assistantMode) {
+        targetSession = await apiFetch<Session>(
+          `/api/research/sessions/${targetSession.id}/assistant-entry`,
+          {
+            method: "PATCH",
+            body: JSON.stringify({ assistant_entry_mode: assistantMode }),
+          },
+        );
+      }
+      const createdDraft = await apiFetch<StrategyDraft>(
+        `/api/research/sessions/${targetSession.id}/intakes`,
         {
           method: "POST",
           body: JSON.stringify({
@@ -748,16 +1112,37 @@ export function StudioWorkspace() {
           }),
         },
       );
+      await apiFetch(`/api/research/sessions/${targetSession.id}/messages`, {
+        method: "POST",
+        body: JSON.stringify({ content: values.content }),
+      });
+      const run = await apiFetch<AgentRun>(
+        `/api/strategy-drafts/${createdDraft.id}/agent-runs`,
+        {
+          method: "POST",
+          body: JSON.stringify({ entry_mode: assistantMode }),
+        },
+      );
+      return { session: targetSession, draft: createdDraft, run };
     },
-    onSuccess: (created) => {
+    onSuccess: ({ session: createdSession, draft: created, run }) => {
+      setSession(createdSession);
+      setCreatingNewSession(false);
       setDraft(created);
+      setAssistantModeOverride(null);
       setBaseline(null);
+      setContent("");
       setNotice(
-        "原始来源已保存为策略草稿。未运行模型形式化；请先审阅原文和歧义，再人工冻结基准。",
+        run.status === "queued"
+          ? "策略已保存，AI 任务已排队；页面会自动同步运行状态。"
+          : "策略已保存，AI 已开始生成结构化提案。",
       );
       queryClient.invalidateQueries({ queryKey: ["audit-events"] });
       queryClient.invalidateQueries({ queryKey: ["research-sessions"] });
+      queryClient.invalidateQueries({ queryKey: ["research-session-detail"] });
       queryClient.invalidateQueries({ queryKey: ["research-handoff"] });
+      queryClient.invalidateQueries({ queryKey: ["session-agent-runs"] });
+      queryClient.invalidateQueries({ queryKey: ["session-agent-occupancy"] });
     },
   });
 
@@ -789,12 +1174,15 @@ export function StudioWorkspace() {
   const formError = useMemo(() => {
     const error =
       saveIntake.error ??
+      updateAssistantEntry.error ??
       freeze.error ??
       authorizeToViability.error ??
-      submitDirection.error ??
+      startExistingAuthorization.error ??
       approveDirection.error ??
       reviseDirectionBudget.error ??
       cancelBatchJob.error ??
+      launchCandidateValidation.error ??
+      launchLockedTest.error ??
       archiveComponent.error ??
       restoreComponent.error ??
       updateResearchMode.error;
@@ -806,43 +1194,228 @@ export function StudioWorkspace() {
     authorizeToViability.error,
     cancelBatchJob.error,
     freeze.error,
+    launchCandidateValidation.error,
+    launchLockedTest.error,
     reviseDirectionBudget.error,
     restoreComponent.error,
     saveIntake.error,
-    submitDirection.error,
+    startExistingAuthorization.error,
+    updateAssistantEntry.error,
     updateResearchMode.error,
   ]);
+  const providerFormError = useMemo(() => {
+    const error = configureProvider.error ?? clearProvider.error;
+    return error instanceof Error ? error.message : null;
+  }, [clearProvider.error, configureProvider.error]);
+  const beginNewResearch = () => {
+    const preferredAssistantMode: AssistantEntryMode =
+      agent.data?.local_connector.available
+        ? "web_local_connector"
+        : providerStatus.data?.configured
+          ? "web_provider"
+          : "external_agent_direct";
+    setCreatingNewSession(true);
+    setSession(null);
+    setDraft(null);
+    setBaseline(null);
+    setTitle("");
+    setContent("");
+    setAssistantModeOverride(preferredAssistantMode);
+    setResearchModeEditing(false);
+    updateWorkflowLocation("strategy");
+  };
+  const selectResearchSession = (sessionId: string) => {
+    const selected = sessions.data?.find((item) => item.id === sessionId);
+    setCreatingNewSession(false);
+    setSession(selected ?? null);
+    setDraft(null);
+    setBaseline(null);
+    setTitle(selected?.title ?? "");
+    setContent("");
+    setAssistantModeOverride(null);
+    setResearchModeEditing(false);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("stage");
+      url.searchParams.delete("view");
+      window.history.replaceState(null, "", url);
+    }
+    setWorkflowLocationInitialized(false);
+  };
+  const cancelNewResearch = () => {
+    const fallback = sessions.data?.[0] ?? null;
+    setCreatingNewSession(false);
+    setSession(fallback);
+    setDraft(null);
+    setBaseline(null);
+    setTitle(fallback?.title ?? "");
+    setContent("");
+    setAssistantModeOverride(null);
+    setResearchModeEditing(false);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("stage");
+      url.searchParams.delete("view");
+      window.history.replaceState(null, "", url);
+    }
+    setWorkflowLocationInitialized(false);
+  };
+  const actionableDirection = directions.data?.find((item) =>
+    ["draft", "waiting_approval"].includes(item.status),
+  );
+  const recommendation =
+    batchSummary.data?.recommendation?.decision === "candidate_validation"
+      ? batchSummary.data.recommendation
+      : null;
+  const primaryAction = (() => {
+    if (!activeDraft) {
+      return {
+        label: "输入并保存策略",
+        pending: saveIntake.isPending,
+        run: () => updateWorkflowLocation("strategy"),
+      };
+    }
+    if (!draftIsFormalized) {
+      return {
+        label: "继续完成策略形式化",
+        pending: false,
+        run: () => updateWorkflowLocation("strategy"),
+      };
+    }
+    if (!currentBaselineId) {
+      return {
+        label: "冻结基准版本 v0",
+        pending: freeze.isPending,
+        run: () => freeze.mutate(),
+      };
+    }
+    if (candidateValidationIsRunning) {
+      return {
+        label: "查看候选验证进度",
+        pending: false,
+        run: () => updateWorkflowLocation("conclusion"),
+      };
+    }
+    if (candidateValidation.data?.decision_status) {
+      return {
+        label: "审阅最终研究结论",
+        pending: false,
+        run: () => updateWorkflowLocation("conclusion"),
+      };
+    }
+    if (batchIsRunning) {
+      return {
+        label: "查看批量参数进度",
+        pending: false,
+        run: () => updateWorkflowLocation("diagnosis", "parameters"),
+      };
+    }
+    if (recommendation && activePlan && !candidateValidationJob) {
+      return {
+        label: "运行有界候选验证",
+        pending: launchCandidateValidation.isPending,
+        run: () => launchCandidateValidation.mutate(activePlan.id),
+      };
+    }
+    if (!latestViability) {
+      if (
+        activePipelineJob &&
+        ["queued", "running"].includes(activePipelineJob.status)
+      ) {
+        return {
+          label: "查看快速初筛进度",
+          pending: false,
+          run: () => updateWorkflowLocation("screening"),
+        };
+      }
+      if (
+        activePipelineJob &&
+        ["failed", "cancelled"].includes(activePipelineJob.status)
+      ) {
+        return {
+          label: "查看停止原因与下一步",
+          pending: false,
+          run: () => updateWorkflowLocation("overview"),
+        };
+      }
+      if (
+        activeAuthorization?.status === "active" &&
+        !activePipelineJob &&
+        !authorizationStages.data?.length
+      ) {
+        return {
+          label: "启动已授权研究",
+          pending: startExistingAuthorization.isPending,
+          run: () => startExistingAuthorization.mutate(),
+        };
+      }
+      return {
+        label: "授权并开始快速初筛",
+        pending: authorizeToViability.isPending,
+        run: () => authorizeToViability.mutate(),
+      };
+    }
+    if (actionableDirection) {
+      return {
+        label: `审阅改进方向（${actionableDirection.estimated_trials ?? "有限"} 个方案）`,
+        pending: false,
+        run: () => updateWorkflowLocation("diagnosis", "improvements"),
+      };
+    }
+    if (latestViability.status === "failed") {
+      return {
+        label: "查看失败归因与改进方向",
+        pending: false,
+        run: () => updateWorkflowLocation("diagnosis", "attribution"),
+      };
+    }
+    return {
+      label: "查看深度验证条件",
+      pending: false,
+      run: () => updateWorkflowLocation("validation", "robustness"),
+    };
+  })();
 
   return (
     <div className="min-h-screen p-4 md:p-6">
       <StudioOverview
-        strategyTitle={activeSession?.title}
+        strategyTitle={
+          creatingNewSession ? title || "新策略研究" : activeSession?.title
+        }
         researchMode={cnResearchMode(activeSession?.research_mode ?? "guided")}
-        providerConfigured={Boolean(project.data?.ai_provider.configured)}
-        externalAgentStatus={
-          agent.data?.external_agent.connection_status ?? "awaiting_heartbeat"
+        assistantEntry={cnStatus(assistantMode)}
+        executionStatus={
+          creatingNewSession
+            ? "尚未创建会话"
+            : activeSession
+              ? executionStatus
+              : "尚无会话"
         }
         conclusion={topConclusion}
-        handoff={handoff.data}
-        versioningAvailable={Boolean(versioning.data?.available)}
+        primaryActionLabel={primaryAction.label}
+        primaryActionPending={primaryAction.pending}
+        onNext={primaryAction.run}
       />
 
-      <WorkflowNavigation
-        activeStage={activeStage}
-        stages={workflowStages}
-        onChange={(stage) =>
-          updateWorkflowLocation(
-            stage,
-            stage === "diagnosis"
-              ? diagnosisView
-              : stage === "validation"
-                ? validationView
-                : undefined,
-          )
-        }
-      />
+      {!quickMode ? (
+        <WorkflowNavigation
+          activeStage={activeStage}
+          stages={workflowStages}
+          onChange={(stage) =>
+            updateWorkflowLocation(
+              stage,
+              stage === "diagnosis"
+                ? diagnosisView
+                : stage === "validation"
+                  ? validationView
+                  : undefined,
+            )
+          }
+        />
+      ) : null}
 
-      <div className="mt-4 flex justify-end xl:hidden">
+      {!quickMode ? (
+        <div className="mt-4 flex justify-end xl:hidden">
         <button
           type="button"
           aria-expanded={controlPanelOpen}
@@ -852,11 +1425,12 @@ export function StudioWorkspace() {
         >
           {controlPanelOpen ? "收起研究控制台" : "打开研究控制台"}
         </button>
-      </div>
+        </div>
+      ) : null}
 
       <div className="mt-4 grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
         <main className="min-w-0">
-          {activeStage === "overview" ? (
+          {visibleStage === "overview" ? (
             <StageContainer
               eyebrow="研究总览"
               title="从当前结论继续，不必翻找整页卡片"
@@ -868,56 +1442,132 @@ export function StudioWorkspace() {
                 <OverviewMetric label="可行性门槛" value={cnStatus(latestViability?.status ?? "not_evaluated")} />
                 <OverviewMetric label="研究结果包" value={String(runBundles.data?.length ?? 0) + " 份"} />
               </div>
-              <div className="mt-5 rounded-2xl border border-white/[0.08] bg-black/10 p-4">
-                <div className="text-sm font-medium text-slate-200">{topConclusion.title}</div>
-                <p className="mt-2 text-sm leading-6 text-slate-400">{topConclusion.detail}</p>
-                <button
-                  type="button"
-                  onClick={() =>
-                    updateWorkflowLocation(
-                      inferredStage,
-                      inferredStage === "diagnosis"
-                        ? diagnosisView
-                        : inferredStage === "validation"
-                          ? validationView
-                          : undefined,
-                    )
-                  }
-                  className="mt-4 min-h-11 rounded-xl bg-emerald-300 px-4 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-200"
-                >
-                  进入{workflowStageLabel(inferredStage)}
-                </button>
+              <div className="mt-5">
+                <ResearchHandoffPanel
+                  handoff={handoff.data}
+                  versioningAvailable={Boolean(versioning.data?.available)}
+                />
               </div>
+              {candidateValidation.data?.available ? (
+                <div className="mt-5">
+                  <CandidateValidationResultCard
+                    summary={candidateValidation.data}
+                    onLaunchLockedTest={
+                      activePlan
+                        ? () => launchLockedTest.mutate(activePlan.id)
+                        : undefined
+                    }
+                    lockedTestPending={launchLockedTest.isPending}
+                  />
+                </div>
+              ) : null}
             </StageContainer>
           ) : null}
 
-          {activeStage === "strategy" ? (
+          {visibleStage === "strategy" ? (
             <StageContainer
               eyebrow="阶段 1"
               title="策略与基准"
               description="先保留原始策略，核对结构化状态，再人工确认不可覆盖的冻结基准。"
             >
               <div className="space-y-4">
-        <IntakeComposer
-          title={title}
-          sourceType={sourceType}
-          content={content}
-          activeDraft={activeDraft}
-          notice={notice}
-          pending={saveIntake.isPending}
-          error={formError}
-          onTitleChange={setTitle}
-          onSourceTypeChange={setSourceType}
-          onContentChange={setContent}
-          onSubmit={() => saveIntake.mutate()}
-        />
+                {!activeDraft ? (
+                  <IntakeComposer
+                    title={title}
+                    sourceType={sourceType}
+                    content={content}
+                    latestAgentRun={latestAgentRun}
+                    assistantMode={assistantMode}
+                    agentStatus={agent.data}
+                    providerStatus={providerStatus.data}
+                    providerName={providerName}
+                    providerBaseUrl={providerBaseUrl}
+                    providerModel={providerModel}
+                    providerApiKey={providerApiKey}
+                    providerPending={
+                      configureProvider.isPending || clearProvider.isPending
+                    }
+                    providerError={providerFormError}
+                    notice={notice}
+                    pending={saveIntake.isPending}
+                    error={formError}
+                    onAssistantModeChange={(mode) =>
+                      updateAssistantEntry.mutate(mode)
+                    }
+                    onProviderNameChange={setProviderName}
+                    onProviderBaseUrlChange={setProviderBaseUrl}
+                    onProviderModelChange={setProviderModel}
+                    onProviderApiKeyChange={setProviderApiKey}
+                    onConfigureProvider={() => configureProvider.mutate()}
+                    onClearProvider={() => clearProvider.mutate()}
+                    onTitleChange={setTitle}
+                    onSourceTypeChange={setSourceType}
+                    onContentChange={setContent}
+                    onSubmit={() => saveIntake.mutate()}
+                  />
+                ) : (
+                  <div className="flex flex-col gap-3 rounded-2xl border border-white/[0.08] bg-black/10 p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div className="text-sm font-medium text-slate-200">
+                        当前会话的策略已经建立
+                      </div>
+                      <p className="mt-1 text-xs leading-5 text-slate-500">
+                        一个研究会话只保存一份策略。继续查看下方结构化规则；研究另一份策略时请新建会话。
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={beginNewResearch}
+                      className="min-h-11 shrink-0 cursor-pointer rounded-xl border border-emerald-300/30 bg-emerald-300/10 px-4 text-sm font-medium text-emerald-100 transition hover:bg-emerald-300/15"
+                    >
+                      新建策略研究
+                    </button>
+                  </div>
+                )}
                 <div className="grid gap-4 lg:grid-cols-2">
           <Panel title="结构化策略">
-            <div className="space-y-2 text-sm">
+            <div className="space-y-3 text-sm">
               <Meta label="策略草稿" value={activeDraft ? "已创建" : "未创建"} />
               <Meta label="来源" value={cnSource(activeDraft?.source_type ?? "—")} />
               <Meta label="状态" value={cnStatus(activeDraft?.status ?? "—")} />
-              <Meta label="模型形式化" value="未运行" />
+              <Meta
+                label="规则确认"
+                value={draftIsFormalized ? "已确认" : "待确认"}
+              />
+              {activeDraft && !activeDraft.baseline_version_id ? (
+                <>
+                  {draftIsFormalized ? (
+                    <>
+                      <label
+                        htmlFor="strategy-formalization"
+                        className="block text-xs leading-5 text-slate-400"
+                      >
+                        Codex 或研究助手已经写回结构化规则。请先审阅；看不懂字段时不要直接修改。
+                      </label>
+                      <textarea
+                        id="strategy-formalization"
+                        value={defaultFormalizationText}
+                        readOnly
+                        rows={10}
+                        spellCheck={false}
+                        className="w-full rounded-xl border border-white/10 bg-black/20 px-3 py-2 font-mono text-xs leading-5 text-slate-200 outline-none focus:border-emerald-300/50 focus:ring-2 focus:ring-emerald-300/10"
+                      />
+                      <div className="rounded-xl border border-emerald-300/20 bg-emerald-300/[0.06] p-3 text-xs leading-5 text-emerald-100">
+                        结构化规则已确认。下一步可冻结不可覆盖的 Baseline v0；冻结仍需要单独点击批准。
+                      </div>
+                    </>
+                  ) : (
+                    <div className="rounded-xl border border-amber-300/20 bg-amber-300/[0.06] p-4 text-xs leading-5 text-slate-300">
+                      <div className="font-medium text-amber-100">
+                        等待 Codex 完成策略形式化
+                      </div>
+                      <p className="mt-2">
+                        当前没有真实的结构化规则，所以网页不会预填一份“看起来能确认”的 JSON，也不能冻结基准。请使用上方交接卡把任务交给 Codex。
+                      </p>
+                    </div>
+                  )}
+                </>
+              ) : null}
               {activeDraft ? (
                 <TechnicalDetails>
                   <TechnicalId label="策略草稿" value={activeDraft.id} />
@@ -931,13 +1581,22 @@ export function StudioWorkspace() {
             </div>
             <button
               type="button"
-              disabled={!activeDraft || Boolean(activeDraft.baseline_version_id) || freeze.isPending}
+              disabled={
+                !activeDraft ||
+                !draftIsFormalized ||
+                Boolean(activeDraft.baseline_version_id) ||
+                freeze.isPending
+              }
               onClick={() => freeze.mutate()}
-              className="w-full rounded-xl border border-emerald-300/30 bg-emerald-300/10 px-3 py-2.5 text-sm font-medium text-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
+              className="min-h-11 w-full rounded-xl border border-emerald-300/30 bg-emerald-300/10 px-3 py-2.5 text-sm font-medium text-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {currentBaselineId
                 ? "基准版本 v0 已冻结"
-                : "确认当前策略并冻结基准版本 v0"}
+                : !draftIsFormalized
+                  ? "请先确认结构化规则"
+                  : freeze.isPending
+                    ? "正在冻结基准…"
+                    : "冻结基准版本 v0"}
             </button>
           </Panel>
                 </div>
@@ -945,14 +1604,14 @@ export function StudioWorkspace() {
             </StageContainer>
           ) : null}
 
-          {activeStage === "screening" ? (
+          {visibleStage === "screening" ? (
             <StageContainer
               eyebrow="阶段 2"
               title="快速初筛"
               description="选择验证深度，按规则检查、小范围试跑、快速初筛和可行性门槛判断是否值得继续投入。"
             >
               <div className="grid gap-4 lg:grid-cols-2">
-          <Panel title="研究流程">
+          <Panel title="本次验证流程">
             <label className="mb-2 block text-xs text-slate-500" htmlFor="pipeline-profile">
               验证深度
             </label>
@@ -960,7 +1619,7 @@ export function StudioWorkspace() {
               id="pipeline-profile"
               value={pipelineProfileId}
               onChange={(event) => setPipelineProfileId(event.target.value)}
-              className="mb-3 w-full rounded-lg border border-white/10 bg-[#071017] px-3 py-2 text-xs text-slate-200"
+              className="mb-3 min-h-11 w-full rounded-lg border border-white/10 bg-[#071017] px-3 text-xs text-slate-200"
             >
               {(profiles.data ?? []).map((profile) => (
                 <option key={profile.id} value={profile.id}>{cnProfile(profile.id)}</option>
@@ -1013,7 +1672,7 @@ export function StudioWorkspace() {
             </StageContainer>
           ) : null}
 
-          {activeStage === "diagnosis" ? (
+          {visibleStage === "diagnosis" ? (
             <StageContainer
               eyebrow="阶段 3"
               title="诊断与优化"
@@ -1128,6 +1787,25 @@ export function StudioWorkspace() {
                 (item) => item.archived_at !== null,
               )}
               evidence={componentEvidence.data ?? []}
+              materializedHypothesisIds={
+                new Set(
+                  (directions.data ?? [])
+                    .map(
+                      (item) =>
+                        item.content.source_component_hypothesis_id,
+                    )
+                    .filter(
+                      (item): item is string =>
+                        typeof item === "string",
+                    ),
+                )
+              }
+              materializePending={
+                materializeComponentHypothesis.isPending
+              }
+              onMaterialize={(hypothesisId) =>
+                materializeComponentHypothesis.mutate(hypothesisId)
+              }
               onArchive={(candidateId) => archiveComponent.mutate(candidateId)}
               onRestore={(candidateId) => restoreComponent.mutate(candidateId)}
             />
@@ -1137,11 +1815,9 @@ export function StudioWorkspace() {
               directions={directions.data ?? []}
               providerConfigured={Boolean(project.data?.ai_provider.configured)}
               pending={
-                submitDirection.isPending ||
                 approveDirection.isPending ||
                 reviseDirectionBudget.isPending
               }
-              onSubmit={(proposalId) => submitDirection.mutate(proposalId)}
               onApprove={(proposalId) => approveDirection.mutate(proposalId)}
               onBudgetChange={(proposalId, trials, minutes) =>
                 reviseDirectionBudget.mutate({
@@ -1150,6 +1826,14 @@ export function StudioWorkspace() {
                   minutes,
                 })
               }
+            />
+          </Panel>
+          <Panel title="策略版本关系">
+            <StrategyVersionLineage
+              versions={strategyVersions.data ?? []}
+              directions={directions.data ?? []}
+              plans={plans.data ?? []}
+              trials={trials.data ?? []}
             />
           </Panel>
           <Panel title="实验计划">
@@ -1170,7 +1854,7 @@ export function StudioWorkspace() {
             </StageContainer>
           ) : null}
 
-          {activeStage === "validation" ? (
+          {visibleStage === "validation" ? (
             <StageContainer
               eyebrow="阶段 4"
               title="深度验证"
@@ -1248,12 +1932,42 @@ export function StudioWorkspace() {
             </StageContainer>
           ) : null}
 
-          {activeStage === "conclusion" ? (
+          {visibleStage === "conclusion" ? (
             <StageContainer
               eyebrow="阶段 5"
               title="结论与归档"
               description="统一查看当前策略结论、研究结果包和追加式时间线；生产晋升仍需人工批准。"
             >
+              <div className="mb-4">
+                <ResearchDecisionSheet
+                  conclusion={topConclusion}
+                  viabilityStatus={latestViability?.status}
+                  viabilityReasons={
+                    latestViability?.reasons.map(cnGateReason) ?? []
+                  }
+                  regimeGroups={regimeGroups}
+                  batchSummary={batchSummary.data}
+                  candidateValidation={candidateValidation.data}
+                  componentCandidateCount={(components.data ?? []).filter(
+                    (item) => item.status === "component_candidate",
+                  ).length}
+                  reportCount={runBundles.data?.length ?? 0}
+                  reconciliation={engineReconciliation.data}
+                />
+              </div>
+              {candidateValidation.data?.available ? (
+                <div className="mb-4">
+                  <CandidateValidationResultCard
+                    summary={candidateValidation.data}
+                    onLaunchLockedTest={
+                      activePlan
+                        ? () => launchLockedTest.mutate(activePlan.id)
+                        : undefined
+                    }
+                    lockedTestPending={launchLockedTest.isPending}
+                  />
+                </div>
+              ) : null}
           <Panel title="研究助手总结与技术记录">
             <div className="text-sm leading-6 text-slate-300">
               {latestViability?.status === "failed"
@@ -1307,111 +2021,171 @@ export function StudioWorkspace() {
               : "hidden min-w-0 space-y-4 xl:block"
           }
         >
-          <div className="rounded-2xl border border-white/10 bg-[#0a151e]/70 p-4">
-            <div className="text-sm font-semibold text-slate-200">研究控制台</div>
-            <div className="mt-1 text-xs leading-5 text-slate-500">
-              会话、运行模式、授权、预算和后台任务统一放在这里。
-            </div>
-          </div>
           <Panel title="研究会话">
-            <div className="space-y-2 text-sm">
-              <label className="block text-xs text-slate-500" htmlFor="session-select">
-                当前会话
-              </label>
+            <div className="space-y-3 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <label className="text-xs text-slate-500" htmlFor="session-select">
+                  当前研究
+                </label>
+                <button
+                  type="button"
+                  onClick={
+                    creatingNewSession ? cancelNewResearch : beginNewResearch
+                  }
+                  className="min-h-11 cursor-pointer rounded-lg border border-white/10 px-3 text-xs text-slate-300 transition hover:border-white/20 hover:bg-white/[0.04]"
+                >
+                  {creatingNewSession ? "取消新建" : "新建研究"}
+                </button>
+              </div>
               <select
                 id="session-select"
-                value={activeSession?.id ?? ""}
-                onChange={(event) => {
-                  const selected = sessions.data?.find(
-                    (item) => item.id === event.target.value,
-                  );
-                  setSession(selected ?? null);
-                  setDraft(null);
-                  setBaseline(null);
-                }}
-                className="min-w-0 w-full rounded-lg border border-white/10 bg-[#071017] px-2 py-2 text-xs text-slate-200"
+                value={creatingNewSession ? "__new__" : activeSession?.id ?? ""}
+                onChange={(event) => selectResearchSession(event.target.value)}
+                disabled={
+                  creatingNewSession &&
+                  Boolean(title.trim() || content.trim())
+                }
+                className="min-h-11 w-full min-w-0 rounded-lg border border-white/10 bg-[#071017] px-2 text-xs text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
               >
+                {creatingNewSession ? (
+                  <option value="__new__">新策略研究（尚未保存）</option>
+                ) : null}
                 {(sessions.data ?? []).map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.title}
                   </option>
                 ))}
               </select>
-              <Meta label="状态" value={cnStatus(activeSession?.status ?? "inbox")} />
-              <Meta label="策略草稿" value={activeDraft ? "1 份" : "0 份"} />
-              <Meta label="当前基准" value={currentBaselineId ? "已冻结" : "未冻结"} />
-              <div
-                className={
-                  agentOccupancy.isError || agentOccupancy.isPending
-                    ? "rounded-lg border border-white/10 bg-white/[0.03] p-2 text-xs leading-5 text-slate-400"
-                    : agentOccupancy.data?.occupied
-                    ? "rounded-lg border border-amber-300/20 bg-amber-300/10 p-2 text-xs leading-5 text-amber-100"
-                    : "rounded-lg border border-emerald-300/15 bg-emerald-300/[0.07] p-2 text-xs leading-5 text-emerald-100"
-                }
-              >
-                {agentOccupancy.isPending ? (
-                  "正在读取当前会话的 AI 占用状态……"
-                ) : agentOccupancy.isError ? (
-                  "AI 会话隔离接口尚未加载；重启本地 API 后生效。"
-                ) : agentOccupancy.data?.occupied ? (
-                  <>
-                    当前由
-                    <span className="mx-1 font-medium">
-                      {friendlyAgentName(agentOccupancy.data.agent_name)}
-                    </span>
-                    写入。其他 AI 窗口请新建研究会话，避免结果混在一起。
-                  </>
-                ) : (
-                  "当前会话空闲。不同策略使用不同研究会话，可以安全并行。"
-                )}
-              </div>
-              {currentBaselineId ? (
-                <TechnicalDetails label="查看基准技术 ID">
-                  <TechnicalId label="冻结基准" value={currentBaselineId} />
-                </TechnicalDetails>
-              ) : null}
+              {creatingNewSession ? (
+                <div className="rounded-lg border border-sky-300/15 bg-sky-300/[0.06] p-3 text-xs leading-5 text-sky-100">
+                  正在准备独立会话。选择 AI 入口并输入策略后，系统才会保存新会话；不会写入当前旧策略。
+                </div>
+              ) : activeSession ? (
+                <>
+                  <Meta label="状态" value={cnStatus(activeSession.status)} />
+                  <Meta label="策略草稿" value={activeDraft ? "1 份" : "0 份"} />
+                  <Meta
+                    label="当前基准"
+                    value={currentBaselineId ? "已冻结" : "未冻结"}
+                  />
+                  <div
+                    className={
+                      agentOccupancy.isError || agentOccupancy.isPending
+                        ? "rounded-lg border border-white/10 bg-white/[0.03] p-2 text-xs leading-5 text-slate-400"
+                        : agentOccupancy.data?.occupied
+                          ? "rounded-lg border border-amber-300/20 bg-amber-300/10 p-2 text-xs leading-5 text-amber-100"
+                          : "rounded-lg border border-emerald-300/15 bg-emerald-300/[0.07] p-2 text-xs leading-5 text-emerald-100"
+                    }
+                  >
+                    {agentOccupancy.isPending ? (
+                      "正在读取当前会话的 AI 占用状态……"
+                    ) : agentOccupancy.isError ? (
+                      "AI 会话隔离接口尚未加载；重启本地 API 后生效。"
+                    ) : agentOccupancy.data?.occupied ? (
+                      <>
+                        当前由
+                        <span className="mx-1 font-medium">
+                          {friendlyAgentName(agentOccupancy.data.agent_name)}
+                        </span>
+                        写入。其他策略请新建研究会话。
+                      </>
+                    ) : sessionHasActiveJob ? (
+                      "当前会话的后台任务仍在运行；可以切换查看其他会话，但不能修改本会话模式。"
+                    ) : (
+                      "当前会话空闲。不同策略使用不同研究会话，可以安全并行。"
+                    )}
+                  </div>
+                  {currentBaselineId ? (
+                    <TechnicalDetails label="查看基准技术 ID">
+                      <TechnicalId label="冻结基准" value={currentBaselineId} />
+                    </TechnicalDetails>
+                  ) : null}
+                </>
+              ) : (
+                <Empty>尚无研究会话，请点击“新建研究”。</Empty>
+              )}
             </div>
           </Panel>
           <Panel title="研究模式">
-            <div className="space-y-2">
-              <label htmlFor="research-mode" className="text-xs text-slate-500">
-                运行方式
-              </label>
-              <select
-                id="research-mode"
-                value={activeSession?.research_mode ?? "guided"}
-                onChange={(event) =>
-                  updateResearchMode.mutate(
-                    event.target.value as "quick" | "guided" | "expert",
-                  )
-                }
-                disabled={!activeSession || updateResearchMode.isPending}
-                className="w-full rounded-xl border border-white/10 bg-[#071017] px-3 py-2.5 text-sm text-slate-200"
-              >
-                {(researchModes.data ?? []).map((item) => (
-                  <option key={item.mode} value={item.mode}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs text-slate-500">当前交互节奏</div>
+                  <div className="mt-1 text-sm font-medium text-slate-200">
+                    {cnResearchMode(activeSession?.research_mode ?? "guided")}
+                  </div>
+                </div>
+                {activeSession && !researchModeLocked ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setResearchModeEditing((editing) => !editing)
+                    }
+                    className="min-h-11 cursor-pointer rounded-lg border border-white/10 px-3 text-xs text-slate-300 transition hover:border-white/20 hover:bg-white/[0.04]"
+                  >
+                    {researchModeEditing ? "取消" : "修改"}
+                  </button>
+                ) : null}
+              </div>
+              {researchModeEditing && activeSession && !researchModeLocked ? (
+                <>
+                  <label htmlFor="research-mode" className="sr-only">
+                    选择研究模式
+                  </label>
+                  <select
+                    id="research-mode"
+                    value={activeSession.research_mode}
+                    onChange={(event) =>
+                      updateResearchMode.mutate(
+                        event.target.value as "quick" | "guided" | "expert",
+                      )
+                    }
+                    disabled={updateResearchMode.isPending}
+                    className="min-h-11 w-full rounded-xl border border-emerald-300/30 bg-[#071017] px-3 text-sm text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {(researchModes.data ?? []).map((item) => (
+                      <option key={item.mode} value={item.mode}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              ) : null}
               <div className="rounded-lg bg-white/[0.03] p-3 text-xs leading-5 text-slate-400">
                 {researchModes.data?.find(
                   (item) => item.mode === activeSession?.research_mode,
                 )?.description ?? "引导模式每轮只在关键决策处询问一次。"}
               </div>
-              <div className="rounded-lg border border-dashed border-white/15 p-3 text-[11px] leading-5 text-slate-500">
-                本地研究助手无需另选模式：开始研究任务时自动读取当前会话的
-                {activeSession?.research_mode
-                  ? `“${cnResearchMode(activeSession.research_mode)}”`
-                  : "模式"}
-                。模式只减少机械停顿，不会跳过基准冻结、具体改动、批量预算、锁定测试或实盘门禁。
+              <div
+                className={
+                  researchModeLocked
+                    ? "rounded-lg border border-amber-300/20 bg-amber-300/[0.06] p-3 text-[11px] leading-5 text-amber-100"
+                    : "rounded-lg border border-dashed border-white/15 p-3 text-[11px] leading-5 text-slate-500"
+                }
+              >
+                {researchModeLocked
+                  ? "当前 AI 或后台任务已经按启动时的模式执行。任务结束后才能修改，避免页面状态与实际执行不一致。"
+                  : creatingNewSession
+                    ? "新会话默认使用引导模式；会话保存后可在空闲状态修改。"
+                    : "模式只影响下一次任务的交互节奏，不会跳过基准冻结、实验预算、最终测试或实盘门禁。"}
               </div>
             </div>
           </Panel>
-          <Panel title="一次性研究授权">
+          {currentBaselineId && !quickMode ? (
+            <Panel title="一次性研究授权">
             {activeAuthorization ? (
-              <div className="space-y-2 text-xs">
+              <div className="space-y-3 text-xs">
                 <Meta label="状态" value={cnStatus(activeAuthorization.status)} />
+                <Meta
+                  label="后台任务"
+                  value={
+                    activePipelineJob
+                      ? cnStatus(activePipelineJob.status)
+                      : authorizationStages.data?.length
+                        ? "已有阶段证据"
+                        : "尚未启动"
+                  }
+                />
                 <Meta
                   label="范围"
                   value={activeAuthorization.allowed_stages.map(cnStage).join(" → ")}
@@ -1427,9 +2201,31 @@ export function StudioWorkspace() {
                     </div>
                   ))}
                   {!authorizationStages.data?.length ? (
-                    <div>已授权；等待确定性执行适配器记录阶段进度。</div>
+                    <div>
+                      {activePipelineJob?.status === "failed"
+                        ? "后台任务已停止。请回到总览查看停止原因和明确下一步；系统不会静默重试。"
+                        : activePipelineJob?.status === "cancelled"
+                          ? "后台任务已取消，已有证据仍保留。请回到总览决定是否重新授权。"
+                          : activePipelineJob
+                            ? "任务已进入后台队列，Worker 将自动记录阶段进度。"
+                        : "授权已保存，但尚未启动后台研究任务。"}
+                    </div>
                   ) : null}
                 </div>
+                {!activePipelineJob &&
+                activeAuthorization.status === "active" &&
+                !authorizationStages.data?.length ? (
+                  <button
+                    type="button"
+                    onClick={() => startExistingAuthorization.mutate()}
+                    disabled={startExistingAuthorization.isPending}
+                    className="min-h-11 w-full rounded-lg border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-sm font-medium text-emerald-100 disabled:opacity-40"
+                  >
+                    {startExistingAuthorization.isPending
+                      ? "正在加入后台队列…"
+                      : "启动已授权研究"}
+                  </button>
+                ) : null}
               </div>
             ) : (
               <div className="space-y-3">
@@ -1446,17 +2242,21 @@ export function StudioWorkspace() {
                     latestOutcome?.outcome_type === "rejected" ||
                     authorizeToViability.isPending
                   }
-                  className="w-full rounded-lg border border-emerald-300/30 bg-emerald-300/10 px-2 py-2 text-xs text-emerald-100 disabled:opacity-40"
+                  className="min-h-11 w-full rounded-lg border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-sm font-medium text-emerald-100 disabled:opacity-40"
                 >
-                  授权“研究到可行性结论”
+                  {authorizeToViability.isPending
+                    ? "正在授权并创建任务…"
+                    : "授权并开始研究"}
                 </button>
                 <div className="text-[11px] leading-4 text-slate-500">
                   页面自动携带当前研究对象；无需复制长 ID。未通过策略只能做已授权廉价诊断。
                 </div>
               </div>
             )}
-          </Panel>
-          <Panel title="研究预算">
+            </Panel>
+          ) : null}
+          {currentBaselineId && expertMode ? (
+            <Panel title="研究预算">
             {sessionBudget.data ? (
               <div className="space-y-2 text-xs">
                 <Meta
@@ -1481,14 +2281,21 @@ export function StudioWorkspace() {
                 默认预算：{budgetPolicy.data?.max_hypotheses ?? "—"} 个改进假设 / {budgetPolicy.data?.max_trials_total ?? "—"} 个参数方案；创建会话后显示已用与剩余。
               </Empty>
             )}
-          </Panel>
-          <Panel title="批量参数进度">
-            <BatchProgressPanel
-              summary={batchSummary.data}
-              job={activeBatchJob}
-              onCancel={(jobId) => cancelBatchJob.mutate(jobId)}
-            />
-          </Panel>
+            </Panel>
+          ) : null}
+          {!quickMode && (activePlan || activeBatchJob) ? (
+            <Panel title="批量参数进度">
+              <BatchProgressPanel
+                summary={batchSummary.data}
+                candidateValidation={candidateValidation.data}
+                job={activeBatchJob}
+                onCancel={(jobId) => cancelBatchJob.mutate(jobId)}
+                onValidate={(planId) =>
+                  launchCandidateValidation.mutate(planId)
+                }
+              />
+            </Panel>
+          ) : null}
         </aside>
       </div>
     </div>

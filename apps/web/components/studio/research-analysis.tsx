@@ -324,7 +324,10 @@ function ParameterAnalysis({
       ) : null}
 
       <div className="mt-5 border-t border-white/[0.06] pt-5">
-        <TrialMetricComparison trials={trials} />
+        <TrialMetricComparison
+          experimentPlanId={summary.experiment_plan_id}
+          trials={trials}
+        />
       </div>
     </AnalysisSection>
   );

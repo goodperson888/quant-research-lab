@@ -9,10 +9,12 @@ from quant_lab.application.batch_trials import (
     parameter_signature,
 )
 from quant_lab.application.component_attribution import DefaultComponentEvidenceAggregator
+from quant_lab.application.equity_series import TrialEquityReader
 from quant_lab.application.guided_research import GuidedResearchService
 from quant_lab.application.services import ResearchApplicationService
 from quant_lab.domain.models import Constraint, ExperimentPlan, Objective, ParameterSpace
 from quant_lab.infrastructure.batch_parameter_search_runner import BatchParameterSearchRunner
+from quant_lab.infrastructure.artifact_store import LocalArtifactStore
 from quant_lab.infrastructure.policy_readers import WorkerResourcePolicy
 from quant_lab.infrastructure.sqlite_product_repository import SQLiteProductRepository
 from quant_lab.infrastructure.strategy_evaluators import (
@@ -20,6 +22,7 @@ from quant_lab.infrastructure.strategy_evaluators import (
     StrategyEvaluatorRegistry,
 )
 from quant_lab.infrastructure.trial_execution import InProcessTrialExecutor
+from quant_lab.infrastructure.trial_metrics import ParquetTrialMetricsSink
 from quant_lab.application.ports import TrialEvaluationResult
 from quant_lab.interfaces.api.app import create_app
 
@@ -262,6 +265,76 @@ def test_batch_runner_persists_trials_batches_and_deduplicates_components(tmp_pa
     assert len(repository.list_component_evidence()) == 2
     assert first["evidence"].logic_signature == second["evidence"].logic_signature
     assert "window" not in first["evidence"].logic_signature
+
+
+def test_batch_runner_persists_shared_trial_equity_and_api_reads_real_curves(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "runtime/app/test.sqlite3"
+    repository = SQLiteProductRepository(database_path)
+    service, _, _, _, plan = _approved_plan(repository)
+    job = service.create_job(
+        job_type="parameter_search",
+        payload={
+            "experiment_plan_id": plan.id,
+            "batch_mode": True,
+            "locked_test_used": False,
+            "max_trials": 3,
+            "max_concurrent_trials": 1,
+            "max_trial_seconds": 30,
+            "evaluator_id": "deterministic_fixture",
+            "evidence_mode": "fixture",
+            "data_version": "fixture-v1",
+        },
+    )
+    sink = ParquetTrialMetricsSink(tmp_path)
+    result = BatchParameterSearchRunner(
+        repository,
+        evaluator_registry=StrategyEvaluatorRegistry(
+            (DeterministicFixtureStrategyEvaluator(),)
+        ),
+        executor=InProcessTrialExecutor(),
+        metrics_sink=sink,
+        resource_policy=WorkerResourcePolicy(
+            policy_id="test",
+            max_rss_mb=4096,
+            max_concurrent_trials=1,
+            max_job_minutes=1,
+            parquet_batch_rows=100,
+            kill_on_memory_limit=True,
+        ),
+    )(job)
+
+    trials = repository.list_trials(plan.id)
+    equity_keys = {item.equity_artifact_key for item in trials}
+    assert None not in equity_keys
+    assert len(equity_keys) == 1
+    assert len(result["trial_equity_artifact_keys"]) == 1
+    artifact_key = next(iter(equity_keys))
+    assert artifact_key is not None
+    assert artifact_key.startswith(
+        f"experiments/runs/{plan.id}/trial_equity/"
+    )
+
+    comparison = TrialEquityReader(
+        repository, LocalArtifactStore(tmp_path)
+    ).read(experiment_plan_id=plan.id)
+    assert comparison["available"] is True
+    assert comparison["comparable"] is True
+    assert len(comparison["series"]) == 3
+    assert all(
+        item["evidence_mode"] == "fixture"
+        for item in comparison["series"]
+    )
+    assert 1 <= len(comparison["recommended_trial_ids"]) <= 6
+    assert comparison["series"][0]["points"][0]["normalized_equity"] == 1.0
+
+    app = create_app(root=tmp_path, database_path=database_path)
+    response = TestClient(app).get(
+        f"/api/experiment-plans/{plan.id}/trial-equity"
+    )
+    assert response.status_code == 200
+    assert response.json()["series"][0]["source_artifact_key"] == artifact_key
 
 
 def test_batch_retry_preserves_completed_trials_and_resource_failures(tmp_path: Path) -> None:
