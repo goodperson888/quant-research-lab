@@ -10,6 +10,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
   "cryptography==49.0.0",
   "fastapi==0.139.2",
+  "mcp==1.26.0",
   "pydantic==2.13.4",
   "uvicorn==0.51.0",
 ]
@@ -38,6 +39,7 @@ freqtrade = [
 
 [project.scripts]
 quant-lab = "quant_lab.cli:main"
+quant-lab-mcp = "quant_lab.interfaces.mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/quant_lab"]

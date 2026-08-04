@@ -146,7 +146,10 @@ def test_api_smoke_and_agent_first_status(tmp_path: Path) -> None:
     )
     assert agent["active_configuration"]["execution_target"] == "local_runtime"
     assert agent["active_configuration"]["data_location"] == "local_project"
-    assert agent["external_agent"]["connection_status"] == "direct_interaction"
+    assert agent["external_agent"]["connection_status"] == (
+        "mcp_or_direct_interaction"
+    )
+    assert agent["mcp_direct"]["supported"] is True
     assert agent["local_connector"]["available"] is False
     assert agent["embedded_provider"]["configured"] is False
 

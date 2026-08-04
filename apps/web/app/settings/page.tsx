@@ -1,5 +1,6 @@
 import { PageFrame } from "@/components/page-frame";
 import { CommercialLicensePanel } from "@/components/commercial-license-panel";
+import { LocalAiMcpPanel } from "@/components/local-ai-mcp-panel";
 import { SettingsStatus } from "@/components/settings-status";
 
 export default function SettingsPage() {
@@ -11,6 +12,7 @@ export default function SettingsPage() {
     >
       <div className="space-y-6">
         <CommercialLicensePanel />
+        <LocalAiMcpPanel />
         <SettingsStatus />
       </div>
     </PageFrame>

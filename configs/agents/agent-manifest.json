@@ -20,6 +20,7 @@
     "silent_weak_model_fallback"
   ],
   "adapter_priority": [
+    "mcp_stdio_external_agent",
     "openai_compatible",
     "anthropic_on_demand",
     "gemini_on_demand"

@@ -209,6 +209,18 @@ def configure_environment(
     env["PATH"] = os.pathsep.join(
         dict.fromkeys([*_runtime_path_entries(), *existing_path])
     )
+    self_command = _self_command()
+    env["QUANT_LAB_MCP_COMMAND"] = self_command[0]
+    env["QUANT_LAB_MCP_ARGS_JSON"] = json.dumps(
+        [
+            *self_command[1:],
+            "--role",
+            "mcp",
+            "--data-home",
+            str(data_home),
+        ],
+        ensure_ascii=False,
+    )
     return env
 
 
@@ -248,6 +260,12 @@ def _run_connector() -> int:
         return connector_main()
     finally:
         sys.argv = previous
+
+
+def _run_mcp() -> int:
+    from quant_lab.interfaces.mcp.server import main as mcp_main
+
+    return mcp_main([])
 
 
 def _pid_alive(pid: int) -> bool:
@@ -623,7 +641,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="quant-research-lab-commercial")
     parser.add_argument(
         "--role",
-        choices=("supervisor", "api", "worker", "connector"),
+        choices=("supervisor", "api", "worker", "connector", "mcp"),
         default="supervisor",
     )
     parser.add_argument("--data-home")
@@ -661,6 +679,9 @@ def main(argv: list[str] | None = None) -> int:
         return _run_worker()
     if args.role == "connector":
         return _run_connector()
+    if args.role == "mcp":
+        seed_project_home(data_home, resources)
+        return _run_mcp()
     return _run_supervisor(
         data_home=data_home,
         resources=resources,

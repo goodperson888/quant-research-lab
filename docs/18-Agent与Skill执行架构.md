@@ -145,7 +145,7 @@ flowchart LR
 - `live_trade`；
 - 自动 production 晋升。
 
-CLI、HTTP 和未来 MCP 都只是这个 Gateway 的 transport adapter，不能各自创造额外能力。
+CLI、HTTP 和当前本地 MCP 都只是这个 Gateway 的 transport adapter，不能各自创造额外能力。
 
 ## 7. ArtifactStore 与路径安全
 
@@ -247,7 +247,7 @@ ex-ante regime validation。新增或现有 Handler 都必须：
 
 ## 11. External Agent 与 Embedded Agent 一致性
 
-External Agent 可以通过 CLI/API/未来 MCP 工作；BYOK Provider 由 API 控制面调用
+External Agent 可以通过 CLI/API/当前 MCP stdio 工作；BYOK Provider 由 API 控制面调用
 AgentProvider，确定性 Worker 不保存模型 Key，也不执行自主 Agent。两者的差异只在
 Provider adapter，不在业务权限：
 
@@ -267,8 +267,10 @@ Codex 对话中完整研究；Web 模式不再要求手工复制 Session/Draft �
 ## 12. Phase 0/本轮边界
 
 本轮实现文档路由、项目 Skill、端口、领域验证、SQLite 持久化、有预算 Batch 编排、
-Local Connector 和 OpenAI-compatible BYOK 形式化链路。不实现完整 MCP Server、通用
-Agent tool loop、Hyperopt/Optuna、Hosted Sandbox、多用户或远程事件总线。
+Local Connector、OpenAI-compatible BYOK 形式化链路和本地 MCP 安全子集。MCP 当前只暴露
+建档、形式化提案、用户确认、Baseline freeze、到 Viability 授权以及只读状态工具；
+不实现通用开放式工具循环、任意 Shell、Hyperopt/Optuna、Hosted Sandbox、多用户或远程
+事件总线。
 
 ## 13. 模型能力与密钥契约
 

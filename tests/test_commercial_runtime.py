@@ -53,6 +53,9 @@ def test_commercial_runtime_forces_license_gate(
     )
     assert env["QUANT_LAB_HOME"] == str(data_home)
     assert env["NEXT_PUBLIC_QUANT_LAB_API_URL"] == "http://127.0.0.1:18100"
+    assert env["QUANT_LAB_MCP_COMMAND"]
+    assert "--role" in env["QUANT_LAB_MCP_ARGS_JSON"]
+    assert "mcp" in env["QUANT_LAB_MCP_ARGS_JSON"]
 
 
 def test_first_launch_seeds_customer_home_without_overwriting(

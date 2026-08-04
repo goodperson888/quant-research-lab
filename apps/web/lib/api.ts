@@ -55,6 +55,14 @@ export type AgentStatus = {
     connection_status: string;
     note: string;
   };
+  mcp_direct: {
+    supported: boolean;
+    available: boolean;
+    transport: string;
+    server_name: string;
+    connection_status: string;
+    note: string;
+  };
   local_connector: {
     supported: boolean;
     available: boolean;
@@ -72,6 +80,25 @@ export type AgentStatus = {
     model: string | null;
   };
   model_policy: AgentManifestSummary;
+};
+
+export type McpConnectionInfo = {
+  available: boolean;
+  server_name: string;
+  transport: "stdio";
+  command: string;
+  args: string[];
+  launch_preview: string;
+  codex: {
+    install_command: string;
+    verify_command: string;
+    remove_command: string;
+  };
+  claude: {
+    config: Record<string, unknown>;
+  };
+  requirements: string[];
+  privacy_note: string;
 };
 
 export type AgentManifestSummary = {

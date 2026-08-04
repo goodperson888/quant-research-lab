@@ -85,7 +85,11 @@ export function SettingsStatus() {
       {view === "common" ? (
         <div className="grid gap-4 lg:grid-cols-2">
           <Section title="当前可用入口">
-            <Row label="研究入口" value="直接在 Codex / Claude CLI 中开始" />
+            <Row label="研究入口" value="网页、本地 Connector 或 MCP 直连" />
+            <Row
+              label="本地 AI 直连"
+              value={agent.data.mcp_direct.available ? "可配置" : "运行器不可用"}
+            />
             <Row
               label="研究助手"
               value={cnRuntimeValue(agent.data.active_configuration.agent_provider)}
@@ -102,10 +106,9 @@ export function SettingsStatus() {
               label="研究数据位置"
               value={cnRuntimeValue(agent.data.active_configuration.data_location)}
             />
-            <Row label="网页自动唤起本地助手" value="尚未实现" />
             <p className="text-xs leading-5 text-slate-500">
-              当前支持外部本地助手模式，但需要用户在 Codex 或 Claude CLI 中主动开始任务。
-              网页保存策略只会建档，不会自动唤起或操控本地助手。
+              MCP 适合在 Codex/Claude 对话中直接研究；Local Connector 适合从网页主动
+              交给本地 Codex。两种入口共用本地研究状态和审计记录。
             </p>
           </Section>
 
@@ -116,16 +119,14 @@ export function SettingsStatus() {
             />
             <Row
               label="网页模型调用"
-              value="尚未接入"
+              value={agent.data.embedded_provider.configured ? "可用" : "等待配置"}
             />
             <Row
               label="本地 Connector"
-              value="尚未接入"
+              value={agent.data.local_connector.available ? "已连接" : "当前离线"}
             />
             <p className="text-xs leading-5 text-slate-500">
-              {project.data.ai_provider.configured
-                ? "已检测到模型配置，但当前网页调用链尚未实现，因此不会把它显示成可用入口。"
-                : "未来配置模型 API 或本地 Connector 后，可从网页发起同一套研究流程；当前不会伪造连接或 AI 回复。"}
+              {agent.data.local_connector.note}
             </p>
           </Section>
 
@@ -257,8 +258,9 @@ export function SettingsStatus() {
 
           <Section title="未来可扩展方式">
             <Row label="网页托管模型" value="协议已预留，尚未实现" />
-            <Row label="用户自带模型密钥" value="协议已预留，尚未实现" />
-            <Row label="本地开源模型" value="协议已预留，尚未实现" />
+            <Row label="用户自带模型密钥" value="已支持 OpenAI-compatible" />
+            <Row label="本地 MCP 模型客户端" value="已支持 stdio 直连" />
+            <Row label="Ollama / LM Studio" value="后续按客户需求增加适配器" />
             <Row label="云端隔离执行环境" value="协议已预留，尚未实现" />
           </Section>
 

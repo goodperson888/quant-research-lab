@@ -27,17 +27,18 @@
 - [保守交易执行模型 v1](docs/27-保守交易执行模型-v1.md)：查看永续精度、成交、保证金、mark 强平、funding 和高杠杆研究边界。
 - [离线商业授权与人工收费](docs/29-离线商业授权与人工收费.md)：查看人工转账、离线签名许可证、设备绑定、续费和商业门禁。
 - [商业安装包构建与发行](docs/30-商业安装包构建与发行.md)：查看 Windows/macOS 商业包、纯手动 Actions、额度和发行验收。
+- [本地 AI 直连 MCP 使用指南](docs/31-本地AI直连MCP使用指南.md)：查看如何从 Codex/Claude 对话直接调用本地研究工具。
 
 ## 产品化阶段 0
 
 产品首页是“AI 策略研究工作台”。当前采用 Agent-first hybrid architecture：Codex 等
-External Local Agent、独立 Local Connector 和网页 BYOK 模型共用 FastAPI/CLI 领域接口、
+External Local Agent、MCP stdio、独立 Local Connector 和网页 BYOK 模型共用领域接口、
 ResearchSession、AgentRun、审批门禁和 append-only 审计记录。入口由
 `ResearchSession.assistant_entry_mode` 持久化，一次只启用一种执行链。
 
 Studio 现在提供三种真实、互斥入口：
 
-1. **直接在 Codex 研究**：不显示网页策略输入框，用户在当前 Codex 对话中研究；
+1. **直接在 Codex/Claude 研究**：通过本地 MCP stdio 调用受控研究工具，结果同步到网页；
 2. **网页调用本地助手**：网页保存 Draft 并创建 AgentRun，独立 Local Connector 通过固定、
    read-only 的 `codex exec` 形式化策略并写回；
 3. **网页模型 / API Key**：网页把 Key 交给 API 进程内存中的 OpenAI-compatible adapter，
@@ -45,6 +46,10 @@ Studio 现在提供三种真实、互斥入口：
 
 后两种入口当前真实覆盖“策略原文 → 结构化提案 → 等待用户确认”。它们不会自动冻结
 Baseline、调参、回测或实盘；后续仍通过同一网页审批和确定性 Worker 流程执行。
+
+MCP 直连当前还支持在用户逐次明确批准后确认结构化规则、冻结 Baseline，并创建一次有预算
+的 `correctness → smoke → fast_screen → viability` Job。设置页会按实际安装路径生成 Codex
+安装命令和 Claude MCP JSON；不自动扫描或接管客户所有 AI。
 
 阶段0一键启动入口：
 

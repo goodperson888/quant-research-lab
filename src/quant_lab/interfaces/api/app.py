@@ -84,6 +84,7 @@ from quant_lab.registry import (
     register_factor,
     set_factor_status,
 )
+from quant_lab.interfaces.mcp.config import mcp_connection_info
 
 from .schemas import (
     AuditEventResponse,
@@ -1266,6 +1267,7 @@ def create_app(
     @application.get("/api/agent/status", tags=["agent-control-plane"])
     def agent_status() -> dict[str, Any]:
         local_connector = connector_status(resolved_root)
+        mcp_direct = mcp_connection_info(resolved_root)
         return {
             "architecture": "agent_first_hybrid",
             "default_run_mode": "guided",
@@ -1287,11 +1289,24 @@ def create_app(
             },
             "external_agent": {
                 "supported": True,
-                "preferred_for_phase_0": False,
-                "connection_status": "direct_interaction",
+                "preferred_for_phase_0": True,
+                "connection_status": "mcp_or_direct_interaction",
                 "note": (
-                    "用户直接在 Codex 中研究；网页只显示同一项目中的会话、审批和结果。"
+                    "用户可在支持 MCP 的 Codex/Claude 中直连本地研究工具；"
+                    "网页继续显示同一会话、审批、任务和结果。"
                 ),
+            },
+            "mcp_direct": {
+                "supported": True,
+                "available": mcp_direct["available"],
+                "transport": mcp_direct["transport"],
+                "server_name": mcp_direct["server_name"],
+                "connection_status": (
+                    "ready_to_configure"
+                    if mcp_direct["available"]
+                    else "runtime_unavailable"
+                ),
+                "note": mcp_direct["privacy_note"],
             },
             "local_connector": local_connector,
             "embedded_provider": asdict(provider.status()),
@@ -1305,6 +1320,14 @@ def create_app(
                 ],
             },
         }
+
+    @application.get(
+        "/api/agent/mcp-connection",
+        tags=["agent-control-plane"],
+    )
+    def mcp_connection() -> dict[str, Any]:
+        """Return a local stdio launch spec without secrets or write capability."""
+        return mcp_connection_info(resolved_root)
 
     @application.get("/api/agent/manifest", tags=["agent-control-plane"])
     def agent_manifest() -> dict[str, Any]:
